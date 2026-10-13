@@ -15,7 +15,7 @@ from settings_card import CONTROL_GAP_DIP, SettingsColumn, SettingsGroup, Settin
 from ui_dialogs import show_error
 
 PAGE_CPU_CONFIG = "cpu_config"
-WARNING = "Tweaking these settings might render emulation unstable."
+WARNING = "Tweaking these settings will render emulation broken. Expect crashes or wrong behaviour."
 
 PresetChoice = Union[str, int, None]
 
