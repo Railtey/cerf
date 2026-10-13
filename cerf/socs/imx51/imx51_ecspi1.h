@@ -6,6 +6,7 @@
 #include <deque>
 
 class FreescaleModuleClocks;
+class Imx51Ccm;
 class SpiSlave;
 class StateWriter;
 class StateReader;
@@ -36,6 +37,9 @@ private:
     void DoExchange();        /* run a CONREG.XCH-triggered burst against the slave */
     void RecomputeStatus();   /* refresh STATREG FIFO-state bits from the FIFOs */
     void RaiseIrqIfPending(); /* assert/deassert TZIC src 36 per STATREG & INTREG */
+    bool XchHeld() const;
+    bool RunHeldExchange();
+    void OnClockChange();
 
     uint32_t conreg_    = 0;
     uint32_t configreg_ = 0;
@@ -50,4 +54,5 @@ private:
 
     SpiSlave*              slave_         = nullptr;
     FreescaleModuleClocks* module_clocks_ = nullptr;
+    Imx51Ccm*              ccm_           = nullptr;
 };

@@ -17,6 +17,8 @@ public:
     static constexpr uint32_t kStsSri = 1u << 7;
     static constexpr uint64_t kNever  = ~0ull;
 
+    enum class Role : uint8_t { kHost, kDeviceHighSpeed, kDevicePrelude };
+
     explicit FreescaleUsbFrameIndex(CerfEmulator& emu) : emu_(emu) {}
 
     static uint32_t FrameListSizeCode(uint32_t usbcmd);
@@ -24,7 +26,7 @@ public:
 
     void     Attach();
     void     Rescale();
-    void     SetRunning(uint32_t core, bool running, bool host);
+    void     SetRunning(uint32_t core, bool running, Role role);
     void     SetFrameListSize(uint32_t core, uint32_t fs);
     bool     Running(uint32_t core) const { return running_[core]; }
     void     SetClocked(uint32_t core, bool on);
@@ -46,6 +48,7 @@ private:
     bool     Counting(uint32_t core) const { return running_[core] && clocked_[core]; }
     uint32_t FrindexAt(uint32_t core, uint32_t now) const;
     uint32_t StatusAt(uint32_t core, uint32_t now) const;
+    uint32_t PreludeAgeAt(uint32_t core, uint32_t now) const;
     void     Latch(uint32_t core, uint32_t now);
 
     CerfEmulator&                emu_;
@@ -53,9 +56,10 @@ private:
     CycleAnchoredCounter         uframes_;
     std::array<bool, kCores>     clocked_{};
     std::array<bool, kCores>     running_{};
-    std::array<bool, kCores>     host_{};
+    std::array<Role, kCores>     role_{};
     std::array<uint8_t, kCores>  fs_{};
     std::array<uint32_t, kCores> frindex_{};
     std::array<uint32_t, kCores> mark_{};
     std::array<uint32_t, kCores> latched_{};
+    std::array<uint32_t, kCores> prelude_age_{};
 };

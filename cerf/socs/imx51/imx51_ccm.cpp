@@ -297,6 +297,17 @@ GuestCycleClock::Rate Imx51Ccm::Pll3SwClkRate() const {
     return emu_.Get<Imx51Dpll3>().OutputRate();
 }
 
+/* Table 7-13 uart_clk_sel [25:24], esdhc2_clk_sel [17:16], ecspi_clk_sel [5:4]: 00 pll1_sw_clk,
+   01 pll2_sw_clk, 10 pll3_sw_clk, 11 lp_apm clock. */
+GuestCycleClock::Rate Imx51Ccm::SwClkSelectRate(uint32_t sel) const {
+    switch (sel) {
+        case 0u: return Pll1SwClkRate();
+        case 1u: return Pll2SwClkRate();
+        case 2u: return Pll3SwClkRate();
+        default: return LpApmRate();
+    }
+}
+
 /* Table 7-12 periph_apm_sel [13:12]: 00 pll1_sw_clk, 01 pll3_sw_clk, 10 lp_apm. */
 GuestCycleClock::Rate Imx51Ccm::PeriphApmClkRate() const {
     switch ((Reg(kCbcmr) >> 12) & 0x3u) {
@@ -325,28 +336,24 @@ GuestCycleClock::Rate Imx51Ccm::SsiClockRate(uint32_t ssi) const {
     const uint32_t cscmr1 = Reg(kCscmr1);
     const uint32_t root   = ssi == 3u ? ((cscmr1 >> 11) & 0x1u) + 1u : ssi;
     const uint32_t cdr    = Reg(root == 1u ? kCs1cdr : kCs2cdr);
-    Rate src;
-    switch ((cscmr1 >> (root == 1u ? 14u : 12u)) & 0x3u) {
-        case 0u:  src = Pll1SwClkRate(); break;
-        case 1u:  src = Pll2SwClkRate(); break;
-        case 2u:  src = Pll3SwClkRate(); break;
-        default:  src = SsiLpApmRate();  break;
-    }
+    const uint32_t sel    = (cscmr1 >> (root == 1u ? 14u : 12u)) & 0x3u;
+    const Rate     src    = sel == 3u ? SsiLpApmRate() : SwClkSelectRate(sel);
     return src.Scaled(1u, uint64_t{((cdr >> 6) & 0x7u) + 1u} * ((cdr & 0x3Fu) + 1u));
 }
 
-/* Table 7-13 uart_clk_sel [25:24]: 00 pll1_sw_clk, 01 pll2_sw_clk, 10 pll3_sw_clk, 11 lp_apm clock;
-   Table 7-15 uart_clk_pred [5:3] and uart_clk_podf [2:0], each a divide by value + 1. */
+/* Table 7-15 uart_clk_pred [5:3] and uart_clk_podf [2:0], each a divide by value + 1. */
 GuestCycleClock::Rate Imx51Ccm::UartClockRootRate() const {
-    Rate src;
-    switch ((Reg(kCscmr1) >> 24) & 0x3u) {
-        case 0u:  src = Pll1SwClkRate(); break;
-        case 1u:  src = Pll2SwClkRate(); break;
-        case 2u:  src = Pll3SwClkRate(); break;
-        default:  src = LpApmRate();     break;
-    }
+    const Rate     src    = SwClkSelectRate((Reg(kCscmr1) >> 24) & 0x3u);
     const uint32_t cscdr1 = Reg(kCscdr1);
     return src.Scaled(1u, uint64_t{((cscdr1 >> 3) & 0x7u) + 1u} * ((cscdr1 & 0x7u) + 1u));
+}
+
+bool Imx51Ccm::EcspiClockRootRuns() const {
+    return SwClkSelectRate((Reg(kCscmr1) >> 4) & 0x3u).num != 0u;
+}
+
+bool Imx51Ccm::Esdhc2ClockRootRuns() const {
+    return SwClkSelectRate((Reg(kCscmr1) >> 16) & 0x3u).num != 0u;
 }
 
 /* Table 7-11 periph_clk_sel [25]: 0 pll2_sw_clk, 1 periph_apm_clk. */

@@ -26,6 +26,7 @@ public:
     void     OnControlWrite(uint32_t pll, uint32_t old, uint32_t value, uint32_t ccmr);
     uint64_t RefHz() const;
     uint64_t OutputHz(uint32_t pll, uint64_t off_hz) const;
+    bool     Running(uint32_t pll) const { return on_[pll] != 0u; }
 
     void SaveState(StateWriter& w);
     void RestoreState(StateReader& r);

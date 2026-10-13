@@ -8,6 +8,7 @@
 #include "../../peripherals/peripheral_dispatcher.h"
 #include "../../state/state_stream.h"
 #include "../freescale_module_clocks.h"
+#include "../guest_cpu_reset.h"
 
 #include <algorithm>
 #include <array>
@@ -40,6 +41,8 @@ constexpr uint32_t kAxiCfg1      = 0x1E34u;
 constexpr uint32_t kAxiEccStatus = 0x1E38u;
 constexpr uint32_t kAxiStatusSum = 0x1E3Cu;
 constexpr uint32_t kAxiLaunch    = 0x1E40u;
+
+constexpr uint32_t kCfg1NfcRst = 1u << 2;   /* NFC_CONFIGURATION1 NFC_RST (MCIMX51RM Table 45-26) */
 
 constexpr uint32_t kLaunchFcmd     = 1u << 0;
 constexpr uint32_t kLaunchFadd     = 1u << 1;
@@ -96,6 +99,8 @@ bool Imx51Nfc::ShouldRegister() {
 
 void Imx51Nfc::OnReady() {
     module_clocks_ = &emu_.Get<FreescaleModuleClocks>();
+    module_clocks_->RegisterGateListener([this] { RunHeldLaunch(); });
+    emu_.Get<GuestCpuReset>().RegisterResetListener([this](ResetLineKind) { launch_held_ = false; });
     emu_.Get<PeripheralDispatcher>().Register(this);
 }
 
@@ -160,7 +165,10 @@ void Imx51Nfc::NfcWrite(uint32_t addr, uint32_t value, uint32_t width) {
         }
         switch (off) {
             case kAxiNandCmd:   nand_cmd_   = static_cast<uint8_t>(value); return;
-            case kAxiCfg1:      cfg1_       = value;                       return;
+            case kAxiCfg1:
+                cfg1_ = value;
+                if (value & kCfg1NfcRst) launch_held_ = false;
+                return;
             case kAxiEccStatus: ecc_status_ = value;                      return;
             case kAxiStatusSum: status_sum_ = value;                      return;
             case kAxiLaunch:    Launch(value);                            return;
@@ -185,9 +193,18 @@ void Imx51Nfc::NfcWrite(uint32_t addr, uint32_t value, uint32_t width) {
 }
 
 void Imx51Nfc::Launch(uint32_t value) {
-    if (value & (kLaunchFcmd | kLaunchFadd | kLaunchFdiMask | kLaunchFdoMask | kLaunchAutoMask))
-        module_clocks_->RequireRunning(FreescaleModule::kNfc, "starts a NAND operation");
     launch_ = value;
+    launch_held_ = true;
+    RunHeldLaunch();
+}
+
+void Imx51Nfc::RunHeldLaunch() {
+    if (!launch_held_ || !module_clocks_->Running(FreescaleModule::kNfc)) return;
+    launch_held_ = false;
+    ExecuteLaunch(launch_);
+}
+
+void Imx51Nfc::ExecuteLaunch(uint32_t value) {
     if (value & kLaunchFcmd) {
         switch (nand_cmd_) {
             case kNandCmdReadStart:        /* read-setup / read-id start a fresh */
@@ -356,6 +373,7 @@ void Imx51Nfc::SaveState(StateWriter& w) {
     w.Write("ecc_status", ecc_status_);
     w.Write("status_sum", status_sum_);
     w.Write("launch", launch_);
+    w.Write<uint8_t>("launch_held", launch_held_ ? 1 : 0);
     w.Write("wr_protect", wr_protect_);
     for (uint32_t v : unlock_) w.Write("unlock", v);
     w.Write("cfg2", cfg2_);
@@ -378,6 +396,9 @@ void Imx51Nfc::RestoreState(StateReader& r) {
     r.Read("ecc_status", ecc_status_);
     r.Read("status_sum", status_sum_);
     r.Read("launch", launch_);
+    uint8_t held = 0;
+    r.Read("launch_held", held);
+    launch_held_ = held != 0;
     r.Read("wr_protect", wr_protect_);
     for (uint32_t& v : unlock_) r.Read("unlock", v);
     r.Read("cfg2", cfg2_);

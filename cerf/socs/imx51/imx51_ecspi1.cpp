@@ -6,7 +6,9 @@
 #include "../../peripherals/peripheral_dispatcher.h"
 #include "../../state/state_stream.h"
 #include "../freescale_module_clocks.h"
+#include "../guest_cpu_reset.h"
 #include "../irq_controller.h"
+#include "imx51_ccm.h"
 #include "../spi_slave.h"
 
 namespace {
@@ -53,6 +55,10 @@ bool Imx51Ecspi1::ShouldRegister() {
 
 void Imx51Ecspi1::OnReady() {
     module_clocks_ = &emu_.Get<FreescaleModuleClocks>();
+    ccm_           = &emu_.Get<Imx51Ccm>();
+    module_clocks_->RegisterGateListener([this] { OnClockChange(); });
+    ccm_->RegisterRateListener([this] { OnClockChange(); });
+    emu_.Get<GuestCpuReset>().RegisterResetListener([this](ResetLineKind) { conreg_ &= ~kConXch; });
     emu_.Get<PeripheralDispatcher>().Register(this);
 }
 
@@ -79,10 +85,6 @@ void Imx51Ecspi1::RaiseIrqIfPending() {
 }
 
 void Imx51Ecspi1::DoExchange() {
-    module_clocks_->RequireRunning(FreescaleModule::kEcspi1, "runs an SPI burst");
-    /* BURST_LENGTH is bits-1; the driver packs each FIFO word little-endian
-       (ipdacp.dll sub_C0D83334), so extract bytes LSB-first to hand the slave the
-       driver's logical byte order ([reg][len][data]); reassemble RX the same way. */
     const uint32_t burst_bits = ((conreg_ >> kConBurstShift) & 0xFFFu) + 1u;
     const uint32_t nbytes = (burst_bits + 7u) / 8u;
     while (!tx_fifo_.empty()) {
@@ -98,6 +100,25 @@ void Imx51Ecspi1::DoExchange() {
         else statreg_ |= kStRo;  /* RXFIFO overflow */
     }
     statreg_ |= kStTc;  /* burst complete */
+}
+
+bool Imx51Ecspi1::XchHeld() const {
+    return (conreg_ & (kConEn | kConXch)) == (kConEn | kConXch);
+}
+
+/* MCIMX51RM §26.4.1: ipg_clk_per is the "eCSPI operation clock"; Table 7-13 ecspi_clk_sel. */
+bool Imx51Ecspi1::RunHeldExchange() {
+    if (!XchHeld()) return false;
+    if (!module_clocks_->Running(FreescaleModule::kEcspi1) || !ccm_->EcspiClockRootRuns()) return false;
+    DoExchange();
+    conreg_ &= ~kConXch;
+    return true;
+}
+
+void Imx51Ecspi1::OnClockChange() {
+    if (!RunHeldExchange()) return;
+    RecomputeStatus();
+    RaiseIrqIfPending();
 }
 
 uint32_t Imx51Ecspi1::ReadWord(uint32_t addr) {
@@ -128,18 +149,20 @@ void Imx51Ecspi1::WriteWord(uint32_t addr, uint32_t value) {
             if (tx_fifo_.size() < kFifoDepth) tx_fifo_.push_back(value);
             RecomputeStatus();
             return;
-        case kConReg:
+        case kConReg: {
+            const bool held = XchHeld();
             conreg_ = value;
             if (!(value & kConEn)) {           /* clearing EN resets the logic (Table 26-8) */
                 tx_fifo_.clear();
                 rx_fifo_.clear();
-            } else if (value & kConXch) {       /* XCH starts the burst, then self-clears */
-                DoExchange();
-                conreg_ &= ~kConXch;
+            } else if (held) {
+                conreg_ |= kConXch;
             }
+            RunHeldExchange();
             RecomputeStatus();
             RaiseIrqIfPending();
             return;
+        }
         case kConfigReg: configreg_ = value; return;
         case kIntReg:    intreg_ = value; RaiseIrqIfPending(); return;
         case kDmaReg:    dmareg_ = value; return;

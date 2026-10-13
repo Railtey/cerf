@@ -4,7 +4,6 @@
 #include "usb_device_host.h"
 
 #include "../../core/cerf_emulator.h"
-#include "../../core/fatal.h"
 #include "../../core/log.h"
 #include "../../boards/board_context.h"
 #include "imx51_id.h"
@@ -88,7 +87,10 @@ constexpr uint32_t kStsUri = 1u << 6;   /* USB reset received */
 constexpr uint32_t kDevIntBits = kStsUi | kStsUei | kStsPci | kStsUri;
 constexpr uint32_t kFrameStatusBits =
     FreescaleUsbFrameIndex::kStsSri | FreescaleUsbFrameIndex::kStsFri;
-constexpr uint32_t kUsbOtgIrq = 18u;    /* TZIC source 18 (SBOOT sub_8005DC4C) */
+/* MCIMX51RM Table 60-2 (pages 60-7 / 60-8): USBCMD / USBSTS / USBINTR at Host1 + 0x340, Host2
+   + 0x540, Host3 + 0x740. Table 3-2 (pages 3-1 / 3-2): 18 USB OTG, 14 USB Host 1, 16 USB Host 2,
+   17 USB Host 3. */
+constexpr uint32_t kCoreIrq[] = {18u, 14u, 16u, 17u};
 
 constexpr uint8_t kUsb3317Id[4] = {0x24u, 0x04u, 0x06u, 0x00u};
 
@@ -233,10 +235,9 @@ void Imx51Usboh3::WriteCoreFrameReg(uint32_t off, uint32_t value) {
     if ((off % kCoreSpan) != kOffFrindex) return;
     const uint32_t core = off / kCoreSpan;
     if (core == 0u && Core0IsDevice()) return;
-    if (frame_index_.Running(core)) {
-        emu_.Get<Fatal>().Die("Imx51Usboh3: FRINDEX write 0x%08X on core %u with Run/Stop set",
-                              value, core);
-    }
+    /* MCIMX51RM §60.4.2.6.4: "This register cannot be written unless the Host Controller is in
+       the 'Halted' state as indicated by the HCHalted bit." */
+    if (frame_index_.Running(core)) return;
     frame_index_.WriteFrindex(core, value);
     ArmFrameIrq();
 }
@@ -250,31 +251,22 @@ void Imx51Usboh3::WriteWord(uint32_t addr, uint32_t value) {
         WriteCoreFrameReg(off, value);
         if (coff == kOffFrindex) return;
         if (coff == kOffUsbcmd) {
-            if ((value & kUsbcmdReset) != 0u) {
-                if (frame_index_.Running(off / kCoreSpan)) {
-                    emu_.Get<Fatal>().Die("Imx51Usboh3: USBCMD 0x%08X sets RST on core %u "
-                                          "with Run/Stop set", value, off / kCoreSpan);
-                }
-                frame_index_.Reset(off / kCoreSpan);
-            }
+            if ((value & kUsbcmdReset) != 0u) frame_index_.Reset(off / kCoreSpan);
             value &= ~kUsbcmdReset;   /* RST self-clears at reset completion */
             const uint32_t old = regs_[off >> 2];
             regs_[off >> 2] = value;
             frame_index_.SetFrameListSize(off / kCoreSpan,
                                           FreescaleUsbFrameIndex::FrameListSizeCode(value));
-            frame_index_.SetRunning(off / kCoreSpan, (value & kCmdRs) != 0u, !core0_dev);
+            ApplyFrameRole(off / kCoreSpan);
             RefreshTransceiverClocks(FreescaleLowPowerMode::kRun);
             if (core0_dev) {
-                /* RS 0->1: CERF (host) attaches and drives a bus reset ->
-                   USBSTS.URI|PCI, raising the OTG interrupt. */
                 if ((value & kCmdRs) && !(old & kCmdRs))
                     regs_[kOffUsbsts >> 2] |= kStsUri | kStsPci;
-                RefreshDeviceIrq();
             } else {
                 ReflectScheduleStatus(off, value);
             }
             if (off < kCoreSpan) UpdateScheduleTimer();
-            if (off < kCoreSpan && !core0_dev) RefreshDeviceIrq();
+            RefreshDeviceIrq();
             ArmFrameIrq();
             return;
         }
@@ -283,23 +275,14 @@ void Imx51Usboh3::WriteWord(uint32_t addr, uint32_t value) {
             regs_[off >> 2] = (old & kUsbstsRoMask) | (old & ~kUsbstsRoMask & ~value);
             frame_index_.ClearStatus(off / kCoreSpan,
                                      value & kFrameStatusBits);
-            if (core0_dev) {
-                RefreshDeviceIrq();
-                /* URI cleared marks the start of SBOOT's reset handler
-                   (sub_8005D554); it clears ENDPTSETUPSTAT next, so enumeration
-                   must wait until the handler's ENDPTFLUSH write below - a SETUP
-                   delivered here would have its ENDPTSETUPSTAT wiped. */
-                if ((old & kStsUri) && (value & kStsUri))
-                    reset_seen_ = true;
-            } else if (off < kCoreSpan) {
-                RefreshDeviceIrq();
-            }
+            RefreshDeviceIrq();
+            if (core0_dev && (old & kStsUri) && (value & kStsUri)) reset_seen_ = true;
             ArmFrameIrq();
             return;
         }
         if (coff == kOffUsbintr) {
             regs_[off >> 2] = value;
-            if (off < kCoreSpan) RefreshDeviceIrq();
+            RefreshDeviceIrq();
             ArmFrameIrq();
             return;
         }
@@ -334,7 +317,12 @@ void Imx51Usboh3::WriteWord(uint32_t addr, uint32_t value) {
         }
     }
     regs_[off >> 2] = value;
-    if (off == kOffUsbmode) UpdateScheduleTimer();
+    if (off == kOffUsbmode) {
+        ApplyFrameRole(0u);
+        UpdateScheduleTimer();
+        RefreshDeviceIrq();
+        ArmFrameIrq();
+    }
     if (off == kOffPhyCtrl0 || off == kOffUsbCtrl1 ||
         (off < kNonCore && off % kCoreSpan == kOffPortsc)) {
         RefreshTransceiverClocks(FreescaleLowPowerMode::kRun);
@@ -379,12 +367,23 @@ bool Imx51Usboh3::Core0IsDevice() const {
 
 /* MCIMX51RM Table 60-42: SRE and FRE raise the interrupt while SRI or FRI is set. */
 void Imx51Usboh3::RefreshDeviceIrq() {
-    const uint32_t sts = regs_[kOffUsbsts >> 2] | frame_index_.Status(0u);
-    const bool pending = (sts & regs_[kOffUsbintr >> 2] &
-                          (kDevIntBits | kFrameStatusBits)) != 0;
+    static_assert(std::size(kCoreIrq) == kCores);
     auto& intc = emu_.Get<IrqController>();
-    if (pending) intc.AssertIrq(static_cast<int>(kUsbOtgIrq));
-    else         intc.DeAssertIrq(static_cast<int>(kUsbOtgIrq));
+    for (uint32_t core = 0; core < kCores; ++core) {
+        const uint32_t base = core * kCoreSpan;
+        const uint32_t sts  = regs_[(base + kOffUsbsts) >> 2] | frame_index_.Status(core);
+        const bool pending  = (sts & regs_[(base + kOffUsbintr) >> 2] &
+                               (kDevIntBits | kFrameStatusBits)) != 0u;
+        if (pending) intc.AssertIrq(static_cast<int>(kCoreIrq[core]));
+        else         intc.DeAssertIrq(static_cast<int>(kCoreIrq[core]));
+    }
+}
+
+void Imx51Usboh3::ApplyFrameRole(uint32_t core) {
+    const bool rs     = (regs_[(core * kCoreSpan + kOffUsbcmd) >> 2] & kCmdRs) != 0u;
+    const bool device = core == 0u && Core0IsDevice();
+    frame_index_.SetRunning(core, rs, device ? FreescaleUsbFrameIndex::Role::kDeviceHighSpeed
+                                             : FreescaleUsbFrameIndex::Role::kHost);
 }
 
 void Imx51Usboh3::ArmFrameIrq() {
@@ -402,15 +401,6 @@ void Imx51Usboh3::ArmFrameIrq() {
 
 void Imx51Usboh3::OnFrameIrqEvent() {
     std::lock_guard<std::mutex> lk(async_schedule_mtx_);
-    for (uint32_t core = 1; core < kCores; ++core) {
-        const uint32_t live = frame_index_.Status(core) &
-                              regs_[(core * kCoreSpan + kOffUsbintr) >> 2] & kFrameStatusBits;
-        if (live != 0u) {
-            emu_.Get<Fatal>().Die("Imx51Usboh3: core %u USBSTS 0x%X meets USBINTR 0x%08X; "
-                                  "that core's interrupt line is not modeled", core, live,
-                                  regs_[(core * kCoreSpan + kOffUsbintr) >> 2]);
-        }
-    }
     RefreshDeviceIrq();
     ArmFrameIrq();
 }

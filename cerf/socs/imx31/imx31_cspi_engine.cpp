@@ -62,15 +62,10 @@ void Imx31CspiEngine::WriteWord(uint32_t addr, uint32_t value) {
             statreg_ &= ~kStatTe;
             return;
         case kOffConreg: {
+            const bool held = XchHeld();
             conreg_ = value;
-            if ((value & kConregXch) && (value & kConregEn)) {
-                module_clocks_->RequireRunning(ClockModule(), "runs an SPI exchange");
-                const uint32_t cs = (value & kConregCsMask) >> kConregCsShift;
-                last_rxdata_ = SpiExchange(cs, last_txdata_);
-                /* Table 24-10: TC fires on shift-in of last bit; RR fires
-                   once ≥1 word is in RXFIFO; TX FIFO drains to empty. */
-                statreg_ |= kStatTc | kStatRr | kStatTh | kStatTe;
-            }
+            if ((value & kConregEn) != 0u && held) conreg_ |= kConregXch;
+            RunHeldExchange();
             return;
         }
         case kOffIntreg:    intreg_    = value; return;
@@ -82,4 +77,20 @@ void Imx31CspiEngine::WriteWord(uint32_t addr, uint32_t value) {
         case kOffTestreg:   testreg_   = value; return;
     }
     HaltUnsupportedAccess("WriteWord", addr, value);
+}
+
+bool Imx31CspiEngine::XchHeld() const {
+    return (conreg_ & (kConregEn | kConregXch)) == (kConregEn | kConregXch);
+}
+
+void Imx31CspiEngine::RunHeldExchange() {
+    if (!XchHeld() || !module_clocks_->Running(ClockModule())) return;
+    const uint32_t cs = (conreg_ & kConregCsMask) >> kConregCsShift;
+    last_rxdata_ = SpiExchange(cs, last_txdata_);
+    conreg_ &= ~kConregXch;
+    statreg_ |= kStatTc | kStatRr | kStatTh | kStatTe;
+}
+
+void Imx31CspiEngine::DropHeldExchange() {
+    conreg_ &= ~kConregXch;
 }

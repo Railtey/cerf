@@ -47,6 +47,7 @@ public:
     uint64_t McuMainClkHz() const;
     uint64_t IpgClkHz() const;
     uint64_t PerClkHz() const;
+    bool     PerClkRuns() const;
     uint64_t HspClkHz() const;
     uint64_t CkilHz() const;
     uint32_t ClockGate0(uint32_t index) const;

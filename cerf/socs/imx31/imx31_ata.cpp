@@ -112,9 +112,10 @@ public:
         r.Read("fifo_alarm", fifo_alarm_);
     }
 
-    /* Re-assert the AVIC line from restored int_enable_ + drive state - the ATA
-       IRQ is a level the source re-drives after restore. */
-    void PostRestore() override { UpdateAvic(); }
+    void PostRestore() override {
+        RefreshClock();
+        UpdateAvic();
+    }
 
     /* HostWidget. RX = sector data read from the drive (kDriveData read),
        TX = sector data written to the drive (kDriveData write). */
@@ -140,7 +141,7 @@ public:
             case kFifoAlarm:  return fifo_alarm_;
         }
         if (auto idx = TaskFileIndex(off)) {
-            RequireClock("reads the drive task file");
+            if (!clock_on_) return 0;
             const uint8_t v = drive_.ReadTaskFile(*idx);
             LogTaskFileAccess("R", off, v);
             UpdateAvic();
@@ -159,7 +160,7 @@ public:
             case kFifoAlarm:  fifo_alarm_  = value; return;
         }
         if (auto idx = TaskFileIndex(off)) {
-            RequireClock("writes the drive task file");
+            if (!clock_on_) return;
             LogTaskFileAccess("W", off, value);
             drive_.WriteTaskFile(*idx, value);
             UpdateAvic();
@@ -171,7 +172,7 @@ public:
     uint16_t ReadHalf(uint32_t addr) override {
         const uint32_t off = addr - kBase;
         if (off == kDriveData) {
-            RequireClock("reads drive data");
+            if (!clock_on_) return 0;
             const uint16_t v = drive_.ReadData();
             MarkRx();
             UpdateAvic();
@@ -183,7 +184,7 @@ public:
     void WriteHalf(uint32_t addr, uint16_t value) override {
         const uint32_t off = addr - kBase;
         if (off == kDriveData) {
-            RequireClock("writes drive data");
+            if (!clock_on_) return;
             drive_.WriteData(value);
             MarkTx();
             UpdateAvic();
@@ -222,10 +223,6 @@ public:
 private:
     void RefreshClock() {
         clock_on_ = module_clocks_->ModuleRunsIn(FreescaleModule::kAta, FreescaleLowPowerMode::kRun);
-    }
-
-    void RequireClock(const char* operation) {
-        if (!clock_on_) module_clocks_->RequireRunning(FreescaleModule::kAta, operation);
     }
 
     FreescaleModuleClocks* module_clocks_ = nullptr;

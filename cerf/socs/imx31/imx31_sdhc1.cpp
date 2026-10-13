@@ -7,6 +7,8 @@
 #include "../../state/state_stream.h"
 #include "imx31_avic.h"
 #include "../freescale_module_clocks.h"
+#include "../guest_cpu_reset.h"
+#include "imx31_ccm.h"
 
 #include <cstdint>
 
@@ -33,6 +35,7 @@ constexpr uint32_t kArg        = 0x2Cu;
 constexpr uint32_t kResFifo    = 0x34u;  /* R: response FIFO */
 constexpr uint32_t kBufAccess  = 0x38u;  /* R/W: data FIFO */
 
+constexpr uint32_t kClkSdhcReset   = 1u << 3;   /* STR_STP_CLK SDHC Reset (Table 29-5) */
 constexpr uint32_t kClkStartClk    = 1u << 1;   /* STR_STP_CLK START_CLK (Ex 29-1) */
 constexpr uint32_t kClkStopClk     = 1u << 0;   /* STR_STP_CLK STOP_CLK */
 constexpr uint32_t kStsTimeOutResp = 1u << 1;   /* STATUS TIME_OUT_RESP (Table 29-6) */
@@ -42,6 +45,10 @@ constexpr uint32_t kIntEndCmdResp  = 1u << 2;   /* INT_CNTR END_CMD_RESP enable 
 constexpr uint32_t kStatusReset    = 0x30000000u;  /* YBUF_EMPTY|XBUF_EMPTY (Table 29-2) */
 constexpr uint32_t kRevNoVal       = 0x00000400u;
 constexpr uint32_t kAvicSourceSdhc1 = 9u;  /* AVIC Table 2-3 */
+
+constexpr uint8_t kClkReqNone  = 0u;
+constexpr uint8_t kClkReqStart = 1u;
+constexpr uint8_t kClkReqStop  = 2u;
 
 class Imx31Sdhc1 : public Peripheral {
 public:
@@ -53,6 +60,10 @@ public:
     }
     void OnReady() override {
         module_clocks_ = &emu_.Get<FreescaleModuleClocks>();
+        ccm_           = &emu_.Get<Imx31Ccm>();
+        module_clocks_->RegisterGateListener([this] { RunHeld(); });
+        ccm_->RegisterRateListener([this] { RunHeld(); });
+        emu_.Get<GuestCpuReset>().RegisterResetListener([this](ResetLineKind) { DropHeld(); });
         emu_.Get<PeripheralDispatcher>().Register(this);
     }
 
@@ -82,22 +93,19 @@ public:
     void WriteWord(uint32_t addr, uint32_t value) override {
         switch (addr - kBase) {
             case kStrStpClk:
-                if (value & kClkStartClk)
-                    module_clocks_->RequireRunning(FreescaleModule::kSdhc1, "starts its card clock");
                 str_stp_clk_ = value;
-                if (value & kClkStartClk) status_ |= kStsCardClkRun;
-                if (value & kClkStopClk)  status_ &= ~kStsCardClkRun;
+                if (value & kClkSdhcReset)     DropHeld();
+                if (value & kClkStopClk)       clk_req_ = kClkReqStop;
+                else if (value & kClkStartClk) clk_req_ = kClkReqStart;
+                RunHeld();
                 return;
             /* W1C: writing 1 clears an event status bit (Table 29-6). */
             case kStatus:     status_ &= ~value; UpdateIrq(); return;
             case kClkRate:    clk_rate_ = value; return;
-            /* Command submit (§29.5.1 step 5). No card -> the command times out:
-               END_CMD_RESP (transfer done) + TIME_OUT_RESP (no response). */
             case kCmdDatCont:
-                module_clocks_->RequireRunning(FreescaleModule::kSdhc1, "issues a command");
                 cmd_dat_cont_ = value;
-                status_ |= kStsEndCmdResp | kStsTimeOutResp;
-                UpdateIrq();
+                cmd_held_ = true;
+                RunHeld();
                 return;
             case kResTo:      res_to_ = value; return;
             case kReadTo:     read_to_ = value; return;
@@ -116,12 +124,17 @@ public:
         w.Write("cmd_dat_cont", cmd_dat_cont_); w.Write("res_to", res_to_);    w.Write("read_to", read_to_);
         w.Write("blk_len", blk_len_);      w.Write("nob", nob_);       w.Write("int_cntr", int_cntr_);
         w.Write("cmd", cmd_);          w.Write("arg", arg_);
+        w.Write("clk_req", clk_req_);  w.Write<uint8_t>("cmd_held", cmd_held_ ? 1 : 0);
     }
     void RestoreState(StateReader& r) override {
         r.Read("str_stp_clk", str_stp_clk_);  r.Read("status", status_);    r.Read("clk_rate", clk_rate_);
         r.Read("cmd_dat_cont", cmd_dat_cont_); r.Read("res_to", res_to_);    r.Read("read_to", read_to_);
         r.Read("blk_len", blk_len_);      r.Read("nob", nob_);       r.Read("int_cntr", int_cntr_);
         r.Read("cmd", cmd_);          r.Read("arg", arg_);
+        r.Read("clk_req", clk_req_);
+        uint8_t held = 0;
+        r.Read("cmd_held", held);
+        cmd_held_ = held != 0;
     }
 
     /* Re-assert the AVIC line from restored status_ & int_cntr_ - END_CMD_RESP
@@ -129,6 +142,24 @@ public:
     void PostRestore() override { UpdateIrq(); }
 
 private:
+    void DropHeld() {
+        clk_req_  = kClkReqNone;
+        cmd_held_ = false;
+    }
+
+    /* MCIMX31RM §29.4.8: CLK_20M, from IPG_PERCLK, "is used internally by SDHC". */
+    void RunHeld() {
+        if (!module_clocks_->Running(FreescaleModule::kSdhc1) || !ccm_->PerClkRuns()) return;
+        if (clk_req_ == kClkReqStart) status_ |= kStsCardClkRun;
+        if (clk_req_ == kClkReqStop)  status_ &= ~kStsCardClkRun;
+        clk_req_ = kClkReqNone;
+        if (cmd_held_) {
+            cmd_held_ = false;
+            status_ |= kStsEndCmdResp | kStsTimeOutResp;
+            UpdateIrq();
+        }
+    }
+
     /* AVIC source 9 is asserted while END_CMD_RESP is set and its INT_CNTR[2]
        enable is on; the ISR W1C-clears END_CMD_RESP, which deasserts it. */
     void UpdateIrq() {
@@ -149,7 +180,10 @@ private:
     uint32_t int_cntr_     = 0;
     uint32_t cmd_          = 0;
     uint32_t arg_          = 0;
+    uint8_t  clk_req_      = kClkReqNone;
+    bool     cmd_held_     = false;
     FreescaleModuleClocks* module_clocks_ = nullptr;
+    Imx31Ccm*              ccm_           = nullptr;
 };
 
 }  /* namespace */

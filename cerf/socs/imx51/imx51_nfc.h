@@ -35,6 +35,8 @@ public:
 
 private:
     void     Launch(uint32_t value);
+    void     RunHeldLaunch();
+    void     ExecuteLaunch(uint32_t value);
     void     ReadPage();
     void     ReadStatus();
     void     AutoRead();
@@ -53,6 +55,7 @@ private:
     uint32_t ecc_status_ = 0;               /* ECC_STATUS_RESULT (0=no error) */
     uint32_t status_sum_ = 0;               /* STATUS_SUM */
     uint32_t launch_     = 0;
+    bool     launch_held_ = false;
 
     uint32_t wr_protect_ = 0;
     std::array<uint32_t, 8> unlock_{};

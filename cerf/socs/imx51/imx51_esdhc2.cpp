@@ -6,6 +6,8 @@
 #include "../../peripherals/peripheral_dispatcher.h"
 #include "../../state/state_stream.h"
 #include "../freescale_module_clocks.h"
+#include "../guest_cpu_reset.h"
+#include "imx51_ccm.h"
 
 #include <array>
 #include <cstdint>
@@ -32,6 +34,9 @@ constexpr uint32_t kSysctlReset = 0x00008008u;
    (RSTA b24 / RSTC b25 / RSTD b26 / INITA b27, §31.3.3.9); CERF completes them
    instantly, so they always read back 0. */
 constexpr uint32_t kSysctlSelfClear = (1u << 24) | (1u << 25) | (1u << 26) | (1u << 27);
+/* MCIMX51RM Table 31-16: RSTA "Software reset for all", RSTC "Software reset for CMD line". */
+constexpr uint32_t kSysctlRsta = 1u << 24;
+constexpr uint32_t kSysctlRstc = 1u << 25;
 
 /* HOSTCAPBLT (RO, Figure 31-17): VS18|VS30|VS33|SRS|DMAS|HSS|ADMAS=1, MBL=011. */
 constexpr uint32_t kHostcap = 0x07F30000u;
@@ -60,6 +65,10 @@ public:
     }
     void OnReady() override {
         module_clocks_ = &emu_.Get<FreescaleModuleClocks>();
+        ccm_           = &emu_.Get<Imx51Ccm>();
+        module_clocks_->RegisterGateListener([this] { RunHeldCommand(); });
+        ccm_->RegisterRateListener([this] { RunHeldCommand(); });
+        emu_.Get<GuestCpuReset>().RegisterResetListener([this](ResetLineKind) { cmd_held_ = false; });
         regs_[kOffSysctl >> 2] = kSysctlReset;
         emu_.Get<PeripheralDispatcher>().Register(this);
     }
@@ -81,17 +90,13 @@ public:
         const uint32_t off = addr - kBase;
         switch (off) {
             case kOffXfertyp:
-                module_clocks_->RequireRunning(FreescaleModule::kEsdhc2, "issues a command");
-                /* esdhc.dll's polled completion handler (sub_C0AF2E88) advances
-                   ONLY when IRQSTAT.CC is set, so omitting CC spins its busy-poll
-                   forever and the boot hangs; CTOE is the no-card response timeout
-                   for a response-expecting command (Table 31-18). */
                 regs_[off >> 2] = value;
-                regs_[kOffIrqstat >> 2] |= kIrqstatCc
-                    | ((value & kXfertypRsptypMask) ? kIrqstatCtoe : 0u);
+                cmd_held_ = true;
+                RunHeldCommand();
                 return;
             case kOffSysctl:
                 regs_[off >> 2] = value & ~kSysctlSelfClear;
+                if (value & (kSysctlRsta | kSysctlRstc)) cmd_held_ = false;
                 return;
             case kOffIrqstat:
                 regs_[off >> 2] &= ~value;  /* write-1-clear */
@@ -106,10 +111,30 @@ public:
         }
     }
 
-    void SaveState(StateWriter& w) override { w.WriteBytes("regs", regs_.data(), sizeof(regs_)); }
-    void RestoreState(StateReader& r) override { r.ReadBytes("regs", regs_.data(), sizeof(regs_)); }
+    void SaveState(StateWriter& w) override {
+        w.WriteBytes("regs", regs_.data(), sizeof(regs_));
+        w.Write<uint8_t>("cmd_held", cmd_held_ ? 1 : 0);
+    }
+    void RestoreState(StateReader& r) override {
+        r.ReadBytes("regs", regs_.data(), sizeof(regs_));
+        uint8_t held = 0;
+        r.Read("cmd_held", held);
+        cmd_held_ = held != 0;
+    }
 
 private:
+    /* MCIMX51RM §31.4.6: SD_CLK, from the peripheral source clock, "drives the clocks for all
+       submodules of the SD protocol unit"; Table 7-13 esdhc2_clk_sel. */
+    void RunHeldCommand() {
+        if (!cmd_held_ || !module_clocks_->Running(FreescaleModule::kEsdhc2) ||
+            !ccm_->Esdhc2ClockRootRuns()) {
+            return;
+        }
+        cmd_held_ = false;
+        regs_[kOffIrqstat >> 2] |= kIrqstatCc
+            | ((regs_[kOffXfertyp >> 2] & kXfertypRsptypMask) ? kIrqstatCtoe : 0u);
+    }
+
     uint32_t ReadReg(uint32_t off) const {
         switch (off) {
             case kOffPrsstat: return kPrsstat;
@@ -121,6 +146,8 @@ private:
 
     std::array<uint32_t, kSize / 4> regs_{};
     FreescaleModuleClocks*          module_clocks_ = nullptr;
+    Imx51Ccm*                       ccm_           = nullptr;
+    bool                            cmd_held_      = false;
 };
 
 }  /* namespace */

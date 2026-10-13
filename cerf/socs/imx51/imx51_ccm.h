@@ -35,6 +35,8 @@ public:
     GuestCycleClock::Rate IpgClkRate() const;
     GuestCycleClock::Rate SsiClockRate(uint32_t ssi) const;
     GuestCycleClock::Rate UartClockRootRate() const;
+    bool                  EcspiClockRootRuns() const;
+    bool                  Esdhc2ClockRootRuns() const;
     GuestCycleClock::Rate FpmRate() const;
     uint32_t ClockGate(uint32_t ccgr, uint32_t index) const;
     bool     ClockRunsIn(uint32_t ccgr, uint32_t index, FreescaleLowPowerMode mode) const;
@@ -61,6 +63,7 @@ private:
     Rate Pll1SwClkRate() const;
     Rate Pll2SwClkRate() const;
     Rate Pll3SwClkRate() const;
+    Rate SwClkSelectRate(uint32_t sel) const;
     Rate PeriphApmClkRate() const;
     Rate PeriphClkRate() const;
     Rate MainBusClkRate() const;

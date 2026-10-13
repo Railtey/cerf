@@ -8,6 +8,7 @@
 #include "../../peripherals/peripheral_dispatcher.h"
 #include "../../state/state_stream.h"
 #include "../freescale_module_clocks.h"
+#include "../guest_cpu_reset.h"
 
 #include <cstdint>
 
@@ -24,6 +25,8 @@ public:
     }
     void OnReady() override {
         module_clocks_ = &emu_.Get<FreescaleModuleClocks>();
+        module_clocks_->RegisterGateListener([this] { RunHeldExchange(); });
+        emu_.Get<GuestCpuReset>().RegisterResetListener([this](ResetLineKind) { DropHeldExchange(); });
         emu_.Get<PeripheralDispatcher>().Register(this);
     }
 
@@ -51,6 +54,10 @@ protected:
     virtual FreescaleModule ClockModule() const = 0;
 
 private:
+    bool XchHeld() const;
+    void RunHeldExchange();
+    void DropHeldExchange();
+
     FreescaleModuleClocks* module_clocks_ = nullptr;
     uint32_t conreg_      = 0;
     uint32_t intreg_      = 0;

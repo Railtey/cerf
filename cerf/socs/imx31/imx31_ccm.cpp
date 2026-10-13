@@ -216,6 +216,11 @@ uint64_t Imx31Ccm::PerClkHz() const {
                      "ipg_per_baud");
 }
 
+/* MCIMX31RM Table 3-4 PERCS: "0 USB clock domain source is selected, 1 ipg_clk is selected". */
+bool Imx31Ccm::PerClkRuns() const {
+    return (regs_[kCcmrSlot] & kCcmrPercs) != 0u || plls_->Running(1u);
+}
+
 /* Table 3-12: two CG bits per module, index i at bits [2i+1:2i]. */
 uint32_t Imx31Ccm::ClockGate0(uint32_t index) const {
     return (regs_[kCgr0Slot] >> (2u * index)) & 0x3u;

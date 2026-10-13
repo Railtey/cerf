@@ -6,15 +6,14 @@
 #include "../../peripherals/peripheral_dispatcher.h"
 #include "../../state/state_stream.h"
 #include "../freescale_module_clocks.h"
+#include "../guest_cpu_reset.h"
 
 #include <cstdint>
 
 namespace {
 
-/* i.MX31 1-Wire (OWIRE) - MCIMX31RM Ch 22 @0x43F9_C000. CONTROL's RPP/WR0/WR1
-   are self-clearing strobes (Table 22-4): they must read back 0 or the driver's
-   poll-until-clear loop wedges. No device -> PST(6)=0; a read samples idle-high
-   -> RDST(3)=1. */
+/* MCIMX31RM Ch 22, 1-Wire at 0x43F9_C000. Table 22-4: RPP, WR0 and WR1 are self-clearing;
+   RDST "is valid after the WR1/RD bit is self cleared". */
 constexpr uint32_t kBase = 0x43F9C000u;
 constexpr uint32_t kSize = 0x00000008u;  /* CONTROL/TIME_DIVIDER/RESET (Table 22-1) */
 
@@ -26,6 +25,7 @@ constexpr uint16_t kCtrlRpp  = 1u << 7;  /* Reset/Presence Pulse, self-clearing 
 constexpr uint16_t kCtrlWr0  = 1u << 5;  /* Write 0 bit, self-clearing */
 constexpr uint16_t kCtrlWr1  = 1u << 4;  /* Write 1 / Read, self-clearing */
 constexpr uint16_t kCtrlRdst = 1u << 3;  /* Read-bit result (1 = sampled high) */
+constexpr uint16_t kCtrlStrobes = kCtrlRpp | kCtrlWr0 | kCtrlWr1;
 
 class Imx31Owire : public Peripheral {
 public:
@@ -37,6 +37,10 @@ public:
     }
     void OnReady() override {
         module_clocks_ = &emu_.Get<FreescaleModuleClocks>();
+        module_clocks_->RegisterGateListener([this] { RunHeldStrobes(); });
+        emu_.Get<GuestCpuReset>().RegisterResetListener([this](ResetLineKind) {
+            control_ &= static_cast<uint16_t>(~kCtrlStrobes);
+        });
         emu_.Get<PeripheralDispatcher>().Register(this);
     }
 
@@ -69,8 +73,6 @@ public:
 private:
     uint16_t ReadReg16(uint32_t off) {
         switch (off) {
-            /* RPP/WR0/WR1 self-cleared (read 0); PST=0 (no device); RDST per
-               the last read (no device -> idle-high -> 1). */
             case kControl:     return control_;
             case kTimeDivider: return time_divider_;
             case kReset:       return reset_;
@@ -79,13 +81,9 @@ private:
     }
     void WriteReg16(uint32_t off, uint16_t value) {
         switch (off) {
-            /* No 1-Wire device responds: RPP leaves PST=0; WR1 (read) samples
-               the idle-high bus -> RDST=1. The strobe bits self-clear, so none
-               persist into control_. */
             case kControl:
-                if (value & (kCtrlRpp | kCtrlWr0 | kCtrlWr1))
-                    module_clocks_->RequireRunning(FreescaleModule::kOwire, "runs a bus slot");
-                if (value & kCtrlWr1) control_ |= kCtrlRdst;
+                control_ |= value & kCtrlStrobes;
+                RunHeldStrobes();
                 return;
             case kTimeDivider: time_divider_ = value; return;
             /* RST=1 holds the module in reset, clearing its registers
@@ -98,7 +96,13 @@ private:
         HaltUnsupportedAccess("WriteReg16", kBase + off, value);
     }
 
-    uint16_t control_      = 0;  /* PST(6)=0 no device; only RDST(3) ever set */
+    void RunHeldStrobes() {
+        if (!module_clocks_->Running(FreescaleModule::kOwire)) return;
+        if (control_ & kCtrlWr1) control_ |= kCtrlRdst;
+        control_ &= static_cast<uint16_t>(~kCtrlStrobes);
+    }
+
+    uint16_t control_      = 0;
     uint16_t time_divider_ = 0;
     uint16_t reset_        = 0;
     FreescaleModuleClocks* module_clocks_ = nullptr;

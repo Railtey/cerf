@@ -62,6 +62,7 @@ private:
     uint32_t ReadLocked(uint32_t off);
     void     WriteCoreFrameReg(uint32_t off, uint32_t value);
     void     RefreshDeviceIrq();
+    void     ApplyFrameRole(uint32_t core);
     void     ArmFrameIrq();
     void     OnFrameIrqEvent();
     void     ReflectScheduleStatus(uint32_t usbcmd_off, uint32_t usbcmd);
