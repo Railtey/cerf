@@ -73,10 +73,10 @@ def _stats():
     cpus      = sorted({soc_family_of(b['id'])['arch'] for b in boards})
 
     cells = [
-        (str(len(boards)),    'boards'),
-        (str(len(platforms)), 'platforms'),
-        (str(len(socs)),      'SoCs'),
         (' + '.join(cpus), 'guest CPUs'),
+        (str(len(platforms)), 'platforms'),
+        (str(len(boards)),    'boards'),
+        (str(len(socs)),      'SoCs'),
     ]
     out = ['<div class="cerf-stats">']
     for value, label in cells:
