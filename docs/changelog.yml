@@ -68,6 +68,7 @@
       Apps run from a shared folder no longer crash
       Shared folders no longer crash Explorer on Windows CE .NET
       Fixed memory errors on Windows CE 6 branch
+      Fixed shared storage caps
   ce_apps:
     new: |
       romdump: SH3 support

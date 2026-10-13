@@ -437,7 +437,8 @@ run_claude.cmd
           ✅ Crash/artifacts when scrolling under complex rendering<br/>
           ✅ Apps run from a shared folder no longer crash<br/>
           ✅ Shared folders no longer crash Explorer on Windows CE .NET<br/>
-          ✅ Fixed memory errors on Windows CE 6 branch</p>
+          ✅ Fixed memory errors on Windows CE 6 branch<br/>
+          ✅ Fixed shared storage caps</p>
       </td>
     </tr>
     <tr>
