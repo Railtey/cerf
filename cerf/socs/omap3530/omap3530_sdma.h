@@ -3,6 +3,17 @@
 #include "omap3530_sdma_base.h"
 
 #include <cstdint>
+#include <utility>
+#include <vector>
+
+class Omap3530SdmaRequester {
+public:
+    virtual bool RequestAsserted() = 0;
+    virtual void Served()          = 0;
+
+protected:
+    ~Omap3530SdmaRequester() = default;
+};
 
 class Omap3530Sdma : public Omap3530SdmaBase {
 public:
@@ -38,7 +49,16 @@ public:
         kSyncMmc3Tx   = 77, kSyncMmc3Rx   = 78,
     };
 
+    void RegisterRequester(uint32_t source, Omap3530SdmaRequester* requester);
+
 protected:
     uint32_t ChannelCount() const override { return 32u; }
     int      IrqForLine(int j) const override { return 12 + j; }
+    bool     SyncRequestAsserted(uint32_t source) override;
+    void     OnSyncServed(uint32_t source) override;
+
+private:
+    Omap3530SdmaRequester* Requester(uint32_t source) const;
+
+    std::vector<std::pair<uint32_t, Omap3530SdmaRequester*>> requesters_;
 };

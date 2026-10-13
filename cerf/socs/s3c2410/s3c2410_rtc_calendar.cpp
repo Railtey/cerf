@@ -23,15 +23,15 @@ void S3C2410RtcCalendar::AdvanceOneDay() {
 }
 
 uint64_t S3C2410RtcCalendar::SecondsToNextMinute() const {
-    return 60u - sec;
+    return BcdCalendar::SecondsToNextMinute(sec);
 }
 
 uint64_t S3C2410RtcCalendar::SecondsToNextHour() const {
-    return 3600u - (min * 60u + sec);
+    return BcdCalendar::SecondsToNextHour(min, sec);
 }
 
 uint64_t S3C2410RtcCalendar::SecondsToNextDay() const {
-    return 86400u - (hour * 3600u + min * 60u + sec);
+    return BcdCalendar::SecondsToNextDay(hour, min, sec);
 }
 
 uint64_t S3C2410RtcCalendar::SecondsToNextMonth() const {

@@ -5,12 +5,11 @@
 #include "../../core/byte_order.h"
 #include "../../core/cerf_emulator.h"
 #include "../../core/log.h"
-#include "../../cpu/emulated_memory.h"
 #include "../../peripherals/peripheral_dispatcher.h"
-#include "../irq_controller.h"
+#include "../guest_cpu_reset.h"
+#include "omap3530_dma_element_bus.h"
 
 #include <cstdint>
-#include <cstring>
 #include <mutex>
 
 namespace {
@@ -47,15 +46,28 @@ constexpr uint32_t kCcrSelSrcDstSync     = 1u << 24;
 constexpr uint32_t kCsdpSrcEndianBig = 1u << 21;
 constexpr uint32_t kCsdpDstEndianBig = 1u << 19;
 
+/* OMAP35x TRM SPRUF98Y Table 9-39 DMA4_CSRi (pages 1036-1037): HALF 2, FRAME 3, LAST 4, BLOCK 5, SYNC 6
+   "servicing a synchronized DMA request", PKT 7; Table 9-8 (page 1002): start of last frame = "The first
+   element of the last frame transferred", half of frame = "Half of the current frame transferred". */
+constexpr uint32_t kCsrHalf     = 1u << 2;
 constexpr uint32_t kCsrFrame    = 1u << 3;
 constexpr uint32_t kCsrLast     = 1u << 4;
 constexpr uint32_t kCsrBlock    = 1u << 5;
+constexpr uint32_t kCsrSync     = 1u << 6;
 constexpr uint32_t kCsrPkt      = 1u << 7;
 constexpr uint32_t kCsrMisAlign = 1u << 11;
 
 constexpr uint32_t kClnkEnable  = 1u << 15;
 
 constexpr uint32_t kOcpSoftReset = 1u << 1;
+/* SPRUF98Y the "0x-" channel fields of Table 9-33 (page 1031, page 1032), Table 9-35 (page 1034), Table 9-37 (page 1034,
+   page 1035), Table 9-41 (page 1038); Table 9-37 bits 10 and 9 reset 1; Table 9-31 (page 1029, page 1030) DMA4_GCR. */
+constexpr uint32_t kCcrMemory  = 0x0306F020u;
+constexpr uint32_t kClnkMemory = 0x1Fu;
+constexpr uint32_t kCicrMemory = 0xE9BCu;
+constexpr uint32_t kCsdpMemory = 0x003F3FFFu;
+constexpr uint32_t kCicrReset  = 0x600u;
+constexpr uint32_t kGcrReset   = 0x00010010u;
 
 constexpr uint32_t kRevision = 0x00000040u;
 constexpr uint32_t kCaps0    = 0x000C0000u;
@@ -71,15 +83,6 @@ uint32_t ElementSize(uint32_t csdp) {
     return 1u << (csdp & 0x3u);
 }
 
-uint32_t ByteSwap(uint32_t value, uint32_t es) {
-    switch (es) {
-    case 1: return value & 0xFFu;
-    case 2: return cerf::ByteSwap16(static_cast<uint16_t>(value));
-    case 4: return cerf::ByteSwap32(value);
-    default: return value;
-    }
-}
-
 bool IsAligned(uint32_t addr, uint32_t es) {
     return (addr & (es - 1u)) == 0u;
 }
@@ -88,8 +91,34 @@ bool IsAligned(uint32_t addr, uint32_t es) {
 
 void Omap3530SdmaBase::OnReady() {
     channels_.resize(ChannelCount());
-    claimed_.assign(ChannelCount(), 0u);
+    bus_ = &emu_.Get<Omap3530DmaElementBus>();
+    ResetLocked(true);
+    emu_.Get<GuestCpuReset>().RegisterResetListener([this](ResetLineKind kind) {
+        std::lock_guard<std::recursive_mutex> lk(state_mu_);
+        ResetLocked(kind == ResetLineKind::Rtc);
+    });
     emu_.Get<PeripheralDispatcher>().Register(this);
+}
+
+/* SPRUF98Y section 9.3.2.2.2 (page 986): hardware and software resets initialize the logic, the global registers and the
+   flip-flop channel bits; "all remaining per-channel registers are memory-based and, therefore, are not reset". */
+void Omap3530SdmaBase::ResetLocked(bool power_on) {
+    for (Channel& c : channels_) {
+        if (power_on) c = Channel{};
+        c.ccr       &= kCcrMemory;
+        c.clnk_ctrl &= kClnkMemory;
+        c.cicr       = (c.cicr & kCicrMemory) | kCicrReset;
+        c.csr        = 0u;
+        c.csdp      &= kCsdpMemory;
+        c.active     = false;
+        c.stopped    = false;
+    }
+    ResetIrqRegisters();
+    sysstatus_     = 1u;
+    ocp_sysconfig_ = 0u;
+    gcr_           = kGcrReset;
+    chain_starts_.clear();
+    UpdateIrqLines();
 }
 
 uint32_t Omap3530SdmaBase::ReadWord(uint32_t addr) {
@@ -100,8 +129,7 @@ uint32_t Omap3530SdmaBase::ReadWord(uint32_t addr) {
 
     if (off < kChannelBase) {
         if (off == 0x000u) return kRevision;
-        if (off >= 0x008u && off < 0x018u) return irqstatus_l_[(off - 0x008u) / 4u];
-        if (off >= 0x018u && off < 0x028u) return irqenable_l_[(off - 0x018u) / 4u];
+        if (IsIrqRegister(off)) return ReadIrqRegister(off);
         if (off == 0x028u) return sysstatus_;
         if (off == 0x02Cu) return ocp_sysconfig_;
         if (off == 0x064u) return kCaps0;
@@ -149,27 +177,14 @@ void Omap3530SdmaBase::WriteWord(uint32_t addr, uint32_t value) {
 
     if (off < kChannelBase) {
         if (off == 0x000u) return;
-        if (off >= 0x008u && off < 0x018u) {
-            irqstatus_l_[(off - 0x008u) / 4u] &= ~value;
-            UpdateIrqLines();
-            return;
-        }
-        if (off >= 0x018u && off < 0x028u) {
-            irqenable_l_[(off - 0x018u) / 4u] = value;
-            UpdateIrqLines();
+        if (IsIrqRegister(off)) {
+            WriteIrqRegister(off, value);
             return;
         }
         if (off == 0x028u) return;
         if (off == 0x02Cu) {
-            if (value & kOcpSoftReset) {
-                for (auto& c : channels_) c = Channel{};
-                std::memset(irqstatus_l_, 0, sizeof(irqstatus_l_));
-                std::memset(irqenable_l_, 0, sizeof(irqenable_l_));
-                gcr_       = 0x10u;
-                sysstatus_ = 1u;
-                UpdateIrqLines();
-            }
-            /* SOFTRESET auto-clears (TRM §9.4.20): always reads 0. */
+            if (value & kOcpSoftReset) ResetLocked(false);
+            /* SPRUF98Y Table 9-21 (page 1024): SOFTRESET "During reads, it always returns 0." */
             ocp_sysconfig_ = value & ~kOcpSoftReset;
             return;
         }
@@ -192,23 +207,17 @@ void Omap3530SdmaBase::WriteWord(uint32_t addr, uint32_t value) {
         const bool now_enabled = (value & kCcrEnable) != 0u;
         c.ccr = value;
         if (!was_enabled && now_enabled) {
-            /* New transfer: clear sticky end-of-transfer flags from any
-               prior run (BSP DmaConfigure doesn't W1C-clear CSR, so the
-               SW-trigger while-loop in RunSwTransfer would exit on the
-               very first iteration if BLOCK survived from last time). */
-            c.csr &= ~(kCsrBlock | kCsrFrame | kCsrLast | kCsrPkt);
-            c.active = false;
+            c.active  = false;
+            c.stopped = false;
             c.ccen = 0;
             c.ccfn = 0;
             if (ExtractSyncSource(value) == 0u) {
                 RunSwTransfer(ch);
                 UpdateIrqLines();
-            } else if (OfferChannelToSinks(ch)) {
-                claimed_[ch] = 1u;
+            } else {
+                ServeIfRequested(ch);
             }
-        } else if (was_enabled && !now_enabled && claimed_[ch]) {
-            claimed_[ch] = 0u;
-            for (auto& s : sinks_) if (s.second) s.second(ch);
+            ServeChainStarts();
         }
         return;
     }
@@ -243,16 +252,44 @@ void Omap3530SdmaBase::WriteWord(uint32_t addr, uint32_t value) {
 void Omap3530SdmaBase::RaiseSyncEvent(uint32_t source) {
     if (source == 0u) return;
     std::lock_guard<std::recursive_mutex> lk(state_mu_);
-    const uint32_t count = static_cast<uint32_t>(channels_.size());
-    for (uint32_t ch = 0; ch < count; ++ch) {
-        Channel& c = channels_[ch];
-        if ((c.ccr & kCcrEnable) == 0u) continue;
-        if (claimed_[ch]) continue;
-        if (ExtractSyncSource(c.ccr) != source) continue;
-        if ((c.csr & kCsrBlock) != 0u) continue;
-        ExecuteSyncUnit(static_cast<int>(ch));
+    uint32_t eligible = 0u;
+    for (uint32_t ch = 0; ch < static_cast<uint32_t>(channels_.size()); ++ch) {
+        const Channel& c = channels_[ch];
+        if ((c.ccr & kCcrEnable) != 0u && !c.stopped && ExtractSyncSource(c.ccr) == source) eligible |= 1u << ch;
+    }
+    uint32_t served = 0;
+    for (int ch = 0; eligible != 0u; ++ch, eligible >>= 1) {
+        if ((eligible & 1u) != 0u) served += ExecuteSyncUnit(ch);
     }
     UpdateIrqLines();
+    if (served != 0u) OnSyncServed(source);
+    ServeChainStarts();
+}
+
+/* OMAP35x TRM SPRUF98Y section 9.4.1 (page 991): a hardware-synchronized logical channel becomes
+   active "when the logical channel is enabled and the hardware DMA request line is asserted". */
+void Omap3530SdmaBase::ServeIfRequested(int ch) {
+    const uint32_t source = ExtractSyncSource(channels_[ch].ccr);
+    if (!SyncRequestAsserted(source)) return;
+    const uint32_t served = ExecuteSyncUnit(ch);
+    UpdateIrqLines();
+    if (served != 0u) OnSyncServed(source);
+}
+
+void Omap3530SdmaBase::ServeChainStarts() {
+    while (!chain_starts_.empty()) {
+        const int ch = chain_starts_.front();
+        chain_starts_.erase(chain_starts_.begin());
+        const Channel& c = channels_[ch];
+        if ((c.ccr & kCcrEnable) == 0u || c.stopped || ExtractSyncSource(c.ccr) == 0u) continue;
+        ServeIfRequested(ch);
+    }
+}
+
+/* SPRUF98Y section 9.3.3.1 (page 986): "Each status bit is updated in the SDMA.DMA4_CSRi register only when the
+   corresponding enable bit is enabled in the SDMA.DMA4_CICRi register"; Table 9-37 (page 1034): CICR bit 6 RESERVED. */
+void Omap3530SdmaBase::SetStatus(Channel& c, uint32_t events) {
+    c.csr |= events & (c.cicr | kCsrSync);
 }
 
 void Omap3530SdmaBase::RunSwTransfer(int ch) {
@@ -260,7 +297,7 @@ void Omap3530SdmaBase::RunSwTransfer(int ch) {
     const uint32_t cen = c.cen & 0x00FFFFFFu;
     const uint32_t cfn = c.cfn & 0x0000FFFFu;
     if (cen == 0u || cfn == 0u) {
-        c.csr |= kCsrBlock | kCsrFrame | kCsrLast;
+        SetStatus(c, kCsrBlock | kCsrFrame | kCsrLast);
         OnChannelComplete(ch);
         return;
     }
@@ -269,12 +306,12 @@ void Omap3530SdmaBase::RunSwTransfer(int ch) {
     c.ccen = 0;
     c.ccfn = 0;
     c.active = true;
-    while ((c.csr & kCsrBlock) == 0u) {
+    while (c.active) {
         if (!TransferOneElement(ch)) return;
     }
 }
 
-void Omap3530SdmaBase::ExecuteSyncUnit(int ch) {
+uint32_t Omap3530SdmaBase::ExecuteSyncUnit(int ch) {
     Channel& c = channels_[ch];
     if (!c.active) {
         c.csac = c.cssa;
@@ -283,34 +320,28 @@ void Omap3530SdmaBase::ExecuteSyncUnit(int ch) {
         c.ccfn = 0;
         c.active = true;
     }
-    const bool fs = (c.ccr & kCcrFs) != 0u;
-    const bool bs = (c.ccr & kCcrBs) != 0u;
-
-    if (!fs && !bs) {
-        TransferOneElement(ch);
-        return;
-    }
-    if (fs && !bs) {
-        const uint32_t cen = c.cen & 0x00FFFFFFu;
-        for (uint32_t i = 0; i < cen; ++i) {
-            if (!TransferOneElement(ch)) return;
-            if ((c.csr & kCsrBlock) != 0u) return;
-        }
-        return;
-    }
-    if (!fs && bs) {
-        while ((c.csr & kCsrBlock) == 0u) {
-            if (!TransferOneElement(ch)) return;
-        }
-        return;
-    }
+    const bool fs       = (c.ccr & kCcrFs) != 0u;
+    const bool bs       = (c.ccr & kCcrBs) != 0u;
     const bool src_sync = (c.ccr & kCcrSelSrcDstSync) != 0u;
-    const uint32_t pkt_elnt = src_sync ? (c.csfi & 0xFFFFu) : (c.cdfi & 0xFFFFu);
-    for (uint32_t i = 0; i < pkt_elnt; ++i) {
-        if (!TransferOneElement(ch)) return;
-        if ((c.csr & kCsrBlock) != 0u) return;
+
+    uint32_t limit = 0xFFFFFFFFu;
+    if (!fs && !bs) {
+        limit = 1u;
+    } else if (fs && !bs) {
+        limit = c.cen & 0x00FFFFFFu;
+    } else if (fs && bs) {
+        limit = src_sync ? (c.csfi & 0xFFFFu) : (c.cdfi & 0xFFFFu);
     }
-    c.csr |= kCsrPkt;
+    SetStatus(c, kCsrSync);
+    uint32_t moved = 0;
+    while (moved < limit) {
+        if (!TransferOneElement(ch)) return moved;
+        ++moved;
+        if (!c.active) break;
+    }
+    /* SPRUF98Y page 999 NOTE: "the packet interrupt is not generated in the packet source synchronized mode". */
+    if (fs && bs && !src_sync) SetStatus(c, kCsrPkt);
+    return moved;
 }
 
 bool Omap3530SdmaBase::TransferOneElement(int ch) {
@@ -327,9 +358,6 @@ bool Omap3530SdmaBase::TransferOneElement(int ch) {
     const bool src_endian   = (c.csdp & kCsdpSrcEndianBig)    != 0u;
     const bool dst_endian   = (c.csdp & kCsdpDstEndianBig)    != 0u;
 
-    auto& mem  = emu_.Get<EmulatedMemory>();
-    auto& disp = emu_.Get<PeripheralDispatcher>();
-
     uint32_t src_val = 0;
     if (const_fill) {
         src_val = c.color;
@@ -339,17 +367,7 @@ bool Omap3530SdmaBase::TransferOneElement(int ch) {
             RaiseChannelFault(ch, kCsrMisAlign);
             return false;
         }
-        uint8_t* sh = mem.TryTranslate(spa);
-        if (sh) {
-            src_val = static_cast<uint32_t>(cerf::le::UN(sh, es));
-        } else {
-            switch (es) {
-            case 1: src_val = disp.ReadByte(spa); break;
-            case 2: src_val = disp.ReadHalf(spa); break;
-            case 4: src_val = disp.ReadWord(spa); break;
-            }
-        }
-        if (src_endian) src_val = ByteSwap(src_val, es);
+        src_val = bus_->Read(spa, es, src_endian);
     }
 
     bool write_dst = true;
@@ -359,27 +377,18 @@ bool Omap3530SdmaBase::TransferOneElement(int ch) {
     }
 
     if (write_dst) {
-        uint32_t dval = dst_endian ? ByteSwap(src_val, es) : src_val;
         const uint32_t dpa = c.cdac;
         if (!IsAligned(dpa, es)) {
             RaiseChannelFault(ch, kCsrMisAlign);
             return false;
         }
-        uint8_t* dh = mem.TryTranslateWrite(dpa);
-        if (dh) {
-            cerf::le::PutN(dh, dval, es);
-        } else {
-            switch (es) {
-            case 1: disp.WriteByte(dpa, static_cast<uint8_t> (dval)); break;
-            case 2: disp.WriteHalf(dpa, static_cast<uint16_t>(dval)); break;
-            case 4: disp.WriteWord(dpa, dval);                        break;
-            }
-        }
+        bus_->Write(dpa, es, dst_endian, src_val);
     }
 
     const uint32_t cen = c.cen & 0x00FFFFFFu;
     const uint32_t cfn = c.cfn & 0x0000FFFFu;
     c.ccen += 1u;
+    if (c.ccen == 1u && c.ccfn + 1u == cfn) SetStatus(c, kCsrLast);
     const int32_t csei = static_cast<int32_t>(static_cast<int16_t>(
                             static_cast<uint16_t>(c.csei & 0xFFFFu)));
     const int32_t cdei = static_cast<int32_t>(static_cast<int16_t>(
@@ -390,13 +399,14 @@ bool Omap3530SdmaBase::TransferOneElement(int ch) {
     const bool end_of_frame = (c.ccen == cen);
     if (!const_fill) c.csac = StepAddress(c.csac, src_amode, csei, csfi, es, end_of_frame);
     c.cdac = StepAddress(c.cdac, dst_amode, cdei, cdfi, es, end_of_frame);
+    if (c.ccen == (cen + 1u) / 2u) SetStatus(c, kCsrHalf);
 
     if (end_of_frame) {
         c.ccen = 0;
         c.ccfn += 1u;
-        c.csr |= kCsrFrame;
+        SetStatus(c, kCsrFrame);
         if (c.ccfn == cfn) {
-            c.csr |= kCsrBlock | kCsrLast;
+            SetStatus(c, kCsrBlock);
             OnChannelComplete(ch);
         }
     }
@@ -416,10 +426,13 @@ uint32_t Omap3530SdmaBase::StepAddress(uint32_t cur, uint32_t amode,
     }
 }
 
+/* SPRUF98Y section 9.4.3 (page 992): on a misaligned element "the transfer is stopped and an address error
+   interrupt occurs, if enabled"; Table 9-8 (page 1002) lists the address error apart from the end of block. */
 void Omap3530SdmaBase::RaiseChannelFault(int ch, uint32_t csr_fault_bits) {
     Channel& c = channels_[ch];
-    c.csr |= csr_fault_bits | kCsrBlock;
-    c.active = false;
+    SetStatus(c, csr_fault_bits);
+    c.active  = false;
+    c.stopped = true;
     LOG(Caution,
         "[SDMA] ch%u fault csr=0x%08X cssa=0x%08X cdsa=0x%08X csac=0x%08X "
         "cdac=0x%08X ccr=0x%08X csdp=0x%08X\n",
@@ -427,72 +440,39 @@ void Omap3530SdmaBase::RaiseChannelFault(int ch, uint32_t csr_fault_bits) {
         c.ccr, c.csdp);
 }
 
+/* SPRUF98Y Table 9-10 (page 1019): DMA4_CCR2 reads 0x010c403e, ENABLE [7] 0, after a first transfer. */
 void Omap3530SdmaBase::OnChannelComplete(int ch) {
     Channel& c = channels_[ch];
     c.active = false;
+    c.ccr &= ~kCcrEnable;
     if ((c.clnk_ctrl & kClnkEnable) != 0u) {
         StartChain(static_cast<int>(c.clnk_ctrl & 0x1Fu));
     }
 }
 
+/* OMAP35x TRM SPRUF98Y section 9.5.6 (page 1011): "Each channel is enabled automatically in turn
+   when the previous logical channel transfer completes"; Table 9-33 ENABLE (page 1032): "It is SW
+   responsibility to clear the CSR register". */
 void Omap3530SdmaBase::StartChain(int ch) {
     if (ch < 0 || ch >= static_cast<int>(channels_.size())) return;
     Channel& c = channels_[ch];
-    c.csr &= ~(kCsrBlock | kCsrFrame | kCsrLast | kCsrPkt);
-    c.active = false;
+    c.ccr     |= kCcrEnable;
+    c.active   = false;
+    c.stopped  = false;
     c.ccen = 0;
     c.ccfn = 0;
     if (ExtractSyncSource(c.ccr) == 0u) {
         RunSwTransfer(ch);
+    } else {
+        chain_starts_.push_back(ch);
     }
 }
 
-void Omap3530SdmaBase::UpdateIrqLines() {
-    const uint32_t count = static_cast<uint32_t>(channels_.size());
-    for (uint32_t ch = 0; ch < count; ++ch) {
-        const Channel& c = channels_[ch];
-        const uint32_t fired = c.csr & c.cicr;
-        if (fired == 0u) continue;
-        const uint32_t bit = (1u << ch);
-        for (int j = 0; j < 4; ++j) {
-            if (irqenable_l_[j] & bit) irqstatus_l_[j] |= bit;
-        }
+uint32_t Omap3530SdmaBase::FiredChannels() const {
+    uint32_t fired = 0u;
+    for (size_t ch = 0; ch < channels_.size(); ++ch) {
+        if ((channels_[ch].csr & channels_[ch].cicr) != 0u) fired |= 1u << ch;
     }
-    auto& intc = emu_.Get<IrqController>();
-    for (int j = 0; j < 4; ++j) {
-        const int irq = IrqForLine(j);
-        if (irq < 0) continue;
-        const bool want_high =
-            (irqstatus_l_[j] & irqenable_l_[j]) != 0u;
-        if (want_high == irq_line_high_[j]) continue;
-        irq_line_high_[j] = want_high;
-        if (want_high) intc.AssertIrq  (irq);
-        else           intc.DeAssertIrq(irq);
-    }
+    return fired;
 }
 
-void Omap3530SdmaBase::RegisterChannelSink(ChannelClaim claim, ChannelStop stop) {
-    sinks_.emplace_back(std::move(claim), std::move(stop));
-}
-
-bool Omap3530SdmaBase::OfferChannelToSinks(int ch) {
-    const Channel& c = channels_[ch];
-    const ChannelStart info{
-        ch, ExtractSyncSource(c.ccr), c.cssa, c.cdsa,
-        c.cen & 0x00FFFFFFu, c.cfn & 0x0000FFFFu, ElementSize(c.csdp),
-    };
-    for (auto& s : sinks_) {
-        if (s.first && s.first(info)) return true;
-    }
-    return false;
-}
-
-void Omap3530SdmaBase::SignalChannelFrame(int channel, bool block, uint32_t src_counter_pa) {
-    std::lock_guard<std::recursive_mutex> lk(state_mu_);
-    if (channel < 0 || channel >= static_cast<int>(channels_.size()) ||
-        !claimed_[channel]) return;
-    Channel& c = channels_[channel];
-    c.csac = src_counter_pa;
-    c.csr |= kCsrFrame | (block ? (kCsrBlock | kCsrLast) : 0u);
-    UpdateIrqLines();
-}

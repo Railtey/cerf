@@ -337,8 +337,7 @@ void PacedWaveOut::QueueOutputInHostBlocks(const void* host_bytes, uint32_t leng
             log_tag_, length, rate, frame);
         CerfFatalExit(CERF_FATAL_RUNTIME_ERROR);
     }
-    const uint32_t block_frames = std::max<uint32_t>(1u, static_cast<uint32_t>(
-        static_cast<uint64_t>(rate) * kHostBlockFrames / kHostBlockRateHz));
+    const uint32_t block_frames = HostBlockFrames();
     const uint32_t frames = length / frame;
     const uint32_t blocks = (frames + block_frames - 1u) / block_frames;
     const uint8_t* bytes  = static_cast<const uint8_t*>(host_bytes);
@@ -348,6 +347,11 @@ void PacedWaveOut::QueueOutputInHostBlocks(const void* host_bytes, uint32_t leng
         QueueOutput(bytes + static_cast<size_t>(done) * frame, n * frame);
         done += n;
     }
+}
+
+uint32_t PacedWaveOut::HostBlockFrames() const {
+    const uint64_t rate = fmt_rate_.load(std::memory_order_acquire);
+    return std::max<uint32_t>(1u, static_cast<uint32_t>(rate * kHostBlockFrames / kHostBlockRateHz));
 }
 
 bool PacedWaveOut::QueueOutput(const void* host_bytes, uint32_t length) {

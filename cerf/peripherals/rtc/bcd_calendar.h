@@ -29,6 +29,9 @@ public:
 
     static uint32_t DaysInMonth(uint32_t month, uint32_t year);
     static uint64_t AddSeconds(uint32_t& sec, uint32_t& min, uint32_t& hour, uint64_t secs);
+    static uint64_t SecondsToNextMinute(uint32_t sec);
+    static uint64_t SecondsToNextHour(uint32_t min, uint32_t sec);
+    static uint64_t SecondsToNextDay(uint32_t hour, uint32_t min, uint32_t sec);
     static bool     NextDate(uint32_t& date, uint32_t& month, uint32_t& year);
     static HostDate HostNow();
 };

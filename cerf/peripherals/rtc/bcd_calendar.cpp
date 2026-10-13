@@ -50,6 +50,18 @@ uint64_t BcdCalendar::AddSeconds(uint32_t& sec, uint32_t& min, uint32_t& hour, u
     return t / 24u;
 }
 
+uint64_t BcdCalendar::SecondsToNextMinute(uint32_t sec) {
+    return 60u - sec;
+}
+
+uint64_t BcdCalendar::SecondsToNextHour(uint32_t min, uint32_t sec) {
+    return 3600u - (min * 60u + sec);
+}
+
+uint64_t BcdCalendar::SecondsToNextDay(uint32_t hour, uint32_t min, uint32_t sec) {
+    return 86400u - (hour * 3600u + min * 60u + sec);
+}
+
 bool BcdCalendar::NextDate(uint32_t& date, uint32_t& month, uint32_t& year) {
     if (++date <= DaysInMonth(month, year)) return false;
     date = 1u;

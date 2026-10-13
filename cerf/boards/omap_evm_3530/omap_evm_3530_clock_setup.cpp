@@ -22,6 +22,19 @@ constexpr uint32_t kPeriphDpllLock    = 7u;
 constexpr uint32_t kPeriphDpllMult    = 216u;
 constexpr uint32_t kPeriphDpllDiv     = 12u;
 
+/* U-Boot OMAP3 prcm_init: CORE_N_13 0x0C, CORE_M2_13 1, CORE_L3_DIV 2 "166MHz", CORE_L4_DIV 2, PER_M2_13 9, SOURCE_96M
+   cleared; SPRUF98Y Table 4-456 (page 596) SYSCLKDIV reset 0x1, section 4.7.3.3 (page 307) CLKOUTX2 = (Fref x 2 x M)/(N+1),
+   Table 4-178 (page 468) FREQSEL 0x7 = 1.75-2.1 MHz, Table 4-145 (page 455) [11:8] reset 0x1. */
+constexpr uint32_t kCoreDpllFreqSel = 7u;
+constexpr uint32_t kCoreDpllLock    = 7u;
+constexpr uint32_t kCoreDpllMult    = 166u;
+constexpr uint32_t kCoreDpllDiv     = 12u;
+constexpr uint32_t kCoreDpllM2      = 1u;
+constexpr uint32_t kDiv96M          = 9u;
+constexpr uint32_t kClkselCoreRsvd  = 1u;
+constexpr uint32_t kClkselL4Div2    = 2u;
+constexpr uint32_t kClkselL3Div2    = 2u;
+
 class OmapEvm3530ClockSetup : public Omap3530BoardClockSetup {
 public:
     using Omap3530BoardClockSetup::Omap3530BoardClockSetup;
@@ -46,6 +59,13 @@ public:
     Omap3530PeriphDpllSetting BootPeriphDpll() const override {
         return { (kPeriphDpllFreqSel << 20) | (kPeriphDpllLock << 16),
                  (kPeriphDpllMult << 8) | kPeriphDpllDiv };
+    }
+
+    Omap3530CoreClockSetting BootCoreClocks() const override {
+        return { (kCoreDpllFreqSel << 4) | kCoreDpllLock,
+                 (kCoreDpllM2 << 27) | (kCoreDpllMult << 16) | (kCoreDpllDiv << 8),
+                 kDiv96M,
+                 (kClkselCoreRsvd << 8) | (kClkselL4Div2 << 2) | kClkselL3Div2 };
     }
 
     bool BootEnablesGpt1Clocks() const override { return true; }

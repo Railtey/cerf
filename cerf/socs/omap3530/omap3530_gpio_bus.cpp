@@ -4,6 +4,7 @@
 #include "../../boards/board_context.h"
 #include "omap3530_id.h"
 #include "../../core/cerf_emulator.h"
+#include "../../core/fatal.h"
 #include "../../core/log.h"
 
 REGISTER_SERVICE(Omap3530GpioBus);
@@ -30,4 +31,12 @@ void Omap3530GpioBus::SetInputPin(uint32_t absolute_pin, bool high) {
     Omap3530GpioBankBase* bank = banks_[bank_index];
     if (!bank) return;
     bank->SetInputPin(bit, high);
+}
+
+std::optional<bool> Omap3530GpioBus::DrivenLevel(uint32_t absolute_pin) {
+    const uint32_t bank_index = absolute_pin / 32u;
+    if (bank_index >= kBankCount || banks_[bank_index] == nullptr) {
+        emu_.Get<Fatal>().Die("Omap3530GpioBus: no GPIO bank holds pin %u", absolute_pin);
+    }
+    return banks_[bank_index]->DrivenLevel(absolute_pin % 32u);
 }

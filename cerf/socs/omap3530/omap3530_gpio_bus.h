@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 
 class Omap3530GpioBankBase;
 
@@ -23,6 +24,8 @@ public:
        drives it low. Routes pin/32 to the right bank and forwards
        to the bank's SetInputPin. Unregistered banks no-op. */
     void SetInputPin(uint32_t absolute_pin, bool high);
+
+    std::optional<bool> DrivenLevel(uint32_t absolute_pin);
 
 private:
     static constexpr uint32_t kBankCount = 6;

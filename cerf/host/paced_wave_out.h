@@ -25,6 +25,7 @@ public:
     void BeginAudioOut(std::function<void()> on_block_done);
     bool QueueOutput(const void* host_bytes, uint32_t length);
     void QueueOutputInHostBlocks(const void* host_bytes, uint32_t length);
+    uint32_t HostBlockFrames() const;
     void FinishAudioOut();
     void StopAudioOut();
 

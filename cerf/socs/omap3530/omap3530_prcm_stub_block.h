@@ -8,10 +8,15 @@
 #include "../../core/log.h"
 #include "../../peripherals/peripheral_dispatcher.h"
 #include "../../state/state_stream.h"
+#include "../guest_cpu_reset.h"
 #include "../irq_controller.h"
 #include "omap3530_gpio_bus.h"
+#include "omap3530_reg_reset.h"
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <mutex>
 #include <vector>
 
@@ -60,6 +65,32 @@ protected:
         return regs_[off / 4u];
     }
 
+    static constexpr uint32_t LaneShift(uint32_t off) { return (off & 3u) * 8u; }
+
+    static uint32_t MergeHalf(uint32_t word, uint32_t off, uint16_t value) {
+        const uint32_t shift = LaneShift(off);
+        const uint32_t mask  = 0xFFFFu << shift;
+        return (word & ~mask) | (static_cast<uint32_t>(value) << shift);
+    }
+
+    static uint16_t HalfOf(uint32_t word, uint32_t off) { return static_cast<uint16_t>(word >> LaneShift(off)); }
+
+    uint32_t HalfOffset(const char* op, uint32_t addr, uint64_t value) const {
+        const uint32_t off = addr - MmioBase();
+        if (off & 1u) HaltUnsupportedAccess(op, addr, value);
+        return off;
+    }
+
+    uint32_t WordWithHalf(uint32_t addr, uint16_t value) const {
+        const uint32_t off = HalfOffset("WriteHalf (misaligned)", addr, value);
+        return MergeHalf(PeekReg(off & ~3u), off, value);
+    }
+
+    template <size_t N>
+    void StoreResetValuesLocked(const Omap3530RegReset (&values)[N]) {
+        for (const Omap3530RegReset& v : values) regs_[v.off / 4u] = v.value;
+    }
+
     mutable std::mutex    mu_;
     std::vector<uint32_t> regs_;
 };
@@ -79,21 +110,15 @@ inline void Omap3530PrcmStubBlock::WriteWord(uint32_t addr, uint32_t value) {
 }
 
 inline uint16_t Omap3530PrcmStubBlock::ReadHalf(uint32_t addr) {
-    const uint32_t off = addr - MmioBase();
-    if (off & 1u) HaltUnsupportedAccess("ReadHalf (misaligned)", addr, 0);
+    const uint32_t off = HalfOffset("ReadHalf (misaligned)", addr, 0);
     std::lock_guard<std::mutex> lk(mu_);
-    const uint32_t word = regs_[off / 4u];
-    return static_cast<uint16_t>(word >> ((off & 2u) ? 16u : 0u));
+    return HalfOf(regs_[off / 4u], off);
 }
 
 inline void Omap3530PrcmStubBlock::WriteHalf(uint32_t addr, uint16_t value) {
-    const uint32_t off = addr - MmioBase();
-    if (off & 1u) HaltUnsupportedAccess("WriteHalf (misaligned)", addr, value);
+    const uint32_t off = HalfOffset("WriteHalf (misaligned)", addr, value);
     std::lock_guard<std::mutex> lk(mu_);
-    const uint32_t shift = (off & 2u) ? 16u : 0u;
-    const uint32_t mask  = static_cast<uint32_t>(0xFFFFu) << shift;
-    regs_[off / 4u] = (regs_[off / 4u] & ~mask) |
-                      (static_cast<uint32_t>(value) << shift);
+    regs_[off / 4u] = MergeHalf(regs_[off / 4u], off, value);
 }
 
 class Omap3530PrmDomainBlock : public Omap3530PrcmStubBlock {
@@ -130,10 +155,20 @@ public:
     /* OMAP3530 TRM Table 11-2: MPU_IRQ_29..34 = GPIO1..GPIO6. */
     virtual int IrqNumber() const = 0;
 
+    /* SPRUF98Y section 4.5.2.2 (page 258): the cold reset and the global warm reset both reset the GPIO modules. */
     void OnReady() override {
         Omap3530PrcmStubBlock::OnReady();
-        regs_[0x38u / 4u] = 0xFFFFFFFFu;
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            regs_[0x38u / 4u] = 0xFFFFFFFFu;
+            LoadResetLocked();
+        }
         emu_.Get<Omap3530GpioBus>().RegisterBank(BankIndex(), this);
+        emu_.Get<GuestCpuReset>().RegisterResetListener([this](ResetLineKind) {
+            std::lock_guard<std::mutex> lk(mu_);
+            LoadResetLocked();
+            RecomputeIrqLineLocked();
+        });
     }
 
     void SetInputPin(uint32_t bit, bool high) {
@@ -157,6 +192,23 @@ public:
         RecomputeIrqLineLocked();
     }
 
+    /* SPRUF98Y Table 24-27 (page 3392): GPIO_OE 0 configures the port as an output. */
+    std::optional<bool> DrivenLevel(uint32_t bit) {
+        std::lock_guard<std::mutex> lk(mu_);
+        const uint32_t mask = 1u << bit;
+        if ((regs_[0x34u / 4u] & mask) != 0u) return std::nullopt;
+        return (regs_[0x3Cu / 4u] & mask) != 0u;
+    }
+
+    /* SPRUF98Y section 24.6.1 (page 3383): "All module registers are 8-, 16-, or 32-bit accessible". */
+    void WriteHalf(uint32_t addr, uint16_t value) override {
+        const uint32_t off  = HalfOffset("WriteHalf (misaligned)", addr, value);
+        const uint32_t word = off & ~3u;
+        std::lock_guard<std::mutex> lk(mu_);
+        WriteWordLocked(word, ActsOnOnes(word) ? static_cast<uint32_t>(value) << LaneShift(off)
+                                               : MergeHalf(regs_[word / 4u], off, value));
+    }
+
     uint32_t ReadWord(uint32_t addr) override {
         const uint32_t off = addr - MmioBase();
         if (off == 0x18u) {
@@ -170,17 +222,22 @@ public:
         if (off & 3u) HaltUnsupportedAccess("WriteWord (misaligned)",
                                             addr, value);
         std::lock_guard<std::mutex> lk(mu_);
+        WriteWordLocked(off, value);
+    }
+
+private:
+    void WriteWordLocked(uint32_t off, uint32_t value) {
         bool need_recompute = false;
         switch (off) {
-        case 0x18u:  /* IRQSTATUS1 - W1C on sticky bits only. */
+        case 0x18u:
             regs_[0x18 / 4u] &= ~value;
             need_recompute = true;
             break;
-        case 0x60u:  /* CLEARIRQENABLE1 */
+        case 0x60u:
             regs_[0x1C / 4u] &= ~value;
             need_recompute = true;
             break;
-        case 0x64u:  /* SETIRQENABLE1 */
+        case 0x64u:
             regs_[0x1C / 4u] |= value;
             need_recompute = true;
             break;
@@ -192,6 +249,16 @@ public:
             regs_[off / 4u] = value;
             need_recompute = true;
             break;
+        /* SPRUF98Y Table 24-57 (page 3401): CLEARDATAOUT clears, and Table 24-59 (page 3402): SETDATAOUT sets, the
+           GPIO_DATAOUT bits written 1. */
+        case 0x90u:
+            regs_[0x3C / 4u] &= ~value;
+            regs_[off / 4u] = value;
+            break;
+        case 0x94u:
+            regs_[0x3C / 4u] |= value;
+            regs_[off / 4u] = value;
+            break;
         default:
             regs_[off / 4u] = value;
             break;
@@ -199,6 +266,7 @@ public:
         if (need_recompute) RecomputeIrqLineLocked();
     }
 
+public:
     void SaveState(StateWriter& w) override {
         std::lock_guard<std::mutex> lk(mu_);
         SaveRegsLocked(w);
@@ -244,6 +312,24 @@ protected:
     }
 
 private:
+    /* SPRUF98Y Table 24-15 (page 3387): IRQSTATUS1; Table 24-45 and Table 24-47 (page 3398): CLEARIRQENABLE1 and
+       SETIRQENABLE1; Table 24-57 (page 3401) and Table 24-59 (page 3402): CLEARDATAOUT and SETDATAOUT - each acts on
+       the bits written 1. */
+    static bool ActsOnOnes(uint32_t word) {
+        return word == 0x18u || word == 0x60u || word == 0x64u || word == 0x90u || word == 0x94u;
+    }
+
+    /* SPRUF98Y pages 3385-3402: GPIO_CTRL resets to 0x2 (page 3391), GPIO_OE to 0xFFFFFFFF (Table 24-27, page 3392),
+       every other writable register to 0; GPIO_SYSSTATUS RESETDONE reads 1, "Reset completed" (page 3387). */
+    void LoadResetLocked() {
+        const uint32_t datain = regs_[0x38u / 4u];
+        std::fill(regs_.begin(), regs_.end(), 0u);
+        regs_[0x14u / 4u] = 0x00000001u;
+        regs_[0x30u / 4u] = 0x00000002u;
+        regs_[0x34u / 4u] = 0xFFFFFFFFu;
+        regs_[0x38u / 4u] = datain;
+    }
+
     uint32_t IrqStatus1Computed() const {
         std::lock_guard<std::mutex> lk(mu_);
         const uint32_t datain = regs_[0x38 / 4u];
