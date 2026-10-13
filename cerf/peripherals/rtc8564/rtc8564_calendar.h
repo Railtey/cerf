@@ -65,10 +65,10 @@ private:
     static bool     DayCanMatch(const Rtc8564Regs::File& regs, const Time& t);
     static void     StepDay(Time& t);
 
-    CycleAnchoredCounter second_;
-    Time                 t_;
-    uint64_t             applied_       = 0;
-    uint8_t              anchor_sec_    = 0;
-    uint64_t             cpu_hz_        = 1;
-    bool                 alarm_latched_ = false;
+    NarrowCycleAnchoredCounter second_;
+    Time                       t_;
+    uint64_t                   applied_       = 0;
+    uint8_t                    anchor_sec_    = 0;
+    uint64_t                   cpu_hz_        = 1;
+    bool                       alarm_latched_ = false;
 };

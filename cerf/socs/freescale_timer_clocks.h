@@ -26,11 +26,6 @@ public:
 
     virtual void RegisterRateListener(std::function<void()> fn) = 0;
 
-    static bool PrescaledRate(GuestCycleClock::Rate input, uint32_t prescaler,
-                              GuestCycleClock::Rate& tick) {
-        const uint64_t divide = uint64_t{prescaler} + 1u;
-        if (!input.ScaleFits(1u, divide)) return false;
-        tick = input.Scaled(1u, divide);
-        return true;
-    }
+    GuestCycleClock::Rate PrescaledRate(FreescaleTimerUnit unit, uint32_t base,
+                                        GuestCycleClock::Rate input, uint32_t prescaler) const;
 };

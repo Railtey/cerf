@@ -87,9 +87,9 @@ private:
     GuestCycleClock::Event* rtc_event_   = nullptr;
     std::vector<std::function<void()>> count_listeners_;
 
-    CycleAnchoredCounter    per_ctr_;
-    GuestCycleClock*        cycle_clock_  = nullptr;
-    GuestCycleClock::Event* per_event_    = nullptr;
-    Pr31x00Clock*           module_clock_ = nullptr;
-    Pr31x00Intc*            intc_         = nullptr;
+    NarrowCycleAnchoredCounter per_ctr_;
+    GuestCycleClock*           cycle_clock_  = nullptr;
+    GuestCycleClock::Event*    per_event_    = nullptr;
+    Pr31x00Clock*              module_clock_ = nullptr;
+    Pr31x00Intc*               intc_         = nullptr;
 };

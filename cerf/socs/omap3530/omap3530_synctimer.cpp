@@ -75,8 +75,8 @@ private:
             static_cast<unsigned long long>(clock_->CpuHz()));
     }
 
-    GuestCycleClock*     clock_ = nullptr;
-    CycleAnchoredCounter counter_;
+    GuestCycleClock*           clock_ = nullptr;
+    NarrowCycleAnchoredCounter counter_;
 };
 
 uint32_t Omap3530Synctimer::ReadWord(uint32_t addr) {

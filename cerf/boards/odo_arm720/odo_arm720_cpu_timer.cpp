@@ -247,7 +247,7 @@ private:
     GuestCycleClock*        clock_  = nullptr;
     OdoArm720BoardIntc*     intc_   = nullptr;
     GuestCycleClock::Event* event_  = nullptr;
-    RasterScanClock         scan_;
+    NarrowRasterScanClock   scan_;
     uint32_t                cpuisr_ = 0;
     uint32_t                tir_    = 0;
 };

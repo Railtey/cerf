@@ -40,8 +40,8 @@ public:
 
 private:
     struct Group {
-        RatedTickCount           ticks;
-        RatedTickCount::Position held;
+        NarrowRatedTickCount     ticks;
+        TickPosition             held;
         GuestCycleClock::Rate    core{1u, 1u};
         GuestCycleClock::Rate    rate{1u, 1u};
         uint32_t                 prescaler  = 0;

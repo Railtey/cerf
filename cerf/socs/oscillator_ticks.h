@@ -20,9 +20,15 @@ public:
         uint64_t park;
     };
 
-    void     Attach(uint64_t osc_num, uint64_t osc_den);
-    uint64_t Now();
-    Reading  Sample();
+    void Attach(uint64_t osc_num, uint64_t osc_den);
+
+    uint64_t Now() {
+        DrainPark();
+        return ticks_.TicksAt(ClockCycles());
+    }
+
+    Reading Sample() { return Reading{Now(), park_ticks_}; }
+
     uint64_t CycleOf(uint64_t tick);
     void     ArmAt(GuestCycleClock::Event* event, uint64_t tick);
     int64_t  SleptNsAtTick(uint64_t tick);
@@ -47,8 +53,8 @@ protected:
 
 private:
     uint64_t Scale() const;
-    bool     SetRatio();
-    void     RatioOverflow();
+    void     RequireOscRate(uint64_t num, uint64_t den) const;
+    void     SetRatio();
     void     RescaleAt(uint64_t now);
     uint64_t CreditNs(uint64_t ns);
 

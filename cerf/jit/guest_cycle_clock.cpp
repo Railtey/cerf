@@ -30,7 +30,7 @@ GuestCycleClock::~GuestCycleClock() {
 }
 
 GuestCycleClock::Rate GuestCycleClock::Normalized(Rate rate) const {
-    if (rate.num == 0u || rate.den == 0u || rate.den > UINT64_MAX / kNsPerSec) {
+    if (rate.num == 0u || rate.den == 0u) {
         emu_.Get<Fatal>().Die("GuestCycleClock: the clock rate %llu/%llu Hz",
                               static_cast<unsigned long long>(rate.num),
                               static_cast<unsigned long long>(rate.den));
@@ -49,10 +49,12 @@ uint64_t GuestCycleClock::CpuHz() const {
 
 void GuestCycleClock::SetUnits(Rate rate) {
     rate_ = rate;
-    const uint64_t ns = kNsPerSec * rate_.den;
-    const uint64_t g  = std::gcd(ns, rate_.num);
-    ns_unit_  = ns / g;
-    cyc_unit_ = rate_.num / g;
+    const uint64_t    g      = std::gcd(kNsPerSec, rate_.num);
+    const WideUint<2> cycles = WideUint<2>::Of(rate_.num / g);
+    const WideUint<2> ns =
+        MultiplyWide(WideUint<1>::Of(kNsPerSec / g), WideUint<1>::Of(rate_.den));
+    ns_to_cycles_.Set(cycles, ns);
+    cycles_to_ns_.Set(ns, cycles);
 }
 
 void GuestCycleClock::SetClockRate(Rate rate) {
@@ -107,11 +109,11 @@ void GuestCycleClock::OnReady() {
 }
 
 uint64_t GuestCycleClock::NsToCycles(int64_t ns) const {
-    return ScaleU64(static_cast<uint64_t>(ns), cyc_unit_, ns_unit_);
+    return ns_to_cycles_.Floor(static_cast<uint64_t>(ns));
 }
 
 int64_t GuestCycleClock::CyclesToNs(uint64_t cycles) const {
-    return static_cast<int64_t>(ScaleU64(cycles, ns_unit_, cyc_unit_));
+    return static_cast<int64_t>(cycles_to_ns_.Floor(cycles));
 }
 
 GuestCycleClock::Event* GuestCycleClock::Add(std::function<void()> fn) {

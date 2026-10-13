@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "../core/service.h"
+#include "../core/tick_scale.h"
 
 #if CERF_DEV_MODE
 #include <atomic>
@@ -105,8 +106,8 @@ private:
     void*         timer_       = nullptr;
     Rate          rate_        = Rate{1u, 1u};
     uint64_t      rate_requests_ = 0;
-    uint64_t      ns_unit_     = 1;
-    uint64_t      cyc_unit_    = 1;
+    ExactScale    ns_to_cycles_;
+    ExactScale    cycles_to_ns_;
     uint64_t      ref_cycle_   = 0;
     int64_t       ref_wall_ns_ = 0;
     uint64_t      guest_ns_cycle_ = 0;

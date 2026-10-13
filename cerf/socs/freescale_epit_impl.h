@@ -101,21 +101,18 @@ public:
         w.Write<uint32_t>("lr", lr_);
         w.Write<uint32_t>("cmpr", cmpr_);
         w.Write<uint32_t>("count", Count(now));
-        w.Write<uint64_t>("prescale_phase", counting_ ? counter_.PhaseAt(now) : phase_);
-        w.Write<uint64_t>("prescale_phase_den",
-                          counting_ ? counter_.PhaseDenominator() : phase_den_);
+        (counting_ ? counter_.TickPhaseAt(now) : phase_).Save(w, "prescale_tick_phase");
     }
 
     void RestoreState(StateReader& r) override {
         uint32_t cr = 0, sr = 0, lr = 0, cmpr = 0, count = 0;
-        uint64_t phase = 0, den = 0;
+        CycleAnchoredCounter::Phase phase;
         r.Read("cr", cr);
         r.Read("sr", sr);
         r.Read("lr", lr);
         r.Read("cmpr", cmpr);
         r.Read("count", count);
-        r.Read("prescale_phase", phase);
-        r.Read("prescale_phase_den", den);
+        phase.Restore(r, "prescale_tick_phase");
         clock_->Disarm(event_);
         ocif_pending_    = false;
         next_ocif_       = kNoOcif;
@@ -127,7 +124,6 @@ public:
         cmpr_            = cmpr;
         base_value_      = count;
         phase_           = phase;
-        phase_den_       = den;
     }
 
     void PostRestore() override {
@@ -272,23 +268,8 @@ private:
         return clocks_->InputRate(kUnit, Input());
     }
 
-    void RequireScale(bool ok, GuestCycleClock::Rate input) const {
-        if (!ok) {
-            const GuestCycleClock::Rate core = clock_->ClockRate();
-            emu_.Get<Fatal>().Die("EPIT %08X: %llu/%llu Hz input / %u against the %llu/%llu Hz "
-                                  "core overflows the 64-bit scale", kBase,
-                                  static_cast<unsigned long long>(input.num),
-                                  static_cast<unsigned long long>(input.den),
-                                  Prescaler(cr_) + 1u,
-                                  static_cast<unsigned long long>(core.num),
-                                  static_cast<unsigned long long>(core.den));
-        }
-    }
-
     GuestCycleClock::Rate TickRate(GuestCycleClock::Rate input) const {
-        GuestCycleClock::Rate tick;
-        RequireScale(FreescaleTimerClocks::PrescaledRate(input, Prescaler(cr_), tick), input);
-        return tick;
+        return clocks_->PrescaledRate(kUnit, kBase, input, Prescaler(cr_));
     }
 
     void Rebase(uint64_t now) {
@@ -300,23 +281,21 @@ private:
        counter and the prescaler counter freeze at their current values. */
     void Freeze(uint64_t now) {
         base_value_      = Count(now);
-        phase_           = counter_.PhaseAt(now);
-        phase_den_       = counter_.PhaseDenominator();
+        phase_           = counter_.TickPhaseAt(now);
         counting_        = false;
     }
 
     /* MCIMX31RM Table 33-6 ENMOD and Figure 33-9, MCIMX51RM Table 29-5 ENMOD: after a
        prescaler counter reset the next prescaled pulse comes one input clock later. */
     void ResetPrescaler() {
-        phase_     = Prescaler(cr_);
-        phase_den_ = uint64_t{Prescaler(cr_)} + 1u;
+        phase_ = CounterPhase::LastInputClock(uint64_t{Prescaler(cr_)} + 1u);
     }
 
     void Resume(uint64_t now, GuestCycleClock::Rate input) {
         const GuestCycleClock::Rate core = clock_->ClockRate();
         const GuestCycleClock::Rate tick = TickRate(input);
-        RequireScale(counter_.SetRate(core, tick), input);
-        RequireScale(counter_.AnchorAtPhase(now, 0u, phase_, phase_den_), input);
+        counter_.SetRate(core, tick);
+        counter_.AnchorAt(now, 0u, phase_);
         base_tick_  = 0u;
         ratio_core_ = core;
         ratio_tick_ = tick;
@@ -336,7 +315,7 @@ private:
             const GuestCycleClock::Rate tick = TickRate(input);
             if (tick != ratio_tick_ || core != ratio_core_) {
                 base_value_ = Count(now);
-                RequireScale(counter_.RescaleRate(now, core, tick), input);
+                counter_.RescaleRate(now, core, tick);
                 base_tick_  = counter_.TicksSince(now);
                 ratio_core_ = core;
                 ratio_tick_ = tick;
@@ -384,16 +363,11 @@ private:
         const bool     new_scale = Prescaler(old) != Prescaler(value);
         const uint64_t now = clock_->Cycles();
         CaptureDue(now);
-        uint64_t phase = 0u;
-        uint64_t den   = 0u;
-        if (counting_ && now_en && new_scale) {
-            if (!counter_.DivideChangePhase(now, uint64_t{Prescaler(old)} + 1u,
-                                            uint64_t{Prescaler(value)} + 1u, phase, den)) {
-                emu_.Get<Fatal>().Die("EPIT %08X: prescaler phase denominator %llu overflows the "
-                                      "PRESCALER write", kBase,
-                                      static_cast<unsigned long long>(
-                                          counter_.PhaseDenominator()));
-            }
+        const bool divided = counting_ && now_en && new_scale;
+        CycleAnchoredCounter::Phase phase;
+        if (divided) {
+            phase = counter_.DivideChangePhase(now, uint64_t{Prescaler(old)} + 1u,
+                                               uint64_t{Prescaler(value)} + 1u);
             Freeze(now);
         } else if (counting_) {
             if (now_en) Rebase(now);
@@ -403,12 +377,8 @@ private:
         /* MCIMX31RM §33.6.1.1 with Figure 33-9: "A change in the value of the PRESCALER
            field is immediately reflected on its output clock frequency." */
         if (new_scale) {
-            if (den != 0u) {
-                phase_     = phase;
-                phase_den_ = den;
-            } else {
-                ResetPrescaler();
-            }
+            if (divided) phase_ = phase;
+            else         ResetPrescaler();
         }
         if (!was_en && now_en && (value & kCrEnmod) != 0u) {
             base_value_ = (value & kCrRld) != 0u ? lr_ : kCntReset;
@@ -488,8 +458,7 @@ private:
     uint64_t next_ocif_       = kNoOcif;
     uint32_t base_value_      = kCntReset;
     uint64_t base_tick_       = 0u;
-    uint64_t phase_           = 0u;
-    uint64_t phase_den_       = 1u;
+    CycleAnchoredCounter::Phase phase_;
 
     GuestCycleClock::Rate ratio_core_{0u, 1u};
     GuestCycleClock::Rate ratio_tick_{0u, 1u};

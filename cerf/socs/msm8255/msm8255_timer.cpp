@@ -171,13 +171,13 @@ public:
 
 private:
     struct Channel {
-        uint32_t             match          = 0;
-        bool                 match_written  = false;
-        uint32_t             enable         = 0;
-        bool                 enable_written = false;
-        uint32_t             stopped_count  = 0;
-        CycleAnchoredCounter counter;
-        GuestCycleClock::Event* event       = nullptr;
+        uint32_t                   match          = 0;
+        bool                       match_written  = false;
+        uint32_t                   enable         = 0;
+        bool                       enable_written = false;
+        uint32_t                   stopped_count  = 0;
+        NarrowCycleAnchoredCounter counter;
+        GuestCycleClock::Event*    event          = nullptr;
     };
 
     static uint32_t FastReadThunk(void* ctx, uint32_t off, uint32_t width) {

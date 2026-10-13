@@ -61,16 +61,16 @@ private:
     uint8_t  host_pressed_[4] = {};
     bool     irq_on_   = false;
 
-    GuestCycleClock*        clock_       = nullptr;
-    GuestCycleClock::Event* sync_event_  = nullptr;
-    HostRequestChannel*     host_requests_ = nullptr;
-    CycleAnchoredCounter    ckil_;
-    bool                    depress_out_ = false;
-    bool                    release_out_ = true;
-    bool                    sync_pending_ = false;
-    uint16_t                pending_kpsr_ = 0u;
-    uint32_t                sync_tick_   = 0u;
-    uint32_t                restored_count_ = 0u;
-    uint64_t                restored_phase_ = 0u;
-    uint64_t                restored_den_   = 1u;
+    GuestCycleClock*           clock_       = nullptr;
+    GuestCycleClock::Event*    sync_event_  = nullptr;
+    HostRequestChannel*        host_requests_ = nullptr;
+    NarrowCycleAnchoredCounter ckil_;
+    bool                       depress_out_ = false;
+    bool                       release_out_ = true;
+    bool                       sync_pending_ = false;
+    uint16_t                   pending_kpsr_ = 0u;
+    uint32_t                   sync_tick_   = 0u;
+    uint32_t                   restored_count_ = 0u;
+    uint64_t                   restored_phase_ = 0u;
+    uint64_t                   restored_den_   = 1u;
 };

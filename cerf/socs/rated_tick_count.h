@@ -5,21 +5,32 @@
 
 #include <cstdint>
 
-class RatedTickCount {
+struct TickPosition {
+    uint64_t ticks     = 0;
+    uint64_t phase     = 0;
+    uint64_t phase_den = 1;
+};
+
+template <class Units>
+class BasicRatedTickCount {
 public:
-    struct Position {
-        uint64_t ticks     = 0;
-        uint64_t phase     = 0;
-        uint64_t phase_den = 1;
-    };
+    using Position = TickPosition;
 
     bool SetRate(GuestCycleClock::Rate core, GuestCycleClock::Rate tick);
     void Start(uint64_t cycle);
     bool PlaceAt(uint64_t cycle, const Position& at);
+    void PlaceAtPhase(uint64_t cycle, uint64_t ticks, const CounterPhase& phase);
     bool Rescale(uint64_t cycle, GuestCycleClock::Rate core, GuestCycleClock::Rate tick);
     bool AddTicks(uint64_t ticks);
 
-    Position PositionAt(uint64_t cycle) const;
+    Position PositionAt(uint64_t cycle) const {
+        Position p;
+        p.ticks     = base_ + ctr_.TicksSincePhase(cycle, p.phase);
+        p.phase_den = ctr_.PhaseDenominator();
+        return p;
+    }
+
+    CounterPhase TickPhaseAt(uint64_t cycle) const { return ctr_.TickPhaseAt(cycle); }
 
     uint64_t TicksAt(uint64_t cycle) const { return base_ + ctr_.TicksSince(cycle); }
 
@@ -28,6 +39,9 @@ public:
     }
 
 private:
-    CycleAnchoredCounter ctr_;
-    uint64_t             base_ = 0;
+    BasicCycleAnchoredCounter<Units> ctr_;
+    uint64_t                         base_ = 0;
 };
+
+using RatedTickCount       = BasicRatedTickCount<ExactCounterUnits>;
+using NarrowRatedTickCount = BasicRatedTickCount<NarrowCounterUnits>;

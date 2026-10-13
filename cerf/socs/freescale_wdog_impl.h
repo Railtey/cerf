@@ -294,25 +294,11 @@ private:
                        now);
     }
 
-    void SetRatio() {
-        const GuestCycleClock::Rate core = clock_->ClockRate();
-        if (!ckil_.SetRate(core, GuestCycleClock::Rate{CkilHz(), 1u})) {
-            emu_.Get<Fatal>().Die("FreescaleWdog %08X: %llu Hz CKIL against the %llu/%llu Hz core "
-                                  "clock overflows", kBase,
-                                  static_cast<unsigned long long>(CkilHz()),
-                                  static_cast<unsigned long long>(core.num),
-                                  static_cast<unsigned long long>(core.den));
-        }
-    }
+    void SetRatio() { ckil_.SetRate(clock_->ClockRate(), GuestCycleClock::Rate{CkilHz(), 1u}); }
 
     void Retime() {
-        const uint64_t              now  = clock_->Cycles();
-        const GuestCycleClock::Rate core = clock_->ClockRate();
-        if (!ckil_.RescaleRate(now, core, GuestCycleClock::Rate{CkilHz(), 1u})) {
-            emu_.Get<Fatal>().Die("FreescaleWdog %08X: CKIL rescale to the %llu/%llu Hz core clock "
-                                  "overflows", kBase, static_cast<unsigned long long>(core.num),
-                                  static_cast<unsigned long long>(core.den));
-        }
+        const uint64_t now = clock_->Cycles();
+        ckil_.RescaleRate(now, clock_->ClockRate(), GuestCycleClock::Rate{CkilHz(), 1u});
         Rearm(now);
     }
 

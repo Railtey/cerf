@@ -27,15 +27,15 @@ public:
 
 private:
     struct Channel {
-        uint32_t                mode          = 0;
-        uint32_t                reload        = 0;
-        uint32_t                stopped_count = 0;
-        uint64_t                next_terminal = 0;
-        uint64_t                last_terminal = 0;
-        bool                    has_last      = false;
-        bool                    stuck_zero    = false;
-        CycleAnchoredCounter    counter;
-        GuestCycleClock::Event* event = nullptr;
+        uint32_t                   mode          = 0;
+        uint32_t                   reload        = 0;
+        uint32_t                   stopped_count = 0;
+        uint64_t                   next_terminal = 0;
+        uint64_t                   last_terminal = 0;
+        bool                       has_last      = false;
+        bool                       stuck_zero    = false;
+        NarrowCycleAnchoredCounter counter;
+        GuestCycleClock::Event*    event = nullptr;
     };
 
     static uint64_t Divisor(uint32_t mode);

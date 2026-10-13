@@ -63,23 +63,20 @@ public:
         w.Write<uint32_t>("gptir", ir_);
         w.WriteBytes("gptocr", ocr_, sizeof(ocr_));
         w.Write<uint32_t>("count", Count(now));
-        w.Write<uint64_t>("prescale_phase", counting_ ? counter_.PhaseAt(now) : phase_);
-        w.Write<uint64_t>("prescale_phase_den",
-                          counting_ ? counter_.PhaseDenominator() : phase_den_);
+        (counting_ ? counter_.TickPhaseAt(now) : phase_).Save(w, "prescale_tick_phase");
     }
 
     void RestoreState(StateReader& r) override {
         uint32_t cr = 0, pr = 0, sr = 0, ir = 0, count = 0;
         uint32_t ocr[3] = {};
-        uint64_t phase = 0, den = 0;
+        CycleAnchoredCounter::Phase phase;
         r.Read("gptcr", cr);
         r.Read("gptpr", pr);
         r.Read("gptsr", sr);
         r.Read("gptir", ir);
         r.ReadBytes("gptocr", ocr, sizeof(ocr));
         r.Read("count", count);
-        r.Read("prescale_phase", phase);
-        r.Read("prescale_phase_den", den);
+        phase.Restore(r, "prescale_tick_phase");
         clock_->Disarm(event_);
         counting_   = false;
         suspended_  = false;
@@ -92,7 +89,6 @@ public:
         for (int n = 0; n < 3; ++n) ocr_[n] = ocr[n];
         base_value_ = count;
         phase_      = phase;
-        phase_den_  = den;
     }
 
     void PostRestore() override {
@@ -255,21 +251,7 @@ private:
     }
 
     GuestCycleClock::Rate TickRate(GuestCycleClock::Rate input) const {
-        GuestCycleClock::Rate tick;
-        RequireScale(FreescaleTimerClocks::PrescaledRate(input, pr_, tick), input);
-        return tick;
-    }
-
-    void RequireScale(bool ok, GuestCycleClock::Rate input) const {
-        if (!ok) {
-            const GuestCycleClock::Rate core = clock_->ClockRate();
-            emu_.Get<Fatal>().Die("GPT %08X: %llu/%llu Hz input / %u against the %llu/%llu Hz core "
-                                  "overflows the 64-bit scale", kBase,
-                                  static_cast<unsigned long long>(input.num),
-                                  static_cast<unsigned long long>(input.den), pr_ + 1u,
-                                  static_cast<unsigned long long>(core.num),
-                                  static_cast<unsigned long long>(core.den));
-        }
+        return clocks_->PrescaledRate(FreescaleTimerUnit::kGpt, kBase, input, pr_);
     }
 
     void Rebase(uint64_t now) {
@@ -280,28 +262,21 @@ private:
 
     void Freeze(uint64_t now, bool keep_phase) {
         base_value_ = Count(now);
-        if (keep_phase) {
-            phase_     = counter_.PhaseAt(now);
-            phase_den_ = counter_.PhaseDenominator();
-        } else {
-            ResetPrescaler();
-        }
+        if (keep_phase) phase_ = counter_.TickPhaseAt(now);
+        else            ResetPrescaler();
         counting_  = false;
         last_eval_ = 0u;
     }
 
     /* MCIMX51RM Table 36-6 and Figure 36-13, MCIMX31RM Figure 34-15: after a prescaler
        counter reset the next prescaled pulse comes one input clock later. */
-    void ResetPrescaler() {
-        phase_     = pr_;
-        phase_den_ = uint64_t{pr_} + 1u;
-    }
+    void ResetPrescaler() { phase_ = CounterPhase::LastInputClock(uint64_t{pr_} + 1u); }
 
     void Resume(uint64_t now, GuestCycleClock::Rate input) {
         const GuestCycleClock::Rate core = clock_->ClockRate();
         const GuestCycleClock::Rate tick = TickRate(input);
-        RequireScale(counter_.SetRate(core, tick), input);
-        RequireScale(counter_.AnchorAtPhase(now, 0u, phase_, phase_den_), input);
+        counter_.SetRate(core, tick);
+        counter_.AnchorAt(now, 0u, phase_);
         base_tick_  = 0u;
         last_eval_  = 0u;
         ratio_core_ = core;
@@ -322,7 +297,7 @@ private:
             const GuestCycleClock::Rate tick = TickRate(input);
             if (tick != ratio_tick_ || core != ratio_core_) {
                 base_value_ = Count(now);
-                RequireScale(counter_.RescaleRate(now, core, tick), input);
+                counter_.RescaleRate(now, core, tick);
                 base_tick_  = counter_.TicksSince(now);
                 last_eval_  = 0u;
                 ratio_core_ = core;
@@ -405,21 +380,13 @@ private:
         const uint64_t now  = clock_->Cycles();
         const uint32_t next = value & kGptprMask;
         CaptureDue(now);
-        uint64_t phase = next;
-        uint64_t den   = uint64_t{next} + 1u;
+        CycleAnchoredCounter::Phase phase = CounterPhase::LastInputClock(uint64_t{next} + 1u);
         if (counting_) {
-            if (!counter_.DivideChangePhase(now, uint64_t{pr_} + 1u, uint64_t{next} + 1u, phase,
-                                            den)) {
-                emu_.Get<Fatal>().Die("GPT %08X: prescaler phase denominator %llu overflows the "
-                                      "GPTPR write", kBase,
-                                      static_cast<unsigned long long>(
-                                          counter_.PhaseDenominator()));
-            }
+            phase = counter_.DivideChangePhase(now, uint64_t{pr_} + 1u, uint64_t{next} + 1u);
             Freeze(now, false);
         }
-        pr_        = next;
-        phase_     = phase;
-        phase_den_ = den;
+        pr_    = next;
+        phase_ = phase;
         Retime();
     }
 
@@ -488,8 +455,7 @@ private:
     uint32_t base_value_   = 0u;
     uint64_t base_tick_    = 0u;
     uint64_t last_eval_    = 0u;
-    uint64_t phase_        = 0u;
-    uint64_t phase_den_    = 1u;
+    CycleAnchoredCounter::Phase phase_;
 
     GuestCycleClock::Rate ratio_core_{0u, 1u};
     GuestCycleClock::Rate ratio_tick_{0u, 1u};

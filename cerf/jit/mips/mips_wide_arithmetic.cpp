@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "../../core/cerf_emulator.h"
+#include "../../core/wide_uint.h"
 #include "mips_cpu.h"
 #include "mips_cpu_state.h"
 
@@ -11,34 +12,6 @@ REGISTER_SERVICE(MipsWideArithmetic);
 void MipsWideArithmetic::OnReady() {
     cpu_state_ = emu_.Get<MipsCpu>().State();
 }
-
-namespace {
-
-/* QEMU host-utils.h mulu64 (the non-__int128 fallback): 64x64 -> 128-bit unsigned
-   product via 32-bit limbs. x86-32 has no __int128/_umul128. */
-void Mulu64(uint64_t a, uint64_t b, uint64_t* lo, uint64_t* hi) {
-    const uint32_t a0 = static_cast<uint32_t>(a), a1 = static_cast<uint32_t>(a >> 32);
-    const uint32_t b0 = static_cast<uint32_t>(b), b1 = static_cast<uint32_t>(b >> 32);
-
-    const uint64_t rl = static_cast<uint64_t>(a0) * b0;
-    const uint64_t rm = static_cast<uint64_t>(a0) * b1;
-    const uint64_t rn = static_cast<uint64_t>(a1) * b0;
-    const uint64_t rh = static_cast<uint64_t>(a1) * b1;
-
-    uint64_t c = static_cast<uint32_t>(rl >> 32) +
-                 static_cast<uint32_t>(rm) + static_cast<uint32_t>(rn);
-    const uint32_t lo_hi = static_cast<uint32_t>(c);
-    c >>= 32;
-    c += static_cast<uint32_t>(rm >> 32) + static_cast<uint32_t>(rn >> 32) +
-         static_cast<uint32_t>(rh);
-    const uint32_t hi_lo = static_cast<uint32_t>(c);
-    const uint32_t hi_hi = static_cast<uint32_t>(rh >> 32) + static_cast<uint32_t>(c >> 32);
-
-    *lo = (static_cast<uint64_t>(lo_hi) << 32) | static_cast<uint32_t>(rl);
-    *hi = (static_cast<uint64_t>(hi_hi) << 32) | hi_lo;
-}
-
-}  // namespace
 
 void __fastcall MipsWideArithmetic::DmultuHelper(uint32_t rs, uint32_t rt, MipsWideArithmetic* w) {
     /* {HI,LO} = gpr[rs] * gpr[rt], full 128-bit UNSIGNED (QEMU gen_muldiv

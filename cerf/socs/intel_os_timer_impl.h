@@ -377,7 +377,7 @@ private:
     RateProbe*                    rate_probe_ = nullptr;
     GuestCycleClock::Event*       event_[4]   = {};
 
-    CycleAnchoredCounter counter_;
+    NarrowCycleAnchoredCounter counter_;
 
     uint32_t osmr_[4] = {};
     uint32_t ossr_    = 0;

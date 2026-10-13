@@ -34,16 +34,16 @@ private:
     void ResetState();
     void PublishLevel();
 
-    GuestCycleClock*        clock_         = nullptr;
-    GuestCycleClock::Event* event_         = nullptr;
-    CycleAnchoredCounter    counter_;
-    uint64_t                terminal_      = 0;
-    uint32_t                setup_         = 0;
-    bool                    enabled_       = false;
-    bool                    enable_armed_  = false;
-    bool                    disable_armed_ = false;
-    bool                    expired_       = false;
-    bool                    ever_enabled_  = false;
-    bool                    pending_       = false;
-    bool                    published_     = false;
+    GuestCycleClock*           clock_         = nullptr;
+    GuestCycleClock::Event*    event_         = nullptr;
+    NarrowCycleAnchoredCounter counter_;
+    uint64_t                   terminal_      = 0;
+    uint32_t                   setup_         = 0;
+    bool                       enabled_       = false;
+    bool                       enable_armed_  = false;
+    bool                       disable_armed_ = false;
+    bool                       expired_       = false;
+    bool                       ever_enabled_  = false;
+    bool                       pending_       = false;
+    bool                       published_     = false;
 };

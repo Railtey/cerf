@@ -130,10 +130,10 @@ private:
         if (high != irq_high_) PublishIrqLine(high);
     }
 
-    GuestCycleClock*        clock_ = nullptr;
-    IrqController*          irq_   = nullptr;
-    GuestCycleClock::Event* event_ = nullptr;
-    CycleAnchoredCounter    counter_;
+    GuestCycleClock*           clock_ = nullptr;
+    IrqController*             irq_   = nullptr;
+    GuestCycleClock::Event*    event_ = nullptr;
+    NarrowCycleAnchoredCounter counter_;
 
     uint32_t tisr_          = 0;
     uint32_t tier_          = 0;

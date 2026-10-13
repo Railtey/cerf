@@ -53,12 +53,12 @@ private:
     void ArmCompare(uint64_t now);
     void OnCompareMatch();
 
-    MipsCpuState*           cpu_state_     = nullptr;
-    MipsMmu*                mmu_           = nullptr;
-    MipsTranslationCache*   cache_         = nullptr;
-    MipsProcessorConfig*    config_        = nullptr;
-    GuestCycleClock*        clock_         = nullptr;
-    MipsCoreClock*          core_clock_    = nullptr;
-    GuestCycleClock::Event* compare_event_ = nullptr;
-    CycleAnchoredCounter    count_;
+    MipsCpuState*              cpu_state_     = nullptr;
+    MipsMmu*                   mmu_           = nullptr;
+    MipsTranslationCache*      cache_         = nullptr;
+    MipsProcessorConfig*       config_        = nullptr;
+    GuestCycleClock*           clock_         = nullptr;
+    MipsCoreClock*             core_clock_    = nullptr;
+    GuestCycleClock::Event*    compare_event_ = nullptr;
+    NarrowCycleAnchoredCounter count_;
 };

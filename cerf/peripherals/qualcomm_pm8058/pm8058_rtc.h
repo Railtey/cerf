@@ -55,12 +55,12 @@ private:
 
     std::mutex mtx_;
 
-    GuestCycleClock*        clock_       = nullptr;
-    GuestCycleClock::Event* alarm_event_ = nullptr;
-    Pm8058Irq*              irq_         = nullptr;
-    CycleAnchoredCounter    counter_;
-    uint32_t                stopped_count_ = 0;
-    uint8_t                 ctrl_          = 0;
-    bool                    alarm_status_  = false;
-    uint8_t                 alarm_[kBytes] = {};
+    GuestCycleClock*           clock_       = nullptr;
+    GuestCycleClock::Event*    alarm_event_ = nullptr;
+    Pm8058Irq*                 irq_         = nullptr;
+    NarrowCycleAnchoredCounter counter_;
+    uint32_t                   stopped_count_ = 0;
+    uint8_t                    ctrl_          = 0;
+    bool                       alarm_status_  = false;
+    uint8_t                    alarm_[kBytes] = {};
 };

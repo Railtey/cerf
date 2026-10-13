@@ -35,7 +35,7 @@ private:
 
     GuestCycleClock*        clock_   = nullptr;
     GuestCycleClock::Event* event_   = nullptr;
-    RasterScanClock         scan_;
+    NarrowRasterScanClock   scan_;
     PacedWaveOut            out_;
     bool                    playing_ = false;
 };

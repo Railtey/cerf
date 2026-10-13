@@ -167,16 +167,16 @@ private:
         if (open_ && !window_.Rescale(clock_->Cycles(), clock_->CpuHz(), 1u)) RatioOverflow();
     }
 
-    GuestCycleClock*     clock_ = nullptr;
-    Rtc8564Core*         core_  = nullptr;
-    CycleAnchoredCounter window_;
-    uint8_t              pointer_   = 0;
-    uint32_t             phase_     = 0;
-    bool                 read_mode_ = false;
-    bool                 open_      = false;
-    bool                 timed_out_ = false;
-    bool                 stop_seen_ = false;
-    std::mutex           mutex_;
+    GuestCycleClock*           clock_ = nullptr;
+    Rtc8564Core*               core_  = nullptr;
+    NarrowCycleAnchoredCounter window_;
+    uint8_t                    pointer_   = 0;
+    uint32_t                   phase_     = 0;
+    bool                       read_mode_ = false;
+    bool                       open_      = false;
+    bool                       timed_out_ = false;
+    bool                       stop_seen_ = false;
+    std::mutex                 mutex_;
 };
 
 REGISTER_SERVICE_AS(Rtc8564Interface, Iop13xxI2cDevice);

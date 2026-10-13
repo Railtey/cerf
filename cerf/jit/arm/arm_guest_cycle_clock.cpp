@@ -43,14 +43,15 @@ public:
             const uint64_t hi       = hi32 + (counter < folded ? 1u : 0u);
             LOG(Jit, "[CYCLECLK] stall pc=0x%08X counter=%u deadline=%u (%+d) "
                      "hi=%u folded=%u cycles=%llu chain_exit=0x%X irq_pend=%u "
-                     "deep_sleep=%u lag_ms_at_last_guest_s=%lld hz=%llu\n",
+                     "deep_sleep=%u lag_ms_at_last_guest_s=%lld rate=%llu/%llu Hz\n",
                 ld(state_->gprs[ArmGpr::kR15]), counter, deadline,
                 static_cast<int32_t>(counter - deadline), hi32, folded,
                 static_cast<unsigned long long>((hi << 32) | counter),
                 ld(state_->chain_exit_request), ld(state_->irq_interrupt_pending),
                 ld(state_->deep_sleep),
                 static_cast<long long>(LagNsAtLastSecond() / 1000000),
-                static_cast<unsigned long long>(CpuHz()));
+                static_cast<unsigned long long>(ClockRate().num),
+                static_cast<unsigned long long>(ClockRate().den));
         });
 #endif
     }

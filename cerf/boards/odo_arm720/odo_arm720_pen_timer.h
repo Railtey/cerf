@@ -34,6 +34,6 @@ private:
     std::function<bool()>   status_set_;
     GuestCycleClock*        clock_   = nullptr;
     GuestCycleClock::Event* event_   = nullptr;
-    RatedTickCount          grid_;
+    NarrowRatedTickCount    grid_;
     bool                    enabled_ = false;
 };

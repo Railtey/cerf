@@ -99,10 +99,10 @@ bool Iop13xxTimers::AtTerminalTick(Channel& ch, uint64_t cycle) {
 
 bool Iop13xxTimers::InReloadWindow(Channel& ch, uint64_t cycle) {
     if (!ch.has_last) return false;
-    const uint64_t k = ch.counter.TicksSince(cycle);
+    uint64_t       phase = 0u;
+    const uint64_t k     = ch.counter.TicksSincePhase(cycle, phase);
     if (ReloadDelay(ch.mode) != 0u) return k == ch.last_terminal || k == ch.last_terminal + 1u;
-    return k == ch.last_terminal &&
-           ch.counter.PhaseAt(cycle) * Divisor(ch.mode) < ch.counter.PhaseDenominator();
+    return k == ch.last_terminal && phase * Divisor(ch.mode) < ch.counter.PhaseDenominator();
 }
 
 unsigned Iop13xxTimers::Index(const Channel& ch) const {

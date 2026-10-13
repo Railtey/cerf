@@ -93,13 +93,13 @@ private:
     std::atomic<uint32_t> int_enable_{0};
     std::function<void()> on_status_change_;
 
-    GuestCycleClock*        clock_        = nullptr;
-    GuestCycleClock::Event* sample_event_ = nullptr;
-    HostRequestChannel*     host_requests_ = nullptr;
-    CycleAnchoredCounter    samples_;
-    uint32_t                next_sample_  = 0;
-    bool                    sampling_     = false;
-    std::vector<HostPen>    host_pen_;
-    int                     host_x_       = 0;
-    int                     host_y_       = 0;
+    GuestCycleClock*           clock_        = nullptr;
+    GuestCycleClock::Event*    sample_event_ = nullptr;
+    HostRequestChannel*        host_requests_ = nullptr;
+    NarrowCycleAnchoredCounter samples_;
+    uint32_t                   next_sample_  = 0;
+    bool                       sampling_     = false;
+    std::vector<HostPen>       host_pen_;
+    int                        host_x_       = 0;
+    int                        host_y_       = 0;
 };
