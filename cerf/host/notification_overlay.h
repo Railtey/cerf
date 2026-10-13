@@ -41,7 +41,6 @@ private:
     int      w_       = 0;
     int      h_       = 0;
     UINT     dpi_     = 0;
-    bool     compact_ = false;
     int      radius_  = 0;
     int      shadow_  = 0;
     int      font_px_ = 0;

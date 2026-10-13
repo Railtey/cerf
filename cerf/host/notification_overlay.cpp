@@ -24,8 +24,12 @@ constexpr int  kRadius        = 6;
 constexpr int  kShadow        = 2;
 constexpr int  kFontPx        = 13;
 constexpr int  kCompactMaxW   = 360;
-constexpr int  kCompactPadX   = 6;
-constexpr int  kCompactPadY   = 4;
+constexpr int  kCompactMargin = 1;
+constexpr int  kCompactGap    = 1;
+constexpr int  kCompactPadX   = 7;
+constexpr int  kCompactPadY   = 5;
+constexpr int  kCompactRadius = 4;
+constexpr int  kCompactShadow = 1;
 constexpr int  kCompactFontPx = 11;
 constexpr int  kLineGap       = 2;
 constexpr int  kMorePadY      = 3;
@@ -111,17 +115,16 @@ void NotificationOverlay::Relayout(HDC dc, int w, int h, UINT dpi) {
     if (cards_.empty() || w <= 0 || h <= 0) return;
 
     auto px = [dpi](int v) { return MulDiv(v, (int)dpi, 96); };
-    compact_ = w < px(kRegularMinW) || h < px(kRegularMinH);
-    const int margin   = compact_ ? 0 : px(kMargin);
-    const int width    = compact_ ? std::min(w, px(kCompactMaxW))
-                                  : std::min(px(kCardW), w - 2 * margin);
-    const int pad_x    = px(compact_ ? kCompactPadX : kPad);
-    const int pad_y    = px(compact_ ? kCompactPadY : kPad);
-    const int gap      = compact_ ? 0 : px(kGap);
-    const int line_gap = compact_ ? 0 : px(kLineGap);
-    radius_ = compact_ ? 0 : px(kRadius);
-    shadow_ = compact_ ? 0 : px(kShadow);
-    EnsureFonts(px(compact_ ? kCompactFontPx : kFontPx));
+    const bool compact = w < px(kRegularMinW) || h < px(kRegularMinH);
+    const int margin   = px(compact ? kCompactMargin : kMargin);
+    const int width    = std::min(px(compact ? kCompactMaxW : kCardW), w - 2 * margin);
+    const int pad_x    = px(compact ? kCompactPadX : kPad);
+    const int pad_y    = px(compact ? kCompactPadY : kPad);
+    const int gap      = px(compact ? kCompactGap : kGap);
+    const int line_gap = compact ? 0 : px(kLineGap);
+    radius_ = px(compact ? kCompactRadius : kRadius);
+    shadow_ = px(compact ? kCompactShadow : kShadow);
+    EnsureFonts(px(compact ? kCompactFontPx : kFontPx));
 
     const int text_w = std::max(1, width - 2 * pad_x);
     const int right  = w - margin;
@@ -188,21 +191,14 @@ void NotificationOverlay::Draw(HDC dc) {
     auto& gdip = emu_.Get<HostGdiPlus>();
     const int     old_mode = SetBkMode(dc, TRANSPARENT);
     const HGDIOBJ old_font = SelectObject(dc, bold_);
-    for (const Placed& p : placed_) {
+    for (auto it = placed_.rbegin(); it != placed_.rend(); ++it) {
+        const Placed& p = *it;
         const Palette& pal = p.more ? kMore
                            : p.kind == NotificationKind::Error ? kError : kWarning;
-        if (compact_) {
-            SetDCBrushColor(dc, pal.fill);
-            FillRect(dc, &p.box, (HBRUSH)GetStockObject(DC_BRUSH));
-            const RECT divider{ p.box.left, p.box.top, p.box.right, p.box.top + 1 };
-            SetDCBrushColor(dc, pal.rim);
-            FillRect(dc, &divider, (HBRUSH)GetStockObject(DC_BRUSH));
-        } else {
-            RECT shadow = p.box;
-            OffsetRect(&shadow, 0, shadow_);
-            gdip.FillRoundRectAlphaAA(dc, shadow, radius_, RGB(0, 0, 0), kShadowAlpha);
-            gdip.FillRoundRectAA(dc, p.box, radius_, pal.fill, pal.rim);
-        }
+        RECT shadow = p.box;
+        OffsetRect(&shadow, 0, shadow_);
+        gdip.FillRoundRectAlphaAA(dc, shadow, radius_, RGB(0, 0, 0), kShadowAlpha);
+        gdip.FillRoundRectAA(dc, p.box, radius_, pal.fill, pal.rim);
         SetTextColor(dc, pal.text);
         RECT title_rc = p.title_rc;
         SelectObject(dc, p.more ? regular_ : bold_);
