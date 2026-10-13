@@ -1,13 +1,12 @@
 #include "ac97_codec.h"
 
-#include "../core/cerf_emulator.h"
-#include "../core/fatal.h"
 #include "../state/state_stream.h"
 
 namespace {
 
 constexpr uint32_t kFixedRateHz = 48000u;
 constexpr uint16_t kFixedRate   = 0xBB80u;
+constexpr uint64_t kBitClockHz  = 12288000u;
 
 }  // namespace
 
@@ -46,16 +45,11 @@ bool Ac97Codec::WriteRateRegister(uint32_t reg, uint16_t value) {
     if (!IsRateRegister(reg)) return false;
     if ((Peek(kRegExtAudioCtrl) & kVra) == 0u) {
         Poke(reg, kFixedRate);
-        unsettled_ = static_cast<uint8_t>(unsettled_ & ~RateBit(reg));
-        return true;
-    }
-    if (!RateWriteTakesEffect(reg)) {
-        unsettled_ = static_cast<uint8_t>(unsettled_ | RateBit(reg));
         return true;
     }
     const uint16_t latched = NearestSupported(value);
-    unsettled_ = static_cast<uint8_t>(unsettled_ & ~RateBit(reg));
     Poke(reg, latched);
+    if (!RateWriteTakesEffect(reg)) return true;
     if (reg == kRegDacRate) dac_rate_ = latched;
     if (reg == kRegAdcRate) adc_rate_ = latched;
     return true;
@@ -71,33 +65,30 @@ void Ac97Codec::OnExtAudioCtrlWrite() {
     ResetRates();
 }
 
-uint16_t Ac97Codec::ReadStored(uint32_t reg) {
-    if (IsRateRegister(reg) && (unsettled_ & RateBit(reg)) != 0u) {
-        emu_.Get<Fatal>().Die("Ac97Codec: read of rate register 0x%02X after a rate write with its converter "
-                              "powered down; not modelled", reg);
-    }
-    return Peek(reg);
-}
-
 void Ac97Codec::ResetRates() {
-    dac_rate_  = kFixedRateHz;
-    adc_rate_  = kFixedRateHz;
-    unsettled_ = 0u;
+    dac_rate_ = kFixedRateHz;
+    adc_rate_ = kFixedRateHz;
 }
 
 void Ac97Codec::SaveRates(StateWriter& w) const {
     w.Write<uint32_t>("codec_dac_rate", dac_rate_);
     w.Write<uint32_t>("codec_adc_rate", adc_rate_);
-    w.Write<uint8_t>("codec_rate_unsettled", unsettled_);
 }
 
 void Ac97Codec::RestoreRates(StateReader& r) {
     r.Read("codec_dac_rate", dac_rate_);
     r.Read("codec_adc_rate", adc_rate_);
-    r.Read("codec_rate_unsettled", unsettled_);
 }
 
-uint16_t Ac97Codec::GpioSlotStatus(uint64_t frame) {
-    emu_.Get<Fatal>().Die("Ac97Codec: slot-12 GPIO status at frame %llu from a codec that does not model it",
-                          static_cast<unsigned long long>(frame));
-}
+uint16_t Ac97Codec::GpioSlotStatus(uint64_t) { return 0u; }
+
+/* AC '97 Component Specification Revision 2.1 Figure 13 (page 32): BIT_CLK 12.288 MHz. */
+GuestCycleClock::Rate Ac97Codec::BitClockRate() { return GuestCycleClock::Rate{kBitClockHz, 1u}; }
+
+uint32_t Ac97Codec::ConverterDivider() { return 1u; }
+
+/* Intel PXA255 Developer's Manual section 13.4.2.4 (page 13-11): "Slot 3 contains the CODEC left channel
+   output". */
+uint32_t Ac97Codec::AdcLeftSlot() { return 3u; }
+
+uint32_t Ac97Codec::DigitiserSlot() { return 0u; }

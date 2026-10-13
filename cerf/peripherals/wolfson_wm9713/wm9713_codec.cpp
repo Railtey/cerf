@@ -5,35 +5,37 @@
 #include "../../core/cerf_emulator.h"
 #include "../../core/fatal.h"
 #include "../../core/log.h"
+#include "../../jit/guest_cycle_clock.h"
 #include "../../state/state_stream.h"
+#include "wm9713_clocks.h"
 
 namespace {
 
 /* symbol_mk500 touch.dll FUN_02236e30 @0x02236e30 requires reg 0x7C == 0x574D
    and reg 0x7E == 0x4C13, then decodes reg 0x5A & 0x1C as the revision index
    (0 -> 'A', 4 -> 'B', 8 -> 'C'). */
-constexpr uint32_t kRegRevision  = 0x5Au;
+constexpr uint32_t kReg5A        = 0x5Au;
 constexpr uint32_t kRegVendorId1 = 0x7Cu;
 constexpr uint32_t kRegVendorId2 = 0x7Eu;
 constexpr uint16_t kWm97xxId1    = 0x574Du;
 constexpr uint16_t kWm9713Id2    = 0x4C13u;
 constexpr uint16_t kRevisionC    = 0x0008u;
 
-/* Cirrus Logic WM9713L Rev 4.0 Table 68 (page 91): 74h POLL 9, CTC 8, ADCSEL 7:1, COO 0; 76h CR 9:8,
-   DEL 7:4, SLEN 3, SLT 2:0; 78h PRP 15:14, PDEN 11, WAIT 9, MSK 7:6; Table 47 (page 70): 3Ch PADCPD
-   bit 15, "The pen ADC is powered-down using PADCPD". */
+/* Cirrus Logic WM9713L Rev 4.0 Table 68 (page 91): 74h POLL 9, CTC 8, ADCSEL 7:1; 76h CR 9:8, DEL 7:4,
+   SLEN 3; 78h PRP 15:14, PDEN 11; Table 47 (page 70): 3Ch PADCPD bit 15, "The pen ADC is powered-down
+   using PADCPD". */
 constexpr uint32_t kRegDigitiser1  = 0x74u;
 constexpr uint32_t kRegDigitiser2  = 0x76u;
 constexpr uint32_t kRegDigitiserRd = 0x7Au;
-constexpr uint16_t kPoll = 1u << 9, kCtc = 1u << 8, kSelMask = 0x00FEu, kCoo = 1u << 0;
-constexpr uint16_t kSlen = 1u << 3;
-constexpr uint16_t kPden = 1u << 11, kWait = 1u << 9, kMskMask = 0x00C0u;
+constexpr uint16_t kPoll = 1u << 9, kCtc = 1u << 8, kSelMask = 0x00FEu;
+/* Cirrus Logic WM9713L Rev 4.0 Table 49 (page 72): 74h COO bit 0 "1 = Co-ordinate measurement". */
+constexpr uint16_t kCoo  = 1u << 0;
+constexpr uint16_t kPden = 1u << 11;
 constexpr uint16_t kPadcpd = 1u << 15;
 /* Cirrus Logic WM9713L Rev 4.0 Table 48 (page 71): CR 00 every 512, 01 every 400, 10 every 312, 11
-   every 256 AC-Link frames; Table 50 (page 73): ADCSRC 001 X, 010 Y. */
+   every 256 AC-Link frames; Table 50 (page 73): ADCSRC 001 X, 010 Y, 011 pressure. */
 constexpr uint32_t kCrFrames[4] = {512u, 400u, 312u, 256u};
-constexpr uint8_t  kSrcX = 1u, kSrcY = 2u;
-constexpr uint16_t kSelXy = (1u << kSrcX) | (1u << kSrcY);
+constexpr uint8_t  kSrcX = 1u, kSrcY = 2u, kSrcPressure = 3u;
 
 struct RegDefault {
     uint8_t  reg;
@@ -63,21 +65,6 @@ constexpr uint16_t kDacl = 1u << 7;
 constexpr uint16_t kDacr = 1u << 6;
 constexpr uint16_t kAdcl = 1u << 5;
 constexpr uint16_t kAdcr = 1u << 4;
-constexpr uint32_t kRegAddFunc2 = 0x5Cu;
-constexpr uint16_t kAssMask     = 0x0003u;
-
-/* Cirrus Logic WM9713L Rev 4.0 Table 68 (page 91): 40h LB bit 7 (Figure 9, page 19: "40h:7
-   (Loopback)" between the AC'97 link and the DACs), 2Ah SEN bit 2. */
-constexpr uint32_t kRegGeneral = 0x40u;
-constexpr uint16_t kLb         = 1u << 7;
-constexpr uint16_t kSen        = 1u << 2;
-/* Cirrus Logic WM9713L Rev 4.0 Table 3 (page 22): 44h SEXT[6:4] 14:12 hi-fi block clock division,
-   CLKSRC 7 (1 = external clock), CLKAX2 1, CLKMUX 0; page 21: "AC97 CLK - nominally 24.576MHz,
-   used to generate AC97 BITCLK at 12.288MHz". */
-constexpr uint32_t kRegClockCtrl   = 0x44u;
-constexpr uint16_t kHifiDivMask    = 0x7000u;
-constexpr uint16_t kClkPathMask    = 0x0083u;
-constexpr uint16_t kClkPathDefault = 0x0080u;
 /* Cirrus Logic WM9713L Rev 4.0 Table 21 (page 44): 2Ch, 32h and 2Eh rates 1F40h, 2B11h, 2EE0h, 3E80h,
    5622h, 5DC0h, 7D00h, AC44h, BB80h. */
 constexpr uint32_t kRegAuxDacRate = 0x2Eu;
@@ -85,13 +72,37 @@ constexpr uint16_t kRates[] = {8000u, 11025u, 12000u, 16000u, 22050u, 24000u, 32
 /* Cirrus Logic WM9713L Rev 4.0 Table 65 (page 87): 3Ch AUXDAC bit 11, "1 = Disabled". */
 constexpr uint16_t kAuxdac = 1u << 11;
 
-/* Cirrus Logic WM9713L Rev 4.0 Table 62 (page 84): 4Eh GPn polarity (1 = active high), 50h GSn sticky;
-   Table 61 (page 83): GPIO bit 13 "Internal PENDOWN Signal enabled only when pen-down detection is
-   active". */
+/* Cirrus Logic WM9713L Rev 4.0 Table 62 (page 84): 4Eh GPn polarity (1 = active high); Table 61 (page
+   83): GPIO bit 13 "Internal PENDOWN Signal enabled only when pen-down detection is active". */
 constexpr uint32_t kRegGpioPolarity = 0x4Eu;
-constexpr uint32_t kRegGpioSticky   = 0x50u;
 constexpr uint32_t kRegGpioStatus   = 0x54u;
 constexpr uint16_t kGpioPenDown     = 1u << 13;
+/* Cirrus Logic WM9713L Rev 4.0 Table 62 (page 84): 50h GSn "1 = Sticky", 52h GWn "1 = Wake-up (generate
+   interrupts from GPIO)"; Figure 35 (page 83): "WAKEEN 5Ah, bit 1". */
+constexpr uint32_t kRegGpioSticky = 0x50u;
+constexpr uint32_t kRegGpioWake   = 0x52u;
+constexpr uint16_t kWakeen        = 1u << 1;
+
+/* Cirrus Logic WM9713L Rev 4.0 Table 7 (page 25): 26h PR5 bit 13, 3Ch PLL bit 9, "both PR5 and PLL must be
+   asserted low before PLL is enabled". */
+constexpr uint32_t kRegClockCtrl = 0x44u;
+constexpr uint32_t kRegPll       = 0x46u;
+constexpr uint16_t kPr5          = 1u << 13;
+constexpr uint16_t kPllOff       = 1u << 9;
+/* Cirrus Logic WM9713L Rev 4.0 page 121 (index 78h): WAIT 9 "1 = Retain existing data in 7Ah until it is
+   read", MSK 7:6; Table 56 (page 77): 11 "conversions wait until rising or falling edge on MASK". */
+constexpr uint16_t kWait       = 1u << 9;
+constexpr uint32_t kMskShift   = 6u;
+constexpr uint32_t kMskSync    = 3u;
+/* Cirrus Logic WM9713L Rev 4.0 Table 10 (page 32): 5Ch ASS 1:0 left data on slot 3, 7, 6 or 10. */
+constexpr uint32_t kRegAddFunc2 = 0x5Cu;
+constexpr uint32_t kAssLeftSlot[4] = {3u, 7u, 6u, 10u};
+/* Cirrus Logic WM9713L Rev 4.0 Table 68 (page 91): 40h LB 7; 2Ah SPSA 5:4, SEN 2; 5Ch ADCO 4. */
+constexpr uint32_t kRegGeneral = 0x40u;
+constexpr uint16_t kLb         = 1u << 7;
+constexpr uint32_t kSpsaShift  = 4u;
+constexpr uint16_t kSen        = 1u << 2;
+constexpr uint16_t kAdco       = 1u << 4;
 
 }  // namespace
 
@@ -102,21 +113,30 @@ bool Wm9713Codec::ShouldRegister() {
 
 void Wm9713Codec::OnReady() {
     Wm97xxCodec::OnReady();
+    clocks_ = &emu_.Get<Wm9713Clocks>();
     ColdReset();
 }
 
 void Wm9713Codec::ColdReset() {
     ResetRegisters();
+    gpio_int_ = false;
     digitiser_.Clear(pen_down_);
+}
+
+void Wm9713Codec::LinkStarted(uint64_t frame) {
+    Wm97xxCodec::LinkStarted(frame);
+    EvaluateGpio(frame + 1u, emu_.Get<GuestCycleClock>().Cycles());
 }
 
 void Wm9713Codec::ResetRegisters() {
     stalled_poll_ = false;
+    pen_q_        = false;
     for (uint16_t& r : reg_) r = 0u;
     for (const RegDefault& d : kDefaults) reg_[d.reg] = d.value;
+    clocks_->Reset();
     /* symbol_mk500 touch.dll FUN_022381a0 @0x022381a0 applies the reg 0x5C and
        reg 0x68 errata writes only for revision index 0. */
-    reg_[kRegRevision] = kRevisionC;
+    reg_[kReg5A] = kRevisionC;
     ResetRates();
 }
 
@@ -160,47 +180,74 @@ bool Wm9713Codec::PrClear(uint16_t pr_bit) const {
 
 bool Wm9713Codec::DacPowered() {
     const uint16_t pd = reg_[kRegPowerdown1];
-    const bool     l = (pd & kDacl) == 0u, r = (pd & kDacr) == 0u;
-    if (l != r) {
-        emu_.Get<Fatal>().Die("Wm9713Codec: register 3Ch 0x%04X powers one DAC channel; not modelled", pd);
-    }
-    const bool on = PrClear(kPr1) && l;
-    if (on && ((reg_[kRegGeneral] & kLb) != 0u || (reg_[kRegExtAudioCtrl] & kSen) != 0u ||
-               (reg_[kRegClockCtrl] & kHifiDivMask) != 0u)) {
-        emu_.Get<Fatal>().Die("Wm9713Codec: DAC on with 40h 0x%04X, 2Ah 0x%04X, 44h 0x%04X (loopback, "
-                              "S/PDIF output or a divided hi-fi clock); not modelled", reg_[kRegGeneral],
-                              reg_[kRegExtAudioCtrl], reg_[kRegClockCtrl]);
-    }
-    return on;
+    return PrClear(kPr1) && (pd & (kDacl | kDacr)) != (kDacl | kDacr);
+}
+
+/* Cirrus Logic WM9713L Rev 4.0 Figure 9 (page 19): "40h:7 (Loopback)" selects "AC'97 Link" or "ADC Left" for
+   DACL and "ADC Right" for DACR. */
+uint32_t Wm9713Codec::PcmOutChannels() {
+    if (!PrClear(kPr1) || (reg_[kRegGeneral] & kLb) != 0u) return 0u;
+    const uint16_t pd = reg_[kRegPowerdown1];
+    return ((pd & kDacl) == 0u ? kDacLeft : 0u) | ((pd & kDacr) == 0u ? kDacRight : 0u);
+}
+
+/* Cirrus Logic WM9713L Rev 4.0 page 64: SPSA "00 = Slots 3 and 4", "This control is only valid when ADCO=0 in
+   5Ch"; 3Ah SPSR "the WM9713L only supports 48kHz sampling on the S/PDIF output". */
+bool Wm9713Codec::PcmOutEveryFrame() {
+    const uint16_t ext   = reg_[kRegExtAudioCtrl];
+    const bool     spdif = (ext & kSen) != 0u && ((ext >> kSpsaShift) & 3u) == 0u &&
+                           (reg_[kRegAddFunc2] & kAdco) == 0u;
+    return spdif || PcmOutChannels() == 0u;
 }
 
 /* WM9713L Rev 4.0 page 32: "If only one ADC is running, the same ADC data appears on both the left
-   and right AC-Link slots"; Table 10: register 5Ch ASS 00 puts the ADC data on slots 3 and 4. */
+   and right AC-Link slots". */
 bool Wm9713Codec::AdcPowered() {
     const bool on = (reg_[kRegPowerdown1] & (kAdcl | kAdcr)) != (kAdcl | kAdcr);
-    if (on && (reg_[kRegAddFunc2] & kAssMask) != 0u) {
-        emu_.Get<Fatal>().Die("Wm9713Codec: register 5Ch 0x%04X moves the ADC data off slots 3 and 4; "
-                              "not modelled", reg_[kRegAddFunc2]);
-    }
-    const bool powered = PrClear(kPr0) && on;
-    if (powered && (reg_[kRegClockCtrl] & kHifiDivMask) != 0u) {
-        emu_.Get<Fatal>().Die("Wm9713Codec: ADC on with 44h 0x%04X dividing the hi-fi clock; not modelled",
-                              reg_[kRegClockCtrl]);
-    }
-    return powered;
+    return PrClear(kPr0) && on;
 }
 
-/* Cirrus Logic WM9713L Rev 4.0 Figure 35 (page 83): a GPIO status bit is the signal XNOR its polarity
-   4Eh.n, held in a set-reset latch when 50h.n is set. */
-uint16_t Wm9713Codec::GpioSlotStatus(uint64_t frame) {
-    if ((reg_[kRegGpioSticky] & kGpioPenDown) != 0u) {
-        emu_.Get<Fatal>().Die("Wm9713Codec: register 50h 0x%04X makes the pen-down GPIO sticky; not modelled",
-                              reg_[kRegGpioSticky]);
-    }
-    if ((reg_[kRegDigitiserPower] >> 14) == 0u) return 0u;
-    const bool active_high = (reg_[kRegGpioPolarity] & kGpioPenDown) != 0u;
-    return digitiser_.PenDownAt(frame) == active_high ? kGpioPenDown : 0u;
+GuestCycleClock::Rate Wm9713Codec::BitClockRate() {
+    const bool pll_on = (reg_[kRegPowerdown] & kPr5) == 0u && (reg_[kRegPowerdown1] & kPllOff) == 0u;
+    return clocks_->BitClock(reg_[kRegClockCtrl], reg_[kRegPll], pll_on);
 }
+
+uint32_t Wm9713Codec::ConverterDivider() { return clocks_->HifiDivider(reg_[kRegClockCtrl]); }
+
+uint32_t Wm9713Codec::AdcLeftSlot() { return kAssLeftSlot[reg_[kRegAddFunc2] & 3u]; }
+
+/* Cirrus Logic WM9713L Rev 4.0 Figure 35 (page 83): a GPIO status bit is the signal XNOR its polarity
+   4Eh.n, or the RSFF latch of it with STICKY 50h.n set; Table 61 (page 83): the PENDOWN signal is
+   "enabled only when pen-down detection is active". */
+uint16_t Wm9713Codec::GpioSlotStatus(uint64_t frame) {
+    const bool sticky = (reg_[kRegGpioSticky] & kGpioPenDown) != 0u;
+    const bool status = sticky ? pen_q_ && frame >= pen_q_frame_ : PenXnor(frame);
+    return status ? kGpioPenDown : 0u;
+}
+
+bool Wm9713Codec::PenXnor(uint64_t frame) const {
+    if ((reg_[kRegDigitiserPower] >> 14) == 0u) return false;
+    const bool active_high = (reg_[kRegGpioPolarity] & kGpioPenDown) != 0u;
+    return digitiser_.PenDownAt(frame) == active_high;
+}
+
+/* Cirrus Logic WM9713L Rev 4.0 Figure 35 (page 83): GPIO_INT (slot 12 bit 0) = WAKEEN AND the OR over the
+   GPIOs of (latch AND STICKY 50h.n AND WAKE-UP 52h.n); "IF WM9713L SLEEPING: WAKE UP AC-LINK"; Table 62
+   (page 84) 54h "Write = Writing 0 clears sticky bits". */
+void Wm9713Codec::EvaluateGpio(uint64_t frame, uint64_t now) {
+    if (!pen_q_ && PenXnor(frame)) {
+        pen_q_       = true;
+        pen_q_frame_ = frame;
+    }
+    const bool level = (reg_[kReg5A] & kWakeen) != 0u && pen_q_ && (reg_[kRegGpioSticky] & kGpioPenDown) != 0u &&
+                       (reg_[kRegGpioWake] & kGpioPenDown) != 0u;
+    if (level == gpio_int_) return;
+    gpio_int_ = level;
+    if (level && LinkPoweredDown()) frames_->CodecWake(now, false);
+    frames_->CodecGpioInterrupt(frame, level);
+}
+
+void Wm9713Codec::OnPenSignal(uint64_t frame, uint64_t now) { EvaluateGpio(frame, now); }
 
 uint16_t Wm9713Codec::ReadReg(uint32_t reg, uint64_t frame) {
     switch (reg) {
@@ -208,8 +255,8 @@ uint16_t Wm9713Codec::ReadReg(uint32_t reg, uint64_t frame) {
     case kRegDigitiser1:
         return static_cast<uint16_t>((reg_[reg] & ~kPoll) |
                                      (stalled_poll_ || digitiser_.Polling(frame) ? kPoll : 0u));
-    case kRegDigitiserRd: return LastResultWord(frame, reg_[kRegDigitiserRd]);
-    default:              return ReadStored(reg);
+    case kRegDigitiserRd: return ReadResultRegister(frame, reg_[kRegDigitiserRd]);
+    default:              return Peek(reg);
     }
 }
 
@@ -220,17 +267,15 @@ void Wm9713Codec::WriteReg(uint32_t reg, uint16_t value, uint64_t frame) {
     if (reg == kRegReset) {
         ResetRegisters();
         Reconfigure(frame, false);
+        EvaluateGpio(frame + 1u, emu_.Get<GuestCycleClock>().Cycles());
         return;
     }
-    if (reg == kRegClockCtrl && (value & kClkPathMask) != kClkPathDefault) {
-        emu_.Get<Fatal>().Die("Wm9713Codec: register 44h 0x%04X changes the AC97 CLK that generates BITCLK; "
-                              "not modelled", value);
-    }
-    if (reg == kRegDigitiserRd) {
-        emu_.Get<Fatal>().Die("Wm9713Codec: write 0x%04X to the read-only register 7Ah", value);
-    }
+    /* Cirrus Logic WM9713L Rev 4.0 page 122: "Registers 7Ah is a read-only register". */
+    if (reg == kRegDigitiserRd) return;
     if (WriteRateRegister(reg, value)) return;
     reg_[reg] = value;
+    if (reg == kRegPll) clocks_->WritePager(value);
+    if (reg == kRegGpioStatus && (value & kGpioPenDown) == 0u) pen_q_ = false;
     if (reg == kRegExtAudioCtrl) OnExtAudioCtrlWrite();
     if (reg == kRegDigitiser1) {
         stalled_poll_ = false;
@@ -240,6 +285,19 @@ void Wm9713Codec::WriteReg(uint32_t reg, uint16_t value, uint64_t frame) {
     if (reg == kRegDigitiser1 || reg == kRegDigitiser2 || reg == kRegDigitiserPower || reg == kRegPowerdown1) {
         Reconfigure(frame, reg == kRegDigitiser1 && (value & kPoll) != 0u);
     }
+    if (reg == kRegGpioPolarity || reg == kRegGpioSticky || reg == kRegGpioWake || reg == kRegGpioStatus ||
+        reg == kReg5A || reg == kRegDigitiserPower) {
+        EvaluateGpio(frame + 1u, emu_.Get<GuestCycleClock>().Cycles());
+    }
+}
+
+/* Cirrus Logic WM9713L Rev 4.0 page 72: in polling-coordinate mode "an X co-ordinate, then a Y
+   co-ordinate, followed by a single additional measurement determined by ADCSEL[7:1], then stops"; in
+   continuous-coordinate mode the additional measurement "alternates for every set of three". */
+void Wm9713Codec::AddCoordinateSet(Wm97xxDigitiser::Sequence& seq, uint8_t extra) {
+    seq.Add(kSrcX, kResultFrames);
+    seq.Add(kSrcY, kResultFrames);
+    if (extra != 0u) seq.Add(extra, FramesFor(extra == kSrcPressure));
 }
 
 /* Cirrus Logic WM9713L Rev 4.0 Table 48 (page 71) PDEN: "when CTC=1, measurements are stopped on
@@ -249,53 +307,61 @@ void Wm9713Codec::Reconfigure(uint64_t frame, bool poll) {
     const uint16_t d74 = reg_[kRegDigitiser1];
     const uint16_t d76 = reg_[kRegDigitiser2];
     const uint16_t d78 = reg_[kRegDigitiserPower];
-    if ((d78 & (kWait | kMskMask)) != 0u) {
-        emu_.Get<Fatal>().Die("Wm9713Codec: register 78h 0x%04X sets WAIT or MSK; not modelled", d78);
-    }
     const bool powered = DigitiserPowered() && (reg_[kRegPowerdown1] & kPadcpd) == 0u;
-    if ((d76 & kSlen) != 0u && (d76 & 7u) != 0u) {
-        emu_.Get<Fatal>().Die("Wm9713Codec: register 76h 0x%04X routes digitiser data to slot %u; not modelled",
-                              d76, 5u + (d76 & 7u));
+    const bool runs    = powered && ((d78 >> kMskShift) & 3u) != kMskSync;
+    const uint32_t del = (d76 >> 4) & 0xFu;
+    /* Cirrus Logic WM9713L Rev 4.0 page 76: with DEL 1111 "the WM9713L behaves as if COO = 0". */
+    const bool coo = (d74 & kCoo) != 0u && del != kDelNone;
+    uint8_t  selected[7] = {};
+    uint32_t n = 0u;
+    for (uint8_t b = 1u; b <= 7u; ++b) {
+        if ((d74 & kSelMask & (1u << b)) != 0u) selected[n++] = b;
     }
     Wm97xxDigitiser::Sequence seq;
-    seq.to_slot = (d76 & kSlen) != 0u;
-    for (uint8_t b = 1u; b <= 7u; ++b) {
-        if ((d74 & (1u << b)) != 0u) seq.tags[seq.count++] = b;
-    }
+    seq.slot = RouteSlot(d76);
+    /* Cirrus Logic WM9713L Rev 4.0 page 74: "the WM9713L can delay overwriting register 7Ah with new
+       conversions until the old data has been read"; page 77: ADA stays high until "sent out on an AC-Link
+       slot (if SLEN = 1)". */
+    seq.hold = (d78 & kWait) != 0u && !SlotMode(d76);
     /* Cirrus Logic WM9713L Rev 4.0 page 70: POLL "automatically resets itself when the measurement is
        completed"; Table 47: PRP 01 "Pen digitiser powered off". */
-    if (poll || (stalled_poll_ && powered)) {
-        if ((d74 & (kCtc | kCoo)) != 0u || seq.count == 0u || ((d78 & kPden) != 0u && !pen_down_)) {
-            emu_.Get<Fatal>().Die("Wm9713Codec: polled conversion with 74h 0x%04X, 78h 0x%04X, 3Ch 0x%04X; "
-                                  "not modelled", d74, d78, reg_[kRegPowerdown1]);
+    if (poll || (stalled_poll_ && runs)) {
+        if (coo) {
+            AddCoordinateSet(seq, n != 0u ? selected[0] : 0u);
+        } else if (n != 0u) {
+            seq.Add(selected[0], FramesFor(selected[0] == kSrcPressure));
         }
-        stalled_poll_ = !powered;
-        if (!powered) {
+        seq.group     = seq.count;
+        stalled_poll_ = !runs && seq.count != 0u;
+        if (!runs || seq.count == 0u) {
             digitiser_.SetContinuous(frame, nullptr);
             return;
         }
-        seq.delay = DelayFrames((d76 >> 4) & 0xFu, d76);
-        digitiser_.StartPolled(frame, seq, seq.count > 1u);
+        digitiser_.StartPolled(frame, seq);
         return;
     }
-    if ((d74 & kCtc) == 0u || !powered) {
+    if (coo && n == 0u) {
+        AddCoordinateSet(seq, 0u);
+    } else if (coo) {
+        for (uint32_t i = 0u; i < n; ++i) AddCoordinateSet(seq, selected[i]);
+    } else {
+        for (uint32_t i = 0u; i < n; ++i) seq.Add(selected[i], FramesFor(selected[i] == kSrcPressure));
+    }
+    seq.group = coo && n != 0u ? 3u : seq.count;
+    if ((d74 & kCtc) == 0u || !runs || seq.count == 0u) {
         digitiser_.SetContinuous(frame, nullptr);
         return;
     }
-    if ((d74 & kCoo) != 0u || seq.count == 0u || (d74 & kSelMask & ~kSelXy) != 0u) {
-        emu_.Get<Fatal>().Die("Wm9713Codec: continuous conversion with 74h 0x%04X other than X and Y; "
-                              "not modelled", d74);
-    }
-    seq.delay     = DelayFrames((d76 >> 4) & 0xFu, d76);
-    seq.period    = kCrFrames[(d76 >> 8) & 3u];
+    const uint32_t cr = (d76 >> 8) & 3u;
+    seq.period    = del == kDelNone ? FastRateFrames(cr) : kCrFrames[cr];
     seq.pen_gated = (d78 & kPden) != 0u;
     digitiser_.SetContinuous(frame, &seq);
 }
 
 uint16_t Wm9713Codec::ConversionData(uint8_t tag) {
     switch (tag) {
-    case kSrcX: return RawX();
-    case kSrcY: return RawY();
+    case kSrcX:        return RawX();
+    case kSrcY:        return RawY();
     default:
         emu_.Get<Fatal>().Die("Wm9713Codec: conversion of ADC source %u; not modelled", tag);
     }
@@ -304,15 +370,25 @@ uint16_t Wm9713Codec::ConversionData(uint8_t tag) {
 void Wm9713Codec::SaveState(StateWriter& w) {
     w.WriteBytes("reg", reg_, sizeof(reg_));
     w.Write<uint8_t>("stalled_poll", stalled_poll_ ? 1u : 0u);
+    w.Write<uint8_t>("gpio_pen_q", pen_q_ ? 1u : 0u);
+    w.Write<uint64_t>("gpio_pen_q_frame", pen_q_frame_);
+    w.Write<uint8_t>("gpio_int", gpio_int_ ? 1u : 0u);
+    clocks_->Save(w);
     SaveRates(w);
     SavePen(w);
 }
 
 void Wm9713Codec::RestoreState(StateReader& r) {
-    uint8_t stalled = 0;
+    uint8_t stalled = 0, pen_q = 0, gpio_int = 0;
     r.ReadBytes("reg", reg_, sizeof(reg_));
     r.Read("stalled_poll", stalled);
+    r.Read("gpio_pen_q", pen_q);
+    r.Read("gpio_pen_q_frame", pen_q_frame_);
+    r.Read("gpio_int", gpio_int);
     stalled_poll_ = stalled != 0u;
+    pen_q_        = pen_q != 0u;
+    gpio_int_     = gpio_int != 0u;
+    clocks_->Restore(r);
     RestoreRates(r);
     RestorePen(r);
 }

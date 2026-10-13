@@ -9,9 +9,11 @@
 #include "../../state/state_stream.h"
 #include "../pxa255/pxa255_id.h"
 #include "../pxa27x/pxa270_id.h"
+#include "pxa2xx_ac97_interrupt.h"
 #include "pxa2xx_dma.h"
 #include "pxa2xx_slot_source.h"
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -38,14 +40,11 @@ void Pxa2xxAc97InFifo::OnReady() {
     clock_ = &emu_.Get<GuestCycleClock>();
     dma_   = &emu_.Get<Pxa2xxDma>();
     mem_   = &emu_.Get<EmulatedMemory>();
+    irq_   = &emu_.Get<Pxa2xxAc97Interrupt>();
     link_->AddListener(this);
     fifo_.Configure(kDepth, kFreeThreshold, kRequestLevel);
     fifo_.Restore(kDepth, 0u);
-    if (codec_ != nullptr) {
-        dma_->RegisterPort(Request(), this);
-    } else {
-        dma_->RegisterUnmodelledRequest(Request(), NoCodecName());
-    }
+    if (codec_ != nullptr) dma_->RegisterPort(Request(), this);
 }
 
 void Pxa2xxAc97InFifo::Discard(bool cold) {
@@ -53,7 +52,6 @@ void Pxa2xxAc97InFifo::Discard(bool cold) {
     while (held_.size() > pending) held_.pop_back();
     fifo_.Restore(kDepth, fifo_.Moved());
     fifo_.SetSupply(0u);
-    dma_serving_ = false;
     if (!cold) return;
     error_ = false;
     eoc_   = false;
@@ -88,6 +86,13 @@ bool Pxa2xxAc97InFifo::ServiceRequest() const {
     return link_->RequestsEnabled() && fifo_.Level() <= fifo_.Threshold();
 }
 
+bool Pxa2xxAc97InFifo::RequestAsserted() const { return link_->DmaRequestsEnabled() && ServiceRequest(); }
+
+uint64_t Pxa2xxAc97InFifo::NextRequestCycle(uint64_t now) {
+    if (!link_->DmaRequestsEnabled()) return kNoRise;
+    return NextStatusCycle(now, kFsr);
+}
+
 uint32_t Pxa2xxAc97InFifo::Status(uint64_t now) {
     Settle(now);
     uint32_t s = error_ ? kFifoe : 0u;
@@ -105,35 +110,38 @@ void Pxa2xxAc97InFifo::ClearStatus(uint64_t now, uint32_t mask) {
     if ((mask & (kFifoe | kEoc)) == kEoc) eoc_ = false;
 }
 
-/* Intel PXA27x Developer's Manual Table 13-22 (page 13-38) FIFOE: "Receive FIFO underrun occurs.
-   Invalid data is read by the CPU. Pointers do not increment." */
-uint16_t Pxa2xxAc97InFifo::ReadData(uint64_t now, const char* reg) {
-    if (codec_ == nullptr) {
-        emu_.Get<Fatal>().Die("Pxa2xxAc97InFifo: %s read with no AC'97 codec on this board; not modelled", reg);
-    }
+uint16_t Pxa2xxAc97InFifo::ReadData(uint64_t now, bool underrun_is_error) {
+    link_->RequireCodec(KeyPrefix(), "read");
     Settle(now);
-    if (dma_serving_) {
-        emu_.Get<Fatal>().Die("Pxa2xxAc97InFifo: %s read by programmed I/O while DMA serves the FIFO; "
-                              "not modelled", reg);
-    }
     if (Filled() == 0u) {
-        error_ = true;
+        if (underrun_is_error) error_ = true;
         return 0u;
     }
+    const uint64_t taken_by_dma = fifo_.Moved() - written_;
     fifo_.Put();
     if (!KeepsValues()) return 0u;
-    const uint16_t v = held_.front();
-    held_.pop_front();
+    const auto     next = held_.begin() + static_cast<std::ptrdiff_t>(taken_by_dma);
+    const uint16_t v    = *next;
+    held_.erase(next);
     return v;
 }
 
 void Pxa2xxAc97InFifo::SetService(uint64_t now, uint32_t burst_words, uint64_t supply_words) {
     Settle(now);
-    const uint64_t supply = link_->RequestsEnabled() ? supply_words : 0u;
+    const uint64_t supply = link_->DmaRequestsEnabled() ? supply_words : 0u;
     fifo_.Configure(kDepth, kFreeThreshold, burst_words);
     fifo_.SetSupply(supply);
     fifo_.Refill();
-    dma_serving_ = supply != 0u;
+    irq_->Kick();
+}
+
+bool Pxa2xxAc97InFifo::PushCycle(uint64_t m, uint64_t& cycle) {
+    if (!link_->Running()) return false;
+    Pxa2xxSlotSource& source = Source();
+    uint64_t          frame  = 0;
+    if (!source.FrameOfSlot(source.Count(frames_) + m, frame)) return false;
+    cycle = link_->CycleOfFrame(frame + 1u);
+    return true;
 }
 
 bool Pxa2xxAc97InFifo::CycleOfMoved(uint64_t words, uint64_t& cycle) {
@@ -143,15 +151,26 @@ bool Pxa2xxAc97InFifo::CycleOfMoved(uint64_t words, uint64_t& cycle) {
         cycle = clock_->Cycles();
         return true;
     }
-    if (!link_->Running()) return false;
-    Pxa2xxSlotSource& source = Source();
-    uint64_t          frame  = 0;
-    if (!source.FrameOfSlot(source.Count(frames_) + m, frame)) return false;
-    cycle = link_->CycleOfFrame(frame + 1u);
-    return true;
+    return PushCycle(m, cycle);
 }
 
-void Pxa2xxAc97InFifo::TransmitBlock(uint32_t pa, uint32_t bytes) {
+/* Intel PXA27x Developer's Manual Table 13-9 (page 13-24) PIINT: an interrupt when "PICR[FEIE] is 0b1 and
+   PISR[FIFOE] is 0b1", "PICR[FSRIEIE] is 0b1 and PISR[FSR] is 0b1" or "PISR[EOC] is 0b1". */
+uint64_t Pxa2xxAc97InFifo::NextStatusCycle(uint64_t now, uint32_t watched) {
+    Settle(now);
+    uint64_t       at   = Pxa2xxAc97Link::kNever;
+    const uint64_t left = fifo_.TakesBeforeEmpty();
+    if (left == DmaBurstFifo::kUnlimited) return at;
+    uint64_t c = 0;
+    if ((watched & kFifoe) != 0u && !error_ && PushCycle(left + 1u, c)) at = c;
+    if ((watched & kFsr) != 0u && link_->RequestsEnabled() && !ServiceRequest() &&
+        PushCycle(left - kFreeThreshold, c) && c < at) {
+        at = c;
+    }
+    return at;
+}
+
+void Pxa2xxAc97InFifo::TransmitBlock(uint32_t pa, uint32_t bytes, bool) {
     emu_.Get<Fatal>().Die("Pxa2xxAc97InFifo: transmit block of %u bytes at 0x%08X on a receive FIFO", bytes, pa);
 }
 
@@ -171,8 +190,8 @@ void Pxa2xxAc97InFifo::ReceiveBlock(uint32_t pa, uint32_t bytes) {
    hardware when DMA signals an end of descriptor chain (EOC) while reading data from the FIFO." */
 void Pxa2xxAc97InFifo::Stopped(uint64_t now, bool end_of_chain) {
     Settle(now);
-    dma_serving_ = false;
     if (end_of_chain) eoc_ = true;
+    irq_->Kick();
 }
 
 void Pxa2xxAc97InFifo::OnLinkRun(uint64_t) {
@@ -226,7 +245,6 @@ void Pxa2xxAc97InFifo::Restore(StateReader& r) {
     for (uint16_t& v : held_) r.Read((p + "_held_value").c_str(), v);
     fifo_.Restore(free, moved);
     fifo_.SetSupply(0u);
-    dma_serving_ = false;
     error_       = error != 0u;
     eoc_         = eoc != 0u;
 }

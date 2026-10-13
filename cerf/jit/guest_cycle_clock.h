@@ -45,6 +45,7 @@ public:
             const uint64_t g = std::gcd(num, den);
             return Rate{num / g, den / g};
         }
+        uint64_t RoundedHz() const { return (num + den / 2u) / den; }
     };
 
     void OnReady() override;

@@ -30,7 +30,7 @@ public:
     }
 
     void OnReady() override {
-        codec_ = &emu_.Get<Wm9713Codec>();
+        codec_ = &static_cast<Wm9713Codec&>(emu_.Get<Ac97Codec>());
         gpio_  = &emu_.Get<Pxa27xGpio>();
         gpio_->SetInputLevel(kGpioPenDown, true);
         codec_->SetPenLineObserver([this](bool down) { gpio_->SetInputLevel(kGpioPenDown, !down); });

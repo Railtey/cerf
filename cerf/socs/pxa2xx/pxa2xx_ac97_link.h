@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <vector>
 
+class Pxa2xxAc97BitClock;
 class StateReader;
 class StateWriter;
 
@@ -31,6 +32,7 @@ public:
     static constexpr uint64_t kBitClockHz   = 12288000u;
     static constexpr uint64_t kBitsPerFrame = 256u;
     static constexpr uint32_t kFrameRateHz  = static_cast<uint32_t>(kBitClockHz / kBitsPerFrame);
+    static constexpr uint64_t kNever        = UINT64_MAX;
 
     bool ShouldRegister() override;
     void OnReady() override;
@@ -39,34 +41,43 @@ public:
 
     bool FrameAt(uint64_t cycle, uint64_t& frame) const override;
     void OnCodecStreamChange() override;
+    void CodecWake(uint64_t cycle, bool codec_restarts) override;
+    void CodecGpioInterrupt(uint64_t frame, bool level) override;
 
     void     Settle(uint64_t now);
     bool     Running() const { return running_; }
     bool     RequestsEnabled() const { return cold_released_ && !requests_off_; }
+    bool     DmaRequestsEnabled() const { return RequestsEnabled() && !dma_masked_; }
+    void     SetDmaRequestsMasked(bool masked) { dma_masked_ = masked; }
     uint64_t FrameIndexAt(uint64_t cycle) const { return bits_.TicksAt(cycle) / kBitsPerFrame; }
     uint64_t CycleOfFrame(uint64_t frame) const { return bits_.CycleOfTick(frame * kBitsPerFrame); }
 
     void SetColdReset(uint64_t now, bool asserted);
+    void SetCodecResetPin(uint64_t now, bool asserted);
     void SetLinkOff(uint64_t now, bool off, bool discard_fifos);
     bool WarmReset(uint64_t now);
-    bool ClockStartPending() const { return start_pending_; }
-    bool WarmResetPending() const { return start_pending_ && warm_start_; }
 
     static bool InCodecWindow(uint32_t off) { return off >= kCodecBase && off < kCodecEnd; }
     uint32_t    CodecWindowRead(uint64_t now, uint32_t off);
     void        CodecWindowWrite(uint64_t now, uint32_t off, uint16_t value);
     bool        ReadCar(uint64_t now);
-    void     ClearCar(uint64_t now);
+    void        WriteCar(uint64_t now, bool caip);
+
+    void SetReadTimeoutValue(uint32_t value) { timeout_value_ = value; }
+    void RequireCodec(const char* fifo, const char* access);
 
     bool CommandDone(uint64_t now);
     bool StatusDone(uint64_t now);
+    bool ReadTimedOut(uint64_t now);
     bool CodecReady(uint64_t now);
-    void ClearDone(uint64_t now, bool command, bool status);
+    bool ResumeEvent(uint64_t now);
+    bool GpioStatus(uint64_t now);
+    void ClearDone(uint64_t now, bool command, bool status, bool timeout, bool resume, bool gpio);
+    uint64_t NextGpioStatusCycle(uint64_t now);
 
     void ResetLine();
     void Save(StateWriter& w);
     void Restore(StateReader& r);
-    void PostRestore();
 
 private:
     enum class Cmd : uint8_t { None = 0, Write = 1, Read = 2 };
@@ -75,53 +86,47 @@ private:
     static constexpr uint32_t kCodecEnd    = 0x600u;
     static constexpr uint32_t kModemWindow = 0x200u;
 
-    uint32_t PrimaryCodecReg(uint32_t off);
-    uint32_t CodecRead(uint64_t now, uint32_t reg);
-    void     CodecWrite(uint64_t now, uint32_t reg, uint16_t value);
+    static bool SecondaryWindow(uint32_t off);
+    uint32_t CodecRead(uint64_t now, uint32_t reg, bool absent);
+    void     CodecWrite(uint64_t now, uint32_t reg, uint16_t value, bool absent);
 
     void UpdateRun(uint64_t now);
     void AssertColdReset(uint64_t now);
-    void     ArmStart(uint64_t now, uint64_t delay_ps, bool warm);
-    uint64_t Rescaled(uint64_t at, GuestCycleClock::Rate from, uint64_t now) const;
-    void     OnStartEvent();
-    uint64_t PsToCycles(uint64_t ps) const;
-    uint64_t CyclesToPs(uint64_t cycles) const;
-    void FrameCommand(uint64_t now);
+    void OnBitClock(uint64_t at);
+    void SetBitRate(uint64_t now, bool rescale);
     void CompleteCommand(uint64_t at);
-    void ArmCommand();
     void OnCpuRate();
     void NotifyEvent();
-    void RequireIdle(const char* op, uint32_t reg);
 
-    GuestCycleClock*        clock_    = nullptr;
-    GuestCycleClock::Event* cmd_ev_    = nullptr;
+    GuestCycleClock*        clock_     = nullptr;
     GuestCycleClock::Event* notify_ev_ = nullptr;
-    GuestCycleClock::Event* start_ev_  = nullptr;
-    GuestCycleClock::Rate   start_rate_;
-    GuestCycleClock::Rate   pd_wait_rate_;
-    Ac97Codec*              codec_    = nullptr;
+    Ac97Codec*              codec_     = nullptr;
+    Pxa2xxAc97BitClock*     bit_clock_ = nullptr;
     std::vector<Pxa2xxAc97LinkListener*> listeners_;
     RatedTickCount          bits_;
+    GuestCycleClock::Rate   bits_rate_;
 
     bool     cold_released_ = false;
-    bool     bitclk_        = false;
+    bool     reset_pin_     = false;
     bool     off_           = false;
     bool     requests_off_  = false;
+    bool     dma_masked_    = false;
     bool     running_       = false;
+    bool     stopping_      = false;
     bool     ready_         = false;
     Cmd      cmd_           = Cmd::None;
-    bool     cmd_framed_    = false;
+    bool     cmd_absent_    = false;
     uint32_t cmd_reg_       = 0;
     uint16_t cmd_value_     = 0;
-    uint64_t cmd_done_bit_  = 0;
-    uint16_t latch_         = 0;
+    uint32_t latch_         = 0;
+    uint32_t timeout_value_ = 0;
     bool     cdone_         = false;
     bool     sdone_         = false;
+    bool     rdcs_          = false;
     bool     caip_          = false;
-    bool     start_pending_ = false;
-    bool     warm_start_    = false;
-    uint64_t start_at_      = 0;
-    uint64_t start_left_ps_ = 0;
-    bool     pd_wait_       = false;
-    uint64_t pd_wait_at_    = 0;
+    bool     resume_        = false;
+    bool     gpi_           = false;
+    bool     gsci_          = false;
+    uint64_t gpi_frame_     = 0;
+    uint16_t gpio_shadow_   = 0;
 };

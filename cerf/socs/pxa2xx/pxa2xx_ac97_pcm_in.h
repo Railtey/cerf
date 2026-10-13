@@ -16,7 +16,6 @@ public:
 protected:
     uint32_t          FifoPa() const override;
     uint32_t          Request() const override;
-    const char*       NoCodecName() const override { return "AC'97 PCM in with no AC'97 codec"; }
     const char*       KeyPrefix() const override { return "pcm_in"; }
     Pxa2xxSlotSource& Source() override { return law_; }
     bool              KeepsValues() const override { return false; }
@@ -25,7 +24,7 @@ protected:
     void              OnWrite(uint64_t next_frame) override;
 
 private:
-    uint32_t Rate();
+    Pxa2xxSlotPace Pace();
 
     Pxa2xxFrameSlotLaw law_{Pxa2xxAc97Link::kFrameRateHz};
 };

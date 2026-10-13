@@ -1,8 +1,8 @@
-#include "../pxa2xx/pxa2xx_dma.h"
+#include "../pxa2xx/pxa2xx_dma_moves.h"
+#include "../pxa2xx/pxa2xx_dma_port.h"
 
 #include "../../boards/board_context.h"
 #include "../../core/cerf_emulator.h"
-#include "../../core/fatal.h"
 #include "../../peripherals/peripheral_dispatcher.h"
 #include "../../state/state_stream.h"
 #include "../guest_cpu_reset.h"
@@ -10,7 +10,6 @@
 
 #include <cstdint>
 #include <cstring>
-#include <mutex>
 
 namespace {
 
@@ -41,9 +40,9 @@ enum : uint32_t {
     kOffDdadr = 0x0u, kOffDsadr = 0x4u, kOffDtadr = 0x8u,
 };
 
-class Pxa27xDma : public Pxa2xxDma {
+class Pxa27xDma : public Pxa2xxDmaMoves {
 public:
-    using Pxa2xxDma::Pxa2xxDma;
+    using Pxa2xxDmaMoves::Pxa2xxDmaMoves;
 
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
@@ -64,17 +63,17 @@ public:
     uint32_t MmioSize() const override { return 0x00100000u; }
 
     uint32_t ReadWord(uint32_t addr) override {
-        std::lock_guard<std::mutex> lk(state_mutex_);
+        Locked lk(*this);
         return ReadRegLocked(addr);
     }
 
     void WriteWord(uint32_t addr, uint32_t value) override {
-        std::lock_guard<std::mutex> lk(state_mutex_);
+        Locked lk(*this);
         WriteRegLocked(addr, value);
     }
 
     void SaveState(StateWriter& w) override {
-        std::lock_guard<std::mutex> lk(state_mutex_);
+        Locked lk(*this);
         SaveChannels(w);
         w.WriteBytes("drcmr_lo", drcmr_lo_, sizeof(drcmr_lo_));
         w.WriteBytes("drcmr_hi", drcmr_hi_, sizeof(drcmr_hi_));
@@ -84,7 +83,7 @@ public:
     }
 
     void RestoreState(StateReader& r) override {
-        std::lock_guard<std::mutex> lk(state_mutex_);
+        Locked lk(*this);
         RestoreChannels(r);
         r.ReadBytes("drcmr_lo", drcmr_lo_, sizeof(drcmr_lo_));
         r.ReadBytes("drcmr_hi", drcmr_hi_, sizeof(drcmr_hi_));
@@ -94,7 +93,7 @@ public:
     }
 
     void PostRestore() override {
-        std::lock_guard<std::mutex> lk(state_mutex_);
+        Locked lk(*this);
         PostRestoreChannelsLocked();
     }
 
@@ -120,7 +119,50 @@ protected:
     bool ChannelIrq(uint32_t ch) const override {
         const uint32_t d = dcsr_[ch];
         if (d & (BUSERRINTR | STARTINTR | ENDINTR)) return true;
+        if ((d & EORINT) && (d & EORIRQEN)) return true;
+        if ((d & RASINTR) && (d & RASIRQEN)) return true;
         return ChannelStoppedLocked(ch) && (d & STOPIRQEN);
+    }
+
+    uint32_t MoveAddressLocked(uint32_t ch, uint32_t pa) override { return AlignBaseLocked(ch, pa); }
+
+    bool DiscardsEmptyDescriptor() const override { return true; }
+
+    /* Intel PXA27x Developer's Manual section 5.5.3 (page 5-33): "DSADR cannot contain addresses of any other
+       internal DMA registers, as they will cause a bus error."; section 5.5.4 (page 5-34) states the same of
+       DTADR. */
+    bool MoveBusErrorLocked(uint32_t pa, bool) override { return pa - MmioBase() < MmioSize(); }
+
+    /* Intel PXA27x Developer's Manual section 5.5.2 (page 5-31): "DDADRx must not contain the address of any
+       other internal peripheral register or DMA register, which causes a bus error." */
+    bool DescriptorInMemoryOnly() const override { return true; }
+    bool CompareEnabled(uint32_t dcmd) const override { return (dcmd & CMPEN) != 0u; }
+    bool CompareImmediate(uint32_t dcmd) const override { return (dcmd & ADDRMODE) != 0u; }
+
+    void SetCompareStatusLocked(uint32_t ch, bool equal) override {
+        if (equal) {
+            dcsr_[ch] |= CMPST;
+        } else {
+            dcsr_[ch] &= ~CMPST;
+        }
+    }
+
+    /* Section 5.4.6 (page 5-19) RAS: "This bit is set when a peripheral asserts a DMA request after the
+       channel to which the peripheral is mapped has stopped"; Table 5-18 (page 5-45) STOPINTR "1 = The
+       channel is in uninitialized or stopped state". */
+    void RequestAfterStopLocked(uint64_t now, uint64_t& next) override {
+        for (uint32_t r = 0; r < kMaxRequests; ++r) {
+            uint32_t       ch   = 0;
+            Pxa2xxDmaPort* port = MappedPortOf(r, ch);
+            if (port == nullptr || (dcsr_[ch] & RASINTR) != 0u || !ChannelStoppedLocked(ch)) continue;
+            port->Settle(now);
+            if (port->RequestAsserted()) {
+                dcsr_[ch] |= RASINTR;
+                continue;
+            }
+            const uint64_t rise = port->NextRequestCycle(now);
+            if (rise < next) next = rise;
+        }
     }
 
 private:
@@ -131,15 +173,16 @@ private:
                               MASKRUN  = 1u << 22, CMPST     = 1u << 10,
                               EORINT   = 1u <<  9,
                               RASINTR  = 1u <<  4, STOPINTR  = 1u <<  3;
-    static constexpr uint32_t kDcsrRw = RUN | NODESCFETCH | STOPIRQEN | CMPST;
-    static constexpr uint32_t kDcsrW1c = EORINT | ENDINTR | STARTINTR | BUSERRINTR;
-    /* Table 5-18 (pages 5-42, 5-43, 5-45): RASIrqEn "when a peripheral asserts a DMA request after the
-       channel has stopped", RASIntr; EORIRQEN, EORJMPEN, EORSTOPEN act "when the mapped peripheral
-       signals an EOR". */
-    static constexpr uint32_t kDcsrUnmodelled = EORIRQEN | EORJMPEN | EORSTOPEN | RASIRQEN | RASINTR;
+    static constexpr uint32_t kDcsrRw = RUN | NODESCFETCH | STOPIRQEN | EORIRQEN | EORJMPEN | EORSTOPEN |
+                                        RASIRQEN | CMPST;
+    /* Section 5.5.9 (page 5-48): "All DMA controller interrupts, except the one that corresponds to
+       DCSRx[STOPINTR], are cleared when software sets the respective error bit". */
+    static constexpr uint32_t kDcsrW1c = EORINT | RASINTR | ENDINTR | STARTINTR | BUSERRINTR;
 
     /* Table 5-15 (pages 5-35 through 5-38) DCMD0-31 bit definitions. */
     static constexpr uint32_t kDcmdMask = 0xF2FBDFFFu;
+    static constexpr uint32_t CMPEN = 1u << 25, ADDRMODE = 1u << 23;
+    static constexpr uint32_t kAlignExternal = 0xFFFFFFF8u, kAlignPeripheral = 0xFFFFFFFCu;
 
     /* Table 5-12 (page 5-32) DDADR0-31 "31:4 R/W Descriptor Address", "1 R/W
        BREN", "0 R/W STOP". */
@@ -165,13 +208,13 @@ private:
 
     /* Table 5-11 (page 5-31) MAPVLD and CHLNUM reset 0; Table 5-20 (page 5-49) DALGN reset 0. */
     void ResetLine() {
-        std::lock_guard<std::mutex> lk(state_mutex_);
-        ResetChannelsLocked();
+        Locked lk(*this);
         std::memset(drcmr_lo_, 0, sizeof(drcmr_lo_));
         std::memset(drcmr_hi_, 0, sizeof(drcmr_hi_));
         drcmr74_ = 0;
         dalgn_   = 0;
         dpcsr_   = kDpcsrReset;
+        ResetChannelsLocked();
     }
 
     /* Table 5-18 (page 5-45) "3 R STOPINTR ... 0 = The channel is running / 1 = The
@@ -240,21 +283,21 @@ private:
             /* Table 5-13 (page 5-33) "31:2 R/W SRCADDR", "2 R/W SRCADDR or
                reserved", "1:0 R/W SRCADDR or reserved". */
             case kOffDsadr:
-                if (!DescriptorFetchModeLocked(ch)) dsadr_[ch] = value;
+                if (!DescriptorFetchModeLocked(ch)) WriteTransferLocked(dsadr_, ch, value);
                 return;
             /* Table 5-14 (page 5-34) "31:2 R/W TRGADDR", "2 R/W TRGADDR or
                reserved", "1:0 R/W TRGADDR or reserved". */
             case kOffDtadr:
-                if (!DescriptorFetchModeLocked(ch)) dtadr_[ch] = value;
+                if (!DescriptorFetchModeLocked(ch)) WriteTransferLocked(dtadr_, ch, value);
                 return;
             default:
-                if (!DescriptorFetchModeLocked(ch)) dcmd_[ch] = value & kDcmdMask;
+                if (!DescriptorFetchModeLocked(ch)) WriteTransferLocked(dcmd_, ch, value & kDcmdMask);
                 return;
             }
         }
         if (uint8_t* slot = DrcmrSlot(off)) {
-            RequireMappingStableLocked(DrcmrIndex(off), value & kDrcmrMask);
             *slot = static_cast<uint8_t>(value & kDrcmrMask);
+            DrcmrWrittenLocked(DrcmrIndex(off));
             return;
         }
         switch (off) {
@@ -271,10 +314,6 @@ private:
     }
 
     void WriteDcsrLocked(uint32_t ch, uint32_t value) {
-        if ((value & kDcsrUnmodelled) != 0u) {
-            emu_.Get<Fatal>().Die("Pxa27xDma ch%u: DCSR write 0x%08X sets a request-after-stop or end-of-receive "
-                                  "control; not modelled", ch, value);
-        }
         uint32_t cur = dcsr_[ch] & ~(value & kDcsrW1c);
         const bool was_run = (cur & RUN) != 0;
         /* Table 5-18 (page 5-43) "1 = Software (programmed I/O write) cannot modify
@@ -300,6 +339,11 @@ private:
         return d;
     }
 
+    uint32_t AlignBaseLocked(uint32_t ch, uint32_t pa) {
+        if (dalgn_ & (1u << ch)) return pa;
+        const bool peripheral = emu_.Get<PeripheralDispatcher>().IsPeripheralAddress(pa);
+        return pa & (peripheral ? kAlignPeripheral : kAlignExternal);
+    }
 };
 
 }  // namespace

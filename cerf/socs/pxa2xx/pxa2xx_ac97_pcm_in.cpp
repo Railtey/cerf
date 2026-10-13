@@ -11,6 +11,7 @@ namespace {
    0x4000_012c. */
 constexpr uint32_t kPcdr      = 0x40500040u;
 constexpr uint32_t kRequestRx = 11u;
+constexpr uint32_t kLeftSlot  = 3u;
 
 }  // namespace
 
@@ -23,17 +24,22 @@ uint16_t Pxa2xxAc97PcmIn::SlotValue(uint64_t n) {
 }
 
 /* AC '97 Component Specification Revision 2.1 Appendix A.3.1 (page 63): "For variable sample rate
-   input, the tag bit for each input slot indicates whether valid data is present or not." */
-uint32_t Pxa2xxAc97PcmIn::Rate() { return codec_->AdcPowered() ? codec_->AdcRateHz() : 0u; }
+   input, the tag bit for each input slot indicates whether valid data is present or not"; Intel PXA255
+   Developer's Manual section 13.4.2.4 (page 13-11): "Slot 3 contains the CODEC left channel output". */
+Pxa2xxSlotPace Pxa2xxAc97PcmIn::Pace() {
+    if (!codec_->AdcPowered() || codec_->AdcLeftSlot() != kLeftSlot) return Pxa2xxSlotPace{0u, 1u};
+    return Pxa2xxSlotPace{codec_->AdcRateHz(), codec_->ConverterDivider()};
+}
 
-void Pxa2xxAc97PcmIn::OnRun() { law_.Reset(0u, Rate()); }
+void Pxa2xxAc97PcmIn::OnRun() { law_.Reset(0u, Pace()); }
 
 void Pxa2xxAc97PcmIn::OnWrite(uint64_t next_frame) {
-    const uint32_t rate = Rate();
-    if (rate != law_.RateAt(next_frame)) {
-        LOG(SocIis, "AC'97 PCM in %u Hz from frame %llu\n", rate, static_cast<unsigned long long>(next_frame));
+    const Pxa2xxSlotPace pace = Pace();
+    if (pace != law_.PaceAt(next_frame)) {
+        LOG(SocIis, "AC'97 PCM in %u Hz / %u from frame %llu\n", pace.rate, pace.div,
+            static_cast<unsigned long long>(next_frame));
     }
-    law_.Change(next_frame, rate);
+    law_.Change(next_frame, pace);
 }
 
 void Pxa2xxAc97PcmIn::Save(StateWriter& w) {

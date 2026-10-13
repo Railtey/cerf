@@ -3,7 +3,9 @@
 #include "../../peripherals/peripheral_base.h"
 
 #include <cstdint>
+#include <functional>
 #include <mutex>
+#include <vector>
 
 class Pxa2xxGpioSerialSlave {
 public:
@@ -39,6 +41,13 @@ public:
     void LoadSleepOutputs(const uint32_t* pgsr, uint32_t banks);
     void ReleaseSleepHold();
 
+    struct PinConfig {
+        bool     output;
+        uint32_t function;
+    };
+    PinConfig Pin(uint32_t gpio) const;
+    void      RegisterPinConfigListener(std::function<void()> fn);
+
     void SaveState(StateWriter& w) override;
     void RestoreState(StateReader& r) override;
 
@@ -65,6 +74,7 @@ private:
 
     Pxa2xxGpioSerialSlave* serial_slave_ = nullptr;
     Pxa2xxGpioWakeSink*    wake_sink_    = nullptr;
+    std::vector<std::function<void()>> pin_config_listeners_;
 
     uint32_t in_[kMaxBanks]   = {};
     uint32_t out_[kMaxBanks]  = {};
@@ -80,6 +90,7 @@ private:
         const uint32_t live = (out_[bank] & gpdr_[bank]) | (in_[bank] & ~gpdr_[bank]);
         return (live & ~held_mask_[bank]) | (held_level_[bank] & held_mask_[bank]);
     }
+    bool WriteLocked(Reg reg, uint32_t i, uint32_t off, uint32_t value);
     void CaptureLevels(uint32_t* levels) const;
     void ApplyEdgesLocked(const uint32_t* before);
     void UpdateIntcLocked();

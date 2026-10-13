@@ -152,18 +152,37 @@ uint32_t Pxa2xxGpio::ReadWord(uint32_t addr) {
     HaltUnsupportedAccess("ReadWord", addr, 0);
 }
 
+/* Intel PXA255 Developer's Manual section 4.1.3.6 (page 4-16): "Each GPIO pin has a pair of bits assigned to it";
+   "To select any of the alternate functions, the GPDR register must configure the GPIO to be an input". */
+Pxa2xxGpio::PinConfig Pxa2xxGpio::Pin(uint32_t gpio) const {
+    std::lock_guard<std::mutex> g(mtx_);
+    const bool     output   = (gpdr_[gpio / 32u] & (1u << (gpio % 32u))) != 0u;
+    const uint32_t function = (gafr_[gpio / 16u] >> ((gpio % 16u) * 2u)) & 3u;
+    return {output, function};
+}
+
+void Pxa2xxGpio::RegisterPinConfigListener(std::function<void()> fn) {
+    pin_config_listeners_.push_back(std::move(fn));
+}
+
 void Pxa2xxGpio::WriteWord(uint32_t addr, uint32_t value) {
     const uint32_t off = addr - MmioBase();
     if ((off & 3u) != 0u) HaltUnsupportedAccess("WriteWord", addr, value);
     uint32_t i = 0;
     const Reg reg = Decode(off, &i);
+    if (reg == Reg::kNone) HaltUnsupportedAccess("WriteWord", addr, value);
+    if (!WriteLocked(reg, i, off, value)) return;
+    for (auto& fn : pin_config_listeners_) fn();
+}
+
+bool Pxa2xxGpio::WriteLocked(Reg reg, uint32_t i, uint32_t off, uint32_t value) {
     std::lock_guard<std::mutex> g(mtx_);
     switch (reg) {
     /* Table 24-33 (page 24-29) GPLR0 0x40E0_0000, "<31:9> R PL x": "This
        read-only field indicates the current value of each GPIO." */
-    case Reg::kGplr: return;
-    case Reg::kGrer: grer_[i] = value; return;
-    case Reg::kGfer: gfer_[i] = value; return;
+    case Reg::kGplr: return false;
+    case Reg::kGrer: grer_[i] = value; return false;
+    case Reg::kGfer: gfer_[i] = value; return false;
     /* Section 24.5.6 (page 24-30): "Once a GEDR bit is set by an edge event, the
        bit remains set until it is cleared by writing a one to the status bit.
        Writing a zero to a GEDR status bit has no effect." Table 24-37 (page
@@ -171,8 +190,12 @@ void Pxa2xxGpio::WriteWord(uint32_t addr, uint32_t value) {
     case Reg::kGedr:
         gedr_[i] &= ~value;
         UpdateIntcLocked();
-        return;
-    case Reg::kGafr: gafr_[i] = value; return;
+        return false;
+    case Reg::kGafr: {
+        const bool changed = gafr_[i] != value;
+        gafr_[i] = value;
+        return changed;
+    }
     /* Table 24-9 (page 24-14) GPSR0 0x40E0_0018: "1 = If pin configured as an
        output, set pin level high (one)." Section 24.5.2 (page 24-14): "Writing
        0b0 to any of the GPSR or GPCR bits has no effect on the state of the
@@ -182,16 +205,17 @@ void Pxa2xxGpio::WriteWord(uint32_t addr, uint32_t value) {
     case Reg::kGpcr: {
         uint32_t before[kMaxBanks] = {};
         for (uint32_t b = 0; b < BankCount(); ++b) before[b] = PinLevelLocked(b);
+        const bool changed = reg == Reg::kGpdr && gpdr_[i] != value;
         if      (reg == Reg::kGpdr) gpdr_[i] = value;
         else if (reg == Reg::kGpsr) out_[i] |= value;
         else                        out_[i] &= ~value;
         ApplyEdgesLocked(before);
         if (serial_slave_) serial_slave_->OnGuestWrite(off, value);
-        return;
+        return changed;
     }
     case Reg::kNone: break;
     }
-    HaltUnsupportedAccess("WriteWord", addr, value);
+    return false;
 }
 
 void Pxa2xxGpio::SaveState(StateWriter& w) {

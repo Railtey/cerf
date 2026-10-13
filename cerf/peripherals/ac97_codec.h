@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../core/service.h"
+#include "../jit/guest_cycle_clock.h"
 
 #include <cstdint>
 
@@ -12,6 +13,8 @@ public:
     virtual ~Ac97FrameSource() = default;
     virtual bool FrameAt(uint64_t cycle, uint64_t& frame) const = 0;
     virtual void OnCodecStreamChange() = 0;
+    virtual void CodecWake(uint64_t cycle, bool codec_restarts) = 0;
+    virtual void CodecGpioInterrupt(uint64_t frame, bool level) = 0;
 };
 
 class Ac97Codec : public Service {
@@ -25,15 +28,26 @@ public:
 
     virtual void ColdReset()                  = 0;
     virtual void LinkStopped(uint64_t frame)  = 0;
+    virtual void LinkStarted(uint64_t frame)  = 0;
     virtual bool DacPowered()                 = 0;
     virtual bool AdcPowered()                 = 0;
 
+    static constexpr uint32_t kDacLeft  = 1u << 0;
+    static constexpr uint32_t kDacRight = 1u << 1;
+    virtual uint32_t PcmOutChannels()   = 0;
+    virtual bool     PcmOutEveryFrame() = 0;
+
     virtual uint16_t GpioSlotStatus(uint64_t frame);
 
-    virtual uint64_t SlotWordsBefore(uint64_t frames) = 0;
-    virtual bool     FrameOfSlotWord(uint64_t n, uint64_t& frame) = 0;
-    virtual uint16_t SlotWord(uint64_t n) = 0;
-    virtual void     PruneSlotWords(uint64_t frames) = 0;
+    virtual GuestCycleClock::Rate BitClockRate();
+    virtual uint32_t              ConverterDivider();
+    virtual uint32_t              AdcLeftSlot();
+    virtual uint32_t              DigitiserSlot();
+
+    virtual uint64_t SlotWordsBefore(uint32_t slot, uint64_t frames) = 0;
+    virtual bool     FrameOfSlotWord(uint32_t slot, uint64_t n, uint64_t& frame) = 0;
+    virtual uint16_t SlotWord(uint32_t slot, uint64_t n) = 0;
+    virtual void     PruneSlotWords(uint32_t slot, uint64_t frames) = 0;
 
     void     WarmReset();
     bool     LinkPoweredDown();
@@ -53,7 +67,6 @@ protected:
 
     bool     WriteRateRegister(uint32_t reg, uint16_t value);
     void     OnExtAudioCtrlWrite();
-    uint16_t ReadStored(uint32_t reg);
     void     ResetRates();
     void     SaveRates(StateWriter& w) const;
     void     RestoreRates(StateReader& r);
@@ -74,10 +87,8 @@ protected:
     static constexpr uint16_t kVra = 1u << 0;
 
 private:
-    uint16_t       NearestSupported(uint16_t value) const;
-    static uint8_t RateBit(uint32_t reg) { return static_cast<uint8_t>(1u << ((reg - kRegDacRate) >> 1)); }
+    uint16_t NearestSupported(uint16_t value) const;
 
-    uint32_t dac_rate_  = 48000u;
-    uint32_t adc_rate_  = 48000u;
-    uint8_t  unsettled_ = 0;
+    uint32_t dac_rate_ = 48000u;
+    uint32_t adc_rate_ = 48000u;
 };

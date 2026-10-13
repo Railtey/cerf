@@ -156,7 +156,7 @@ void Pxa27xClockManager::RegisterLcdClockListener(std::function<void()> fn) {
     lcd_clock_listeners_.push_back(std::move(fn));
 }
 
-void Pxa27xClockManager::RegisterClockEnableListener(std::function<void(uint32_t)> fn) {
+void Pxa27xClockManager::RegisterClockEnableListener(std::function<void()> fn) {
     cken_listeners_.push_back(std::move(fn));
 }
 
@@ -215,7 +215,7 @@ void Pxa27xClockManager::WriteWord(uint32_t addr, uint32_t value) {
             PublishLcdClock();
             if (cken_ == old) return;
             LOG(SocClkpwr, "Pxa27xClockManager: CKEN <= 0x%08X\n", cken_);
-            for (auto& fn : cken_listeners_) fn(old);
+            for (auto& fn : cken_listeners_) fn();
             return;
         }
         /* Section 3.8.2.3 (page 3-99): "OON can be set only by software and

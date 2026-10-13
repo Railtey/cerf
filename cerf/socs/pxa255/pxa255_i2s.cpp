@@ -1,10 +1,13 @@
 #include "../../boards/board_context.h"
 #include "../../core/cerf_emulator.h"
-#include "../../core/fatal.h"
 #include "../../jit/guest_cycle_clock.h"
 #include "../../peripherals/peripheral_base.h"
 #include "../../peripherals/peripheral_dispatcher.h"
 #include "../guest_cpu_reset.h"
+#include "pxa255_i2s_bit_clock.h"
+#include "pxa255_i2s_fifo_reset_sync.h"
+#include "pxa255_i2s_fifo_values.h"
+#include "pxa255_i2s_interrupt.h"
 #include "pxa255_i2s_stream.h"
 #include "pxa255_id.h"
 
@@ -13,16 +16,10 @@
 namespace {
 
 /* Intel PXA255 Developer's Manual Table 14-3 (page 14-9) SACR0: ENB 0, BCKD 2, RST 3, EFWR 4, STRF 5,
-   TFTH 11:8, RFTH 15:12; Table 14-6 (page 14-11) SACR1: AMSL 0, DREC 3, DRPL 4, ENLBF 5. */
-constexpr uint32_t kSacr0Enb = 1u << 0, kSacr0Bckd = 1u << 2, kSacr0Rst = 1u << 3, kSacr0Efwr = 1u << 4;
+   TFTH 11:8, RFTH 15:12. */
+constexpr uint32_t kSacr0Enb     = 1u << 0;
+constexpr uint32_t kSacr0Rst     = 1u << 3;
 constexpr uint32_t kSacr0Defined = 0xFF3Du;
-constexpr uint32_t kSacr1Enlbf   = 1u << 5;
-
-/* Intel PXA255 Developer's Manual Table 14-8 (page 14-13): valid SADIV 0x0C, 0x0D, 0x1A, 0x24, 0x34,
-   0x48. */
-bool ValidSadiv(uint32_t v) {
-    return v == 0x0Cu || v == 0x0Du || v == 0x1Au || v == 0x24u || v == 0x34u || v == 0x48u;
-}
 
 class Pxa255I2s : public Peripheral {
 public:
@@ -34,10 +31,17 @@ public:
     }
 
     void OnReady() override {
-        clock_  = &emu_.Get<GuestCycleClock>();
-        stream_ = &emu_.Get<Pxa255I2sStream>();
+        clock_     = &emu_.Get<GuestCycleClock>();
+        stream_    = &emu_.Get<Pxa255I2sStream>();
+        irq_       = &emu_.Get<Pxa255I2sInterrupt>();
+        bit_clock_ = &emu_.Get<Pxa255I2sBitClock>();
+        values_    = &emu_.Get<Pxa255I2sFifoValues>();
+        resets_    = &emu_.Get<Pxa255I2sFifoResetSync>();
         emu_.Get<PeripheralDispatcher>().Register(this);
-        emu_.Get<GuestCpuReset>().RegisterResetListener([this](ResetLineKind) { stream_->ResetLine(); });
+        emu_.Get<GuestCpuReset>().RegisterResetListener([this](ResetLineKind) {
+            stream_->ResetLine();
+            irq_->ResetRegisters();
+        });
     }
 
     uint32_t MmioBase() const override { return 0x40400000u; }
@@ -46,8 +50,24 @@ public:
     uint32_t ReadWord(uint32_t addr) override;
     void     WriteWord(uint32_t addr, uint32_t value) override;
 
-    void SaveState(StateWriter& w) override { stream_->Save(w); }
-    void RestoreState(StateReader& r) override { stream_->Restore(r); }
+    void SaveState(StateWriter& w) override {
+        stream_->Save(w);
+        resets_->Save(w);
+        bit_clock_->Save(w);
+        values_->Save(w);
+        irq_->Save(w);
+    }
+    void RestoreState(StateReader& r) override {
+        stream_->Restore(r);
+        resets_->Restore(r);
+        bit_clock_->Restore(r);
+        values_->Restore(r);
+        irq_->Restore(r);
+    }
+    void PostRestore() override {
+        bit_clock_->PostRestore();
+        irq_->PostRestore();
+    }
 
 private:
     enum : uint32_t {
@@ -56,89 +76,71 @@ private:
     };
 
     void WriteSacr0(uint64_t now, uint32_t value);
-    void WriteSacr1(uint64_t now, uint32_t value);
-    void WriteSadiv(uint32_t value);
 
-    GuestCycleClock* clock_  = nullptr;
-    Pxa255I2sStream* stream_ = nullptr;
+    uint32_t ReadSasr0(uint64_t now);
+
+    GuestCycleClock*     clock_     = nullptr;
+    Pxa255I2sStream*     stream_    = nullptr;
+    Pxa255I2sInterrupt*  irq_       = nullptr;
+    Pxa255I2sBitClock*   bit_clock_ = nullptr;
+    Pxa255I2sFifoValues* values_    = nullptr;
+    Pxa255I2sFifoResetSync* resets_ = nullptr;
 };
 
 uint32_t Pxa255I2s::ReadWord(uint32_t addr) {
+    const uint64_t now = clock_->Cycles();
     switch (addr - MmioBase()) {
     case kSACR0: return stream_->Sacr0();
     case kSACR1: return stream_->Sacr1();
-    case kSAIMR: return 0u;
-    case kSADIV: return stream_->Sadiv();
-    case kSADR:  return stream_->ReadData(clock_->Cycles());
-    case kSASR0:
-        emu_.Get<Fatal>().Die("Pxa255I2s: SASR0 read; the status register is not modelled");
-    case kSAICR:
-        emu_.Get<Fatal>().Die("Pxa255I2s: read of the write-only SAICR");
+    case kSASR0: return ReadSasr0(now);
+    case kSAIMR: return irq_->Saimr();
+    case kSAICR: return 0u;
+    case kSADIV: return bit_clock_->Sadiv();
+    case kSADR:  return stream_->ReadData(now);
     }
     HaltUnsupportedAccess("ReadWord", addr, 0);
 }
 
+/* Intel PXA255 Developer's Manual Table 14-3 (page 14-9) RST: "Resets FIFOs logic and all registers, except
+   this register (SACR0)", "1 = Reset is active to other registers". */
 void Pxa255I2s::WriteWord(uint32_t addr, uint32_t value) {
-    const uint64_t now = clock_->Cycles();
-    switch (addr - MmioBase()) {
+    const uint64_t now  = clock_->Cycles();
+    const uint32_t off  = addr - MmioBase();
+    const bool     held = stream_->InReset();
+    switch (off) {
     case kSACR0: WriteSacr0(now, value); return;
-    case kSACR1: WriteSacr1(now, value); return;
-    case kSADIV: WriteSadiv(value); return;
     case kSADR:  stream_->WriteData(now, value); return;
+    case kSASR0: return;
+    case kSACR1:
+    case kSADIV:
     case kSAIMR:
-        if (value != 0u) {
-            emu_.Get<Fatal>().Die("Pxa255I2s: SAIMR 0x%08X enables an I2S interrupt; not modelled", value);
-        }
-        return;
     case kSAICR:
-        emu_.Get<Fatal>().Die("Pxa255I2s: SAICR write 0x%08X; the status register is not modelled", value);
-    case kSASR0:
-        emu_.Get<Fatal>().Die("Pxa255I2s: write 0x%08X to the read-only SASR0", value);
+        if (held) return;
+        if (off == kSACR1) stream_->WriteSacr1(now, value);
+        if (off == kSADIV) bit_clock_->WriteSadiv(now, value);
+        if (off == kSAIMR) irq_->WriteSaimr(value);
+        if (off == kSAICR) irq_->WriteSaicr(now, value);
+        return;
     }
     HaltUnsupportedAccess("WriteWord", addr, value);
 }
 
+uint32_t Pxa255I2s::ReadSasr0(uint64_t now) {
+    const uint32_t live = stream_->Sasr0(now);
+    return live | irq_->Sticky();
+}
+
 void Pxa255I2s::WriteSacr0(uint64_t now, uint32_t value) {
-    const uint32_t v = value & kSacr0Defined;
-    if (stream_->Enabled()) {
-        if (v != stream_->Sacr0()) {
-            emu_.Get<Fatal>().Die("Pxa255I2s: SACR0 0x%08X changes the control of an enabled I2S link "
-                                  "(0x%08X); not modelled", value, stream_->Sacr0());
-        }
-        return;
+    const uint32_t v          = value & kSacr0Defined;
+    const bool     reset_rise = (v & kSacr0Rst) != 0u && !stream_->InReset();
+    if (stream_->Enabled() && (v & kSacr0Enb) == 0u) {
+        stream_->Disable(now, v);
+    } else if (stream_->Enabled() || (v & kSacr0Enb) == 0u) {
+        stream_->ChangeSacr0(now, v);
+    } else {
+        stream_->Enable(now, v);
     }
-    if ((v & (kSacr0Rst | kSacr0Efwr)) != 0u) {
-        emu_.Get<Fatal>().Die("Pxa255I2s: SACR0 0x%08X sets RST or EFWR; not modelled", value);
-    }
-    if ((v & kSacr0Enb) == 0u) {
-        stream_->StoreSacr0(v);
-        return;
-    }
-    /* Intel PXA255 Developer's Manual Table 14-3 (page 14-9) BCKD: "0 = Input. BITCLK driven by an
-       external source." */
-    if ((v & kSacr0Bckd) == 0u) {
-        emu_.Get<Fatal>().Die("Pxa255I2s: SACR0 0x%08X enables the link with an external BITCLK; "
-                              "not modelled", value);
-    }
-    stream_->Enable(now, v);
-}
-
-void Pxa255I2s::WriteSacr1(uint64_t now, uint32_t value) {
-    if ((value & kSacr1Enlbf) != 0u) {
-        emu_.Get<Fatal>().Die("Pxa255I2s: SACR1 0x%08X enables the loop-back function; not modelled",
-                              value);
-    }
-    stream_->WriteSacr1(now, value);
-}
-
-/* Intel PXA255 Developer's Manual section 14.6.4 (page 14-13): "Setting this register to values other
-   than those shown in Section 14.2 is not allowed and will cause unpredictable activity." */
-void Pxa255I2s::WriteSadiv(uint32_t value) {
-    if (!ValidSadiv(value) || stream_->Enabled()) {
-        emu_.Get<Fatal>().Die("Pxa255I2s: SADIV write 0x%08X (link %s); not modelled", value,
-                              stream_->Enabled() ? "enabled" : "disabled");
-    }
-    stream_->StoreSadiv(value);
+    if (reset_rise) stream_->ResetHeld(now);
 }
 
 }  // namespace

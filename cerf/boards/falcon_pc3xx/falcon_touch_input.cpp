@@ -25,7 +25,7 @@ public:
     }
 
     void OnReady() override {
-        codec_ = &emu_.Get<Wm9705Codec>();
+        codec_ = &static_cast<Wm9705Codec&>(emu_.Get<Ac97Codec>());
         codec_->SetPenLineObserver([this](bool down) {
             emu_.Get<PeripheralDispatcher>().WriteWord(kCpldPenState, down ? 1u : 0u);
         });

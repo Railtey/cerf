@@ -11,6 +11,7 @@
 class Ac97Codec;
 class EmulatedMemory;
 class GuestCycleClock;
+class Pxa2xxAc97Interrupt;
 class Pxa2xxDma;
 class Pxa2xxSlotSource;
 class StateReader;
@@ -29,16 +30,19 @@ public:
 
     uint32_t Status(uint64_t now);
     void     ClearStatus(uint64_t now, uint32_t mask);
-    uint16_t ReadData(uint64_t now, const char* reg);
+    uint16_t ReadData(uint64_t now, bool underrun_is_error);
+    uint64_t NextStatusCycle(uint64_t now, uint32_t watched);
 
     bool     Receive() const override { return true; }
     uint32_t FifoAddress() const override { return FifoPa(); }
+    bool     BurstFifo() const override { return true; }
     void     Settle(uint64_t now) override;
-    bool     RequestAsserted() const override { return ServiceRequest(); }
+    bool     RequestAsserted() const override;
+    uint64_t NextRequestCycle(uint64_t now) override;
     void     SetService(uint64_t now, uint32_t burst_words, uint64_t supply_words) override;
     uint64_t Moved() const override { return fifo_.Moved(); }
     bool     CycleOfMoved(uint64_t words, uint64_t& cycle) override;
-    void     TransmitBlock(uint32_t pa, uint32_t bytes) override;
+    void     TransmitBlock(uint32_t pa, uint32_t bytes, bool resumed) override;
     void     ReceiveBlock(uint32_t pa, uint32_t bytes) override;
     void     Stopped(uint64_t now, bool end_of_chain) override;
 
@@ -54,7 +58,6 @@ public:
 protected:
     virtual uint32_t          FifoPa() const = 0;
     virtual uint32_t          Request() const = 0;
-    virtual const char*       NoCodecName() const = 0;
     virtual const char*       KeyPrefix() const = 0;
     virtual Pxa2xxSlotSource& Source() = 0;
     virtual bool              KeepsValues() const = 0;
@@ -72,13 +75,14 @@ private:
     void     Discard(bool cold);
     uint32_t Filled() const;
     bool     ServiceRequest() const;
+    bool     PushCycle(uint64_t m, uint64_t& cycle);
 
     EmulatedMemory*      mem_ = nullptr;
+    Pxa2xxAc97Interrupt* irq_ = nullptr;
     DmaBurstFifo         fifo_;
     uint64_t             frames_      = 0;
     uint64_t             written_     = 0;
     bool                 error_       = false;
     bool                 eoc_         = false;
-    bool                 dma_serving_ = false;
     std::deque<uint16_t> held_;
 };

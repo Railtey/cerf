@@ -1,21 +1,22 @@
-#include "../pxa2xx/pxa2xx_dma.h"
+#include "../pxa2xx/pxa2xx_dma_moves.h"
 
 #include "../../boards/board_context.h"
 #include "../../core/cerf_emulator.h"
+#include "../../core/fatal.h"
 #include "../../core/log.h"
+#include "../../cpu/emulated_memory.h"
 #include "../../peripherals/peripheral_dispatcher.h"
 #include "../../state/state_stream.h"
 #include "../guest_cpu_reset.h"
 #include "pxa255_id.h"
 
 #include <cstdint>
-#include <mutex>
 
 namespace {
 
-class Pxa255Dma : public Pxa2xxDma {
+class Pxa255Dma : public Pxa2xxDmaMoves {
 public:
-    using Pxa2xxDma::Pxa2xxDma;
+    using Pxa2xxDmaMoves::Pxa2xxDmaMoves;
 
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
@@ -35,38 +36,38 @@ public:
     uint32_t MmioSize() const override { return 0x00001000u; }
 
     uint8_t ReadByte(uint32_t addr) override {
-        std::lock_guard<std::mutex> lk(state_mutex_);
+        Locked lk(*this);
         return static_cast<uint8_t>(ReadRegLocked(addr & ~0x3u) >> ((addr & 0x3u) * 8u));
     }
     uint32_t ReadWord(uint32_t addr) override {
-        std::lock_guard<std::mutex> lk(state_mutex_);
+        Locked lk(*this);
         return ReadRegLocked(addr);
     }
     void WriteByte(uint32_t addr, uint8_t value) override {
-        std::lock_guard<std::mutex> lk(state_mutex_);
+        Locked lk(*this);
         const uint32_t base = addr & ~0x3u, shift = (addr & 0x3u) * 8u;
         WriteRegLocked(base, (ReadRegLocked(base) & ~(0xFFu << shift))
                              | (static_cast<uint32_t>(value) << shift));
     }
     void WriteWord(uint32_t addr, uint32_t value) override {
-        std::lock_guard<std::mutex> lk(state_mutex_);
+        Locked lk(*this);
         WriteRegLocked(addr, value);
     }
 
     void SaveState(StateWriter& w) override {
-        std::lock_guard<std::mutex> lk(state_mutex_);
+        Locked lk(*this);
         SaveChannels(w);
         w.WriteBytes("drcmr", drcmr_, sizeof(drcmr_));
     }
 
     void RestoreState(StateReader& r) override {
-        std::lock_guard<std::mutex> lk(state_mutex_);
+        Locked lk(*this);
         RestoreChannels(r);
         r.ReadBytes("drcmr", drcmr_, sizeof(drcmr_));
     }
 
     void PostRestore() override {
-        std::lock_guard<std::mutex> lk(state_mutex_);
+        Locked lk(*this);
         PostRestoreChannelsLocked();
     }
 
@@ -86,6 +87,25 @@ protected:
         return ChannelStoppedLocked(ch) && (d & STOPIRQEN) != 0u;
     }
 
+    bool DiscardsEmptyDescriptor() const override { return false; }
+
+    /* Intel PXA255 Developer's Manual section 5.3.5 (page 5-21): "DSADR cannot contain the address of any
+       other internal DMA, LCD, or MEMC registers."; section 5.2 (page 5-11): "Writes to flash are not
+       supported and cause a bus error." */
+    bool MoveBusErrorLocked(uint32_t pa, bool write) override {
+        if (pa - MmioBase() < MmioSize()) {
+            emu_.Get<Fatal>().Die("Pxa255Dma: DMA %s DMA controller register 0x%08X; not modelled",
+                                  write ? "write to" : "read of", pa);
+        }
+        auto& mem = emu_.Get<EmulatedMemory>();
+        return write && mem.TryTranslate(pa) != nullptr && mem.TryTranslateWrite(pa) == nullptr;
+    }
+
+    bool DescriptorInMemoryOnly() const override { return false; }
+
+    /* Intel PXA255 Developer's Manual Table 5-7 (page 5-18): DCSR bits 7:4 reserved. */
+    void RequestAfterStopLocked(uint64_t, uint64_t&) override {}
+
 private:
     /* Intel PXA255 Developer's Manual Table 5-7 (page 5-18): STOPSTATE bit 3. */
     static constexpr uint32_t STOPSTATE = 1u << 3;
@@ -98,7 +118,7 @@ private:
     uint32_t drcmr_[kNumDrcmr] = {};
 
     void ResetLine() {
-        std::lock_guard<std::mutex> lk(state_mutex_);
+        Locked lk(*this);
         ResetChannelsLocked();
         for (uint32_t& d : drcmr_) d = 0u;
     }
@@ -131,19 +151,19 @@ private:
         if (off == 0xF0u) return;
         if (off >= 0x100u && off < 0x1A0u) {
             const uint32_t idx = (off - 0x100u) / 4u;
-            RequireMappingStableLocked(idx, value & kDrcmrDefined);
             drcmr_[idx] = value;
             LOG(SocDma, "DRCMR%u <= 0x%08X (mapvld=%u ch=%u)\n", idx, value,
                 (value >> 7) & 1u, value & 0x1Fu);
+            DrcmrWrittenLocked(idx);
             return;
         }
         if (off >= 0x200u && off < 0x300u) {
             const uint32_t ch = (off - 0x200u) / 0x10u;
             switch (off & 0xFu) {
                 case 0x0u: ddadr_[ch] = value; return;
-                case 0x4u: if (!DescriptorFetchModeLocked(ch)) dsadr_[ch] = value; return;
-                case 0x8u: if (!DescriptorFetchModeLocked(ch)) dtadr_[ch] = value; return;
-                case 0xCu: if (!DescriptorFetchModeLocked(ch)) dcmd_[ch]  = value; return;
+                case 0x4u: if (!DescriptorFetchModeLocked(ch)) WriteTransferLocked(dsadr_, ch, value); return;
+                case 0x8u: if (!DescriptorFetchModeLocked(ch)) WriteTransferLocked(dtadr_, ch, value); return;
+                case 0xCu: if (!DescriptorFetchModeLocked(ch)) WriteTransferLocked(dcmd_, ch, value); return;
             }
         }
         HaltUnsupportedAccess("WriteWord", addr, value);

@@ -9,8 +9,6 @@ class Pxa2xxAc97Modem : public Pxa2xxAc97InFifo, public Pxa2xxSlotSource {
 public:
     using Pxa2xxAc97InFifo::Pxa2xxAc97InFifo;
 
-    void OnReady() override;
-
     uint64_t Count(uint64_t frames) const override;
     bool     FrameOfSlot(uint64_t slot, uint64_t& frame) const override;
     void     Prune(uint64_t settled) override;
@@ -18,7 +16,6 @@ public:
 protected:
     uint32_t          FifoPa() const override;
     uint32_t          Request() const override;
-    const char*       NoCodecName() const override { return "AC'97 modem in with no AC'97 codec"; }
     const char*       KeyPrefix() const override { return "modem_in"; }
     Pxa2xxSlotSource& Source() override { return *this; }
     bool              KeepsValues() const override { return true; }

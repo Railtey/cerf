@@ -14,9 +14,12 @@ public:
     uint16_t ReadReg(uint32_t reg, uint64_t frame) override;
     void     WriteReg(uint32_t reg, uint16_t value, uint64_t frame) override;
 
-    void ColdReset() override;
-    bool DacPowered() override;
-    bool AdcPowered() override;
+    void     ColdReset() override;
+    bool     DacPowered() override;
+    bool     AdcPowered() override;
+    uint32_t PcmOutChannels() override;
+    bool     PcmOutEveryFrame() override;
+    uint32_t AdcLeftSlot() override;
 
     void SaveState(StateWriter& w) override;
     void RestoreState(StateReader& r) override;
@@ -34,4 +37,5 @@ private:
 
     static constexpr uint32_t kNumRegs = 512u;
     uint16_t reg_[kNumRegs] = {};
+    bool     stalled_poll_  = false;
 };

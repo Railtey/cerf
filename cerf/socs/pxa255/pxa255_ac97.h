@@ -6,9 +6,11 @@
 
 class Ac97Codec;
 class GuestCycleClock;
-class Pxa255ClockManager;
+class Pxa2xxAc97Interrupt;
 class Pxa2xxAc97Link;
+class Pxa2xxAc97MicIn;
 class Pxa2xxAc97Modem;
+class Pxa2xxAc97ModemOut;
 class Pxa2xxAc97Pcm;
 class Pxa2xxAc97PcmIn;
 class Pxa2xxDma;
@@ -34,25 +36,30 @@ public:
 
 private:
     static bool IsRegister(uint32_t off);
-    void        OnUnitClock(uint32_t old_cken);
-    void        RequireOutOfReset(uint32_t off);
+    uint32_t    ReadRegister(uint32_t addr);
+    void        WriteRegister(uint32_t addr, uint32_t value);
+    uint32_t    ReadGsr(uint64_t now);
     void        WriteGcr(uint64_t now, uint32_t value);
-    void        WriteControl(uint32_t& reg, uint32_t value, const char* name);
+    void        WriteControl(uint32_t& reg, uint32_t value);
     void        ResetLine();
+    bool        IrqLevel(uint64_t now);
+    uint64_t    IrqNext(uint64_t now);
 
     static constexpr uint32_t kPOCR = 0x00u, kPICR = 0x04u, kMCCR = 0x08u, kGCR = 0x0Cu,
-                              kPOSR = 0x10u, kPISR = 0x14u, kGSR = 0x1Cu, kCAR = 0x20u,
-                              kPCDR = 0x40u, kMOCR = 0x100u, kMICR = 0x108u, kMISR = 0x118u,
-                              kMODR = 0x140u;
+                              kPOSR = 0x10u, kPISR = 0x14u, kMCSR = 0x18u, kGSR = 0x1Cu, kCAR = 0x20u,
+                              kPCDR = 0x40u, kMCDR = 0x60u, kMOCR = 0x100u, kMICR = 0x108u,
+                              kMOSR = 0x110u, kMISR = 0x118u, kMODR = 0x140u;
 
-    GuestCycleClock*    clock_  = nullptr;
-    Pxa255ClockManager* clocks_ = nullptr;
-    Pxa2xxAc97Link*  link_  = nullptr;
+    GuestCycleClock* clock_ = nullptr;
+    Pxa2xxAc97Link*     link_      = nullptr;
     Pxa2xxAc97Pcm*   pcm_    = nullptr;
     Pxa2xxAc97PcmIn* pcm_in_ = nullptr;
+    Pxa2xxAc97MicIn* mic_in_ = nullptr;
     Pxa2xxAc97Modem* modem_  = nullptr;
+    Pxa2xxAc97ModemOut* modem_out_ = nullptr;
     Pxa2xxDma*       dma_   = nullptr;
     Ac97Codec*       codec_ = nullptr;
+    Pxa2xxAc97Interrupt* irq_ = nullptr;
 
     uint32_t pocr_ = 0, picr_ = 0, mccr_ = 0, gcr_ = 0, mocr_ = 0, micr_ = 0;
 };
