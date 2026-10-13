@@ -42,6 +42,9 @@ public:
        under-delivers relative to the predicted dword count. */
     void FlushPending();
 
+    void PowerDownReset();
+    void PowerOnReset();
+
     /* CC01R Source/Command FIFO + GE status, read by the driver before/after
        each command. Synchronous execution => always reported empty/idle. */
     virtual uint32_t StatusReady() const = 0;
@@ -97,6 +100,11 @@ protected:
         uint32_t mono_pat1_index;/* 8x8 mono pattern rows 4-7. */
         uint32_t color_pat_base; /* 8x8 colour pattern tile base (16bpp, 2px/dword). */
     };
+
+    enum class CommandPath : uint8_t {
+        Nop, Line, SystemColor, SystemMono, SolidFill, ScreenMono, ScreenColor, Unmodeled
+    };
+    CommandPath PathOf(uint32_t cmd) const;
 
     /* Part-specific hooks. */
     virtual const Layout& Lyt() const = 0;

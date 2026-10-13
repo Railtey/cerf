@@ -13,14 +13,15 @@ class MediaQPanelRenderer : public PanelFrameRenderer {
 public:
     using PanelFrameRenderer::PanelFrameRenderer;
 
+    void OnReady() override { chip_ = &emu_.Get<Chip>(); }
+
     void PresentedSize(uint32_t& w, uint32_t& h) override {
-        auto& mq = emu_.Get<Chip>();
-        w = mq.GetGuestW();
-        h = mq.GetGuestH();
+        w = chip_->GetGuestW();
+        h = chip_->GetGuestH();
     }
 
     bool HasFrame() override {
-        auto& mq = emu_.Get<Chip>();
+        Chip& mq = *chip_;
         if (!mq.IsEnabled())  return false;
         if (latch_.Latched()) return true;
         const uint32_t gh = mq.GetGuestH(), stride = mq.Stride();
@@ -34,7 +35,7 @@ public:
     void RenderInto(uint32_t* dib, uint32_t host_w, uint32_t host_h) override {
         std::memset(dib, 0, static_cast<size_t>(host_w) * host_h * 4u);
 
-        auto& mq = emu_.Get<Chip>();
+        Chip& mq = *chip_;
         const uint32_t gw = mq.GetGuestW(), gh = mq.GetGuestH();
         const uint32_t bpp = mq.Bpp(), stride = mq.Stride();
         if (gw == 0 || gh == 0 || stride == 0 || bpp == 0) return;
@@ -50,23 +51,27 @@ public:
             const uint8_t* line = fb + base + static_cast<size_t>(y) * stride;
             uint32_t* dst = dib + static_cast<size_t>(y) * host_w;
             for (uint32_t x = 0; x < cw; ++x)
-                dst[x] = DecodePixel(mq, line, x, bpp);
+                dst[x] = DecodePixel(line, x, bpp);
         }
     }
 
-private:
+protected:
     /* MQ-200 Data Book Table 5-32; MediaQ doc 12-00026 Rev D Reg 4-58 (p.4-71):
        palette entry R[7:0] G[15:8] B[23:16]. */
-    static uint32_t FromPalette(Chip& mq, uint32_t index) {
-        const uint32_t e = mq.PaletteEntry(index);
+    static uint32_t PalRgb(uint32_t e) {
         return lcd_pixel::PackXrgb(e & 0xFFu, (e >> 8) & 0xFFu, (e >> 16) & 0xFFu);
     }
 
-    static uint32_t DecodePixel(Chip& mq, const uint8_t* line, uint32_t x, uint32_t bpp) {
+    Chip* chip_ = nullptr;
+
+private:
+    uint32_t FromPalette(uint32_t index) const { return PalRgb(chip_->PaletteEntry(index)); }
+
+    uint32_t DecodePixel(const uint8_t* line, uint32_t x, uint32_t bpp) const {
         if (bpp == 16u) return lcd_pixel::Expand565(cerf::le::U16(line, static_cast<size_t>(x) * 2u));
         if (bpp == 32u) return 0xFF000000u | (cerf::le::U32(line, static_cast<size_t>(x) * 4u) & 0xFFFFFFu);
         if (bpp == 24u) return 0xFF000000u | cerf::le::U24(line, static_cast<size_t>(x) * 3u);
-        if (bpp == 8u) return FromPalette(mq, line[x]);
-        return FromPalette(mq, lcd_pixel::PackedIndexMsbFirst(line, x, bpp));
+        if (bpp == 8u) return FromPalette(line[x]);
+        return FromPalette(lcd_pixel::PackedIndexMsbFirst(line, x, bpp));
     }
 };

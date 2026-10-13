@@ -1,24 +1,28 @@
 #pragma once
 
-#include "../peripheral_base.h"
 #include "../../lcd/display_mode_latch.h"
+#include "../../socs/raster_scan_peripheral.h"
+#include "mediaq_mq200_fp.h"
+#include "mediaq_mq200_gc.h"
 #include "mediaq_mq200_ge.h"
+#include "mediaq_mq200_ge_window.h"
+#include "mediaq_mq200_interrupts.h"
+#include "mediaq_mq200_memory.h"
+#include "mediaq_mq200_panel.h"
+#include "mediaq_mq200_power.h"
 
 #include <cstdint>
 #include <vector>
 
-/* MediaQ MQ200 display controller (SA-1110 boards: SIMpad SL4, SmartBook G138).
-   MmioBase 0x4B800000 = 2 MB framebuffer SRAM at window offset 0; the register
-   block (PA 0x4BE00000) is at offset 0x600000; display geometry is Graphics
-   Controller 1 at register offset 0xA000 (MQ-200 Data Book Table 5-3). */
-class MediaQMq200 : public Peripheral, public MediaQGeHost {
+class MediaQMq200 : public RasterScanPeripheral, public MediaQGeHost {
 public:
-    using Peripheral::Peripheral;
+    using RasterScanPeripheral::RasterScanPeripheral;
+    using HwCursor = MediaQMq200Panel::HwCursor;
 
     bool ShouldRegister() override;
     void OnReady() override;
 
-    uint32_t MmioBase() const override { return 0x4B800000u; }
+    uint32_t MmioBase() const override { return mmio_base_; }
     uint32_t MmioSize() const override { return kRegWinOff + kRegSize; }
 
     uint8_t  ReadByte (uint32_t addr) override;
@@ -30,66 +34,77 @@ public:
 
     void SaveState(StateWriter& w) override;
     void RestoreState(StateReader& r) override;
+    void PostRestore() override;
 
-    /* Display-state getters consumed by MediaQMq200Renderer, read from the
-       Graphics Controller that FP00R[1:0] selects to drive the flat panel. */
-    bool     IsEnabled()      const;   /* panel GC control[3] image window on + valid mode. */
-    uint32_t Bpp()            const;   /* panel GC control[7:4] depth (Table 5-8). */
-    uint32_t GetGuestW()      const;   /* panel GC H-window[31:16] + 1. */
-    uint32_t GetGuestH()      const;   /* panel GC V-window[31:16] + 1. */
-    uint32_t FbWindowOffset() const;   /* panel GC start[20:0], byte offset in FB SRAM. */
-    uint32_t Stride()         const;   /* panel GC stride[15:0], bytes per scanline. */
-    uint32_t PaletteEntry(uint32_t index) const;   /* C100R+i: R[7:0] G[15:8] B[23:16]. */
+    bool     IsEnabled()      const { return panel_.Shown(fb_blocked_ == nullptr); }
+    uint32_t Bpp()            const { return panel_.Bpp(); }
+    uint32_t GetGuestW()      const { return panel_.Width(); }
+    uint32_t GetGuestH()      const { return panel_.Height(); }
+    uint32_t FbWindowOffset() const { return panel_.WindowOffset(); }
+    uint32_t Stride()         const { return panel_.Stride(); }
+    uint32_t PaletteEntry(uint32_t index) const { return panel_.Palette(index); }
+    HwCursor PanelCursor()    const { return panel_.Cursor(fb_blocked_ == nullptr); }
     const uint8_t* FbBytes()  const { return fb_.data(); }
-    uint8_t*       FbMutableBytes() override { return fb_.data(); }   /* GE blit target. */
+    uint8_t*       FbMutableBytes() override { return fb_.data(); }
     uint32_t       FbSize()   const override { return kFbSize; }
 
 private:
-    static constexpr uint32_t kFbSize    = 0x200000u;   /* sub_134BAA8 a1[65] */
-    static constexpr uint32_t kRegWinOff = 0x600000u;   /* register block window offset */
-    static constexpr uint32_t kRegSize   = 0x1A000u;    /* sub_134BAA8 a1[66] */
+    /* simpad_sl4_ce4_10 ddi.dll sub_134BAA8: a1[65] frame buffer size, a1[72] = a1[71] +
+       0x600000 register window, a1[66] register window size. */
+    static constexpr uint32_t kFbSize    = 0x200000u;
+    static constexpr uint32_t kRegWinOff = 0x600000u;
+    static constexpr uint32_t kRegSize   = 0x1A000u;
 
-    /* PCI-config block (Table 5-3 @ 0x16000): ID gate + idle poll. */
-    static constexpr uint32_t kRegId    = 0x16000u;     /* ID gate: == 0x02004D51 ("MQ"). */
-    static constexpr uint32_t kRegIdle  = 0x16044u;     /* status; mode-set spins while [1:0] != 0. */
-    static constexpr uint32_t kDeviceId = 0x02004D51u;
+    enum class Gc1Scan : uint8_t { Off = 0, Waiting = 1, Live = 2, Held = 3, Unmodeled = 4 };
 
-    /* CIF (Table 5-3 @ 0x2000) CC01R index 0x04 = Source/Command FIFO/GE Status
-       (Data Book Table 5-86); ddi.dll busy-waits on it around each blit. The
-       engine answers via MediaQMq200Ge::StatusReady(). */
-    static constexpr uint32_t kRegGeStatus = 0x2004u;
+    static bool     PartialWriteAllowed(uint32_t roff);
 
-    /* Graphics Engine (Table 5-3 @ 0xC000) register block + Source FIFO port. */
-    static constexpr uint32_t kGeBlockLo = 0xC000u;
-    static constexpr uint32_t kGeBlockHi = 0xC200u;
-    static constexpr uint32_t kSrcFifo   = 0x18000u;
+    void     ResetChipLocked();
+    void     OnPowerOnReset();
 
-    /* Two Graphics Controllers, GC1 @ 0x0A000 and GC2 @ 0x0A080 (identical
-       layout, GC2 = GC1 + 0x80; Data Book Table 5-3). FP00R[1:0] (Flat Panel
-       Control, Table 5-51) picks which drives the flat panel: 01=GC1, 11=GC2,
-       x0=off. (SIMpad SL4 panel = GC1; SmartBook G138 panel = GC2, GC1 = CRT.) */
-    static constexpr uint32_t kGc1Base  = 0xA000u;
-    static constexpr uint32_t kGc2Base  = 0xA080u;
-    static constexpr uint32_t kGcCtrl   = 0x00u;   /* [0] ctrl-en, [3] img-win-en, [7:4] depth. */
-    static constexpr uint32_t kGcHWin   = 0x20u;   /* [31:16] = width - 1. */
-    static constexpr uint32_t kGcVWin   = 0x24u;   /* [31:16] = height - 1. */
-    static constexpr uint32_t kGcStart  = 0x30u;   /* window start address [20:0]. */
-    static constexpr uint32_t kGcStride = 0x38u;   /* window stride [15:0]. */
-    static constexpr uint32_t kGc00ImgWinEnable = 0x8u;    /* control[3] (Table 5-8). */
-    static constexpr uint32_t kFp00R        = 0xE000u;     /* Flat Panel Control (Table 5-51). */
-    static constexpr uint32_t kFpEnable     = 0x1u;        /* FP00R[0]: interface enable. */
-    static constexpr uint32_t kFpDriveCtrl2 = 0x2u;        /* FP00R[1]: 0=GC1, 1=GC2. */
-
-    static constexpr uint32_t kPaletteBase = 0x10000u;   /* Color Palette 1 (Table 5-3). */
-
-    uint32_t Reg(uint32_t roff) const { return reg_[roff / 4u]; }
-    uint32_t PanelGcBase() const;   /* 0xA000/0xA080, or 0 when no panel controller is enabled. */
     uint32_t RegRead(uint32_t roff);
     void     RegWrite(uint32_t roff, uint32_t value);
-    void     PublishScreenSizeOnEnableEdge();
+    uint32_t RegReadLocked(uint32_t roff);
+    bool     RegWriteLocked(uint32_t roff, uint32_t value);
+    void     CheckFbRead(uint32_t addr) const;
+    bool     FbWriteServed(uint32_t addr, uint32_t value, uint32_t width);
+    void     CheckNarrowRegWrite(uint32_t addr, uint32_t width) const;
+    bool     SettleLocked();
+    void     Settle(bool rescale);
+    void     RefreshGatesLocked();
+    void     CheckDisplaysLocked() const;
+    void     CheckGc1ObservedLocked() const;
 
+    bool      UpdateGc1ScanLocked();
+    void      RestoreGc1WhyLocked();
+    uint32_t  Gc1VerticalCountLocked();
+
+    ScanShape ScanShapeLocked() const override;
+    bool      EdgeRaisesInterruptLocked(uint32_t, bool) const override;
+    bool      FrameEdgesInertLocked() const override;
+    void      FrameEdgeLocked(uint32_t edge_index) override;
+    void      ScanEdgesRan() override {}
+
+    void PublishScreenSizeOnEnableEdge();
+
+    uint32_t              mmio_base_ = 0;
     std::vector<uint8_t>  fb_;
-    std::vector<uint32_t> reg_;
-    DisplayModeLatch mode_latch_;
-    MediaQMq200Ge ge_{*this};
+    uint32_t              cc00_ = 0;
+    MediaQMq200Power      power_{emu_};
+    MediaQMq200Memory     memory_{emu_, power_};
+    MediaQMq200Interrupts in_{emu_};
+    MediaQMq200Gc         gc_{emu_};
+    MediaQMq200Fp         fp_{emu_};
+    MediaQMq200Panel      panel_{power_, fp_, gc_};
+    DisplayModeLatch      mode_latch_;
+    MediaQMq200Ge         ge_{*this};
+    MediaQMq200GeWindow   ge_window_{emu_, ge_};
+
+    const char* fb_blocked_ = nullptr;
+    const char* ge_blocked_ = nullptr;
+    bool        ge_powered_ = false;
+
+    Gc1Scan                   gc1_scan_        = Gc1Scan::Off;
+    MediaQMq200Gc::ScanTiming gc1_applied_;
+    uint32_t                  gc1_held_vcount_ = 0;
 };

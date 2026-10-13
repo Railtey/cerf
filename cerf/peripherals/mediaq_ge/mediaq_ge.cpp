@@ -40,31 +40,51 @@ void MediaQGe::Execute() {
        draw it from its snapshot before the live registers change. */
     if (pending_active_) ExecutePending();
 
-    const uint32_t cmd  = reg_[kGe00Command];
-    const uint32_t type = (cmd >> kCmdTypeShift) & kCmdTypeMask;
-    const uint8_t  rop  = static_cast<uint8_t>(cmd & kCmdRopMask);
+    const uint32_t cmd = reg_[kGe00Command];
+    const uint8_t  rop = static_cast<uint8_t>(cmd & kCmdRopMask);
 
-    if (type == kTypeNop) return;
-    if (type == kTypeLine) { DrawLine(cmd); return; }
-
-    if (type == kTypeBitBlt) {
-        if (cmd & kCmdSrcSystem) {
+    switch (PathOf(cmd)) {
+        case CommandPath::Nop:
+            return;
+        case CommandPath::Line:
+            DrawLine(cmd);
+            return;
+        case CommandPath::SystemColor:
+        case CommandPath::SystemMono:
             std::memcpy(pending_reg_, reg_, sizeof(reg_));
             src_fifo_.clear();
             expected_dwords_ = ExpectedSourceDwords();
             pending_active_  = true;
-            if (expected_dwords_ == 0u) ExecutePending();   /* empty blit. */
+            if (expected_dwords_ == 0u) ExecutePending();
             return;
-        }
-        if (IsSolidFill(cmd)) { FillSolid(rop, SolidFillColor(), cmd); return; }
-        if (cmd & kCmdMonoSrc) BlitMonoFromDisplay(cmd);
-        else                   BlitColorFromDisplay(cmd);
-        return;
+        case CommandPath::SolidFill:
+            FillSolid(rop, SolidFillColor(), cmd);
+            return;
+        case CommandPath::ScreenMono:
+            BlitMonoFromDisplay(cmd);
+            return;
+        case CommandPath::ScreenColor:
+            BlitColorFromDisplay(cmd);
+            return;
+        case CommandPath::Unmodeled:
+            break;
     }
 
     LOG(Caution, "MediaQ GE: unimplemented command 0x%08X (type=%u rop=0x%02X)\n",
-        cmd, type, rop);
+        cmd, (cmd >> kCmdTypeShift) & kCmdTypeMask, rop);
     CerfFatalExit(CERF_FATAL_RUNTIME_ERROR);
+}
+
+MediaQGe::CommandPath MediaQGe::PathOf(uint32_t cmd) const {
+    const uint32_t type = (cmd >> kCmdTypeShift) & kCmdTypeMask;
+    if (type == kTypeNop) return CommandPath::Nop;
+    if (type == kTypeLine) return CommandPath::Line;
+    if (type != kTypeBitBlt) return CommandPath::Unmodeled;
+    if (cmd & kCmdSrcSystem) {
+        return (cmd & kCmdMonoSrc) ? CommandPath::SystemMono : CommandPath::SystemColor;
+    }
+    if (IsSolidFill(cmd)) return CommandPath::SolidFill;
+    return (cmd & kCmdMonoSrc) ? CommandPath::ScreenMono : CommandPath::ScreenColor;
 }
 
 void MediaQGe::PushSourceFifo(uint32_t value) {
@@ -74,6 +94,18 @@ void MediaQGe::PushSourceFifo(uint32_t value) {
 
 void MediaQGe::FlushPending() {
     if (pending_active_ && src_fifo_.size() >= expected_dwords_) ExecutePending();
+}
+
+void MediaQGe::PowerDownReset() {
+    pending_active_  = false;
+    expected_dwords_ = 0u;
+    src_fifo_.clear();
+}
+
+void MediaQGe::PowerOnReset() {
+    PowerDownReset();
+    std::memset(reg_, 0, sizeof(reg_));
+    std::memset(pending_reg_, 0, sizeof(pending_reg_));
 }
 
 void MediaQGe::ExecutePending() {

@@ -3,6 +3,30 @@
 #include "../../core/byte_order.h"
 #include "../../core/log.h"
 
+namespace {
+
+constexpr uint32_t kCmdAlphaMask        = 3u << 21;
+constexpr uint32_t kCmdSrcStrideSelect  = 1u << 24;
+constexpr uint32_t kCmdAutoExecute      = 1u << 27;
+constexpr uint32_t kRopSrcCopy          = 0xCCu;
+constexpr uint32_t kGe01NoLastPixel     = 1u << 30;
+constexpr uint32_t kGe0AStrideLowBits   = 0xFu;
+constexpr uint32_t kBitBltGe01Reserved  = 0x7000F000u;
+constexpr uint32_t kBitBltGe02Reserved  = 0x10001000u;
+constexpr uint32_t kLineGe02Reserved    = 0xE0000000u;
+constexpr uint32_t kGe02PatternOffsets  = 0xE000E000u;
+constexpr uint32_t kGe02DstPatternPhase = 0x00070007u;
+
+bool RopReadsPattern(uint32_t rop) {
+    return ((rop >> 4) & 0xFu) != (rop & 0xFu);
+}
+
+bool RopReadsSource(uint32_t rop) {
+    return ((rop >> 2) & 0x33u) != (rop & 0x33u);
+}
+
+}
+
 const MediaQGe::Layout& MediaQMq200Ge::Lyt() const {
     /* fg=GE42R, bg=GE43R, pat_fg=GE42R; src_stride=GE09R; GE0AR stride[11:0]
        (Table 5-73), GE0BR base[20:0] (Table 5-74). */
@@ -252,4 +276,81 @@ void MediaQMq200Ge::DrawLine(uint32_t cmd) {
             else { if (y_major) x += step_x; else y += step_y; accum += dgstp; }
         }
     }
+}
+
+const char* MediaQMq200Ge::CommandUnmodeled(uint32_t cmd) const {
+    const CommandPath path = PathOf(cmd);
+    if (path == CommandPath::Nop || path == CommandPath::Unmodeled) return nullptr;
+    if (cmd & kCmdAutoExecute) return "requests auto-execution at the GE02R write";
+    if (BytesPerPixel() == 4u && (cmd & kCmdAlphaMask)) return "selects a 32 bpp alpha byte mask";
+    if ((cmd & kCmdEnClip) && (reg_[kGe0ADstStride] & kGe0AStrideLowBits)) {
+        return "clips with a destination stride off the 16-byte boundary";
+    }
+    const bool mono_pat_trans = (cmd & kCmdMonoTrans) && (cmd & kCmdMonoPat);
+    const bool src_compare    = (cmd & kCmdColorTrans) &&
+                                ((cmd & kCmdColorTrPol) || (cmd & kCmdRopMask) != kRopSrcCopy);
+    if (path == CommandPath::Line) {
+        if (reg_[kGe02DstXY] & kLineGe02Reserved) return "starts a line with GE02R reserved bits set";
+        if (reg_[kGe01Size] & kGe01NoLastPixel) return "skips the last line pixel";
+        if (cmd & (kCmdColorTrans | kCmdMonoTrans)) return "enables transparency on a line";
+        if (!(cmd & kCmdMonoSrc) || !(cmd & kCmdSolidSrc)) {
+            return "draws a line whose source is not the solid foreground colour";
+        }
+        if (cmd & (kCmdSrcSystem | kCmdPacked | kCmdSrcStrideSelect)) {
+            return "selects a source memory, packing or source stride on a line";
+        }
+        if (!(cmd & kCmdRop2) && RopReadsPattern(cmd & kCmdRopMask)) {
+            return "draws a line with a raster operation that reads the pattern";
+        }
+        return nullptr;
+    }
+    if ((reg_[kGe01Size] & kBitBltGe01Reserved) || (reg_[kGe02DstXY] & kBitBltGe02Reserved)) {
+        return "starts a BitBLT with GE01R / GE02R reserved bits set";
+    }
+    if ((cmd & kCmdMonoSrc) && (cmd & kCmdXNeg)) return "sets the negative X direction with a mono source";
+    if (cmd & kCmdRop2) return "selects ROP2 on a BitBLT";
+    switch (path) {
+        case CommandPath::SolidFill:
+            if (cmd & (kCmdMonoSrc | kCmdColorTrans)) return "fills with a mono source or transparency";
+            if ((cmd & kCmdMonoTrans) && (cmd & kCmdMonoTrPol)) return "makes the solid fill transparent";
+            if (RopReadsSource(cmd & kCmdRopMask)) return "fills with a raster operation that reads the source";
+            return nullptr;
+        case CommandPath::ScreenMono:
+            return "reads a mono source from display memory";
+        case CommandPath::ScreenColor:
+            if ((cmd & (kCmdSrcStrideSelect | kCmdPacked)) || src_compare || mono_pat_trans) {
+                return "selects a source stride, packed mode or a transparency the screen BitBLT does "
+                       "not apply";
+            }
+            if (RopReadsPattern(cmd & kCmdRopMask) &&
+                ((cmd & (kCmdXNeg | kCmdYNeg)) || (!(cmd & kCmdMonoPat) && BytesPerPixel() != 2u))) {
+                return "reads a pattern in a negative-direction or non-16 bpp screen BitBLT";
+            }
+            return nullptr;
+        case CommandPath::SystemColor:
+            if (cmd & (kCmdXNeg | kCmdYNeg | kCmdEnClip | kCmdSrcStrideSelect)) {
+                return "selects a direction, clipping or a source stride on a system colour BitBLT";
+            }
+            if (src_compare || mono_pat_trans || ((cmd & kCmdSolidSrc) && (cmd & kCmdMonoPat))) {
+                return "selects a transparency or solid pattern the system colour BitBLT does not apply";
+            }
+            return nullptr;
+        case CommandPath::SystemMono:
+            if (cmd & (kCmdYNeg | kCmdColorTrans | kCmdSolidSrc | kCmdSrcStrideSelect)) {
+                return "selects a direction, transparency, solid source or source stride on a system "
+                       "mono BitBLT";
+            }
+            if (!(cmd & kCmdPacked)) return "sends a lined mono source";
+            if (RopReadsPattern(cmd & kCmdRopMask) &&
+                (!(cmd & kCmdMonoPat) ||
+                 (reg_[kGe02DstXY] & (kGe02PatternOffsets | kGe02DstPatternPhase)))) {
+                return "reads a pattern the system mono BitBLT does not apply";
+            }
+            return nullptr;
+        case CommandPath::Nop:
+        case CommandPath::Line:
+        case CommandPath::Unmodeled:
+            return nullptr;
+    }
+    return nullptr;
 }

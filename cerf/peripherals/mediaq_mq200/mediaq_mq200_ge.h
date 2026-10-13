@@ -15,6 +15,8 @@ public:
        0x10 command FIFO empty, SFS[11:8]=0x8 source FIFO empty, bit16 busy=0. */
     uint32_t StatusReady() const override { return 0x10u | (0x8u << 8); }
 
+    const char* CommandUnmodeled(uint32_t cmd) const;
+
 protected:
     const Layout& Lyt() const override;
     bool          IsSolidFill(uint32_t cmd) const override;
