@@ -23,6 +23,9 @@ const uint32_t kCerfFmt16Bpp = 4u;
 const uint32_t kCerfFmt24Bpp = 5u;
 const uint32_t kCerfFmt32Bpp = 6u;
 
+const uint32_t kCerfClearTypeLevelIndices       = 115u;
+const uint32_t kCerfClearTypeSampleCountIndices = 180u;
+
 const uint32_t kCerfRotate0   = 0u;
 const uint32_t kCerfRotate90  = 1u;
 const uint32_t kCerfRotate180 = 2u;
@@ -89,6 +92,8 @@ typedef struct CerfBltDescriptor {
 
     uint32_t band_row_first;
     uint32_t band_row_count;
+
+    uint32_t cleartype_indices;
 } CerfBltDescriptor;
 
 #if defined(__cplusplus)

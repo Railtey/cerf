@@ -274,6 +274,10 @@ void CerfDDGPE::EmitBltBand(const CerfBltBand& b, GPEBltParms* p, int r0, int r1
         int mxb = b.ml + c1,   myb = b.mt + rr1;
         CerfNarrowToMask(&mxa, &mya, &mxb, &myb, p->pMask, p->prclMask);
         FillSurface(&d.mask, p->pMask, mxa, mya, mxb, myb, false);
+        if (b.mask_bits == 8)
+            d.cleartype_indices = (g_OsMajor >= 4u)
+                ? CerfVirt::kCerfClearTypeLevelIndices
+                : CerfVirt::kCerfClearTypeSampleCountIndices;
     }
     if (b.has_brush) {
         d.has_brush    = 1u;

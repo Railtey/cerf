@@ -395,8 +395,19 @@ bool CerfVirtBlitter::BlendAAText(const CerfBltDescriptor& d, Surface& dst,
     AATextContext aa;
     const bool clear_type = d.mask.format == kCerfFmt8Bpp;
     aa.Build(d_masks, d.solid_color);
-    if (clear_type) aa.UseClearType();
     const uint32_t on_color = d.solid_color & cerf::ByteWidthMask(d_bpp);
+    uint32_t full_cov = 15u;
+    if (clear_type) {
+        switch (d.cleartype_indices) {
+        case kCerfClearTypeLevelIndices:       aa.UseClearType();                    break;
+        case kCerfClearTypeSampleCountIndices: aa.UseClearTypeSampleCount(on_color); break;
+        default:
+            emu_.Get<Fatal>().Die("[CerfVirtBlitter] ClearType mask with undeclared index set %u: "
+                                  "fmt=%u stride=%d", d.cleartype_indices, d.mask.format,
+                                  d.mask.stride);
+        }
+        full_cov = d.cleartype_indices - 1u;
+    }
 
     const int32_t width  = d.dst_rect.right  - d.dst_rect.left;
     const int32_t height = d.dst_rect.bottom - d.dst_rect.top;
@@ -424,11 +435,12 @@ bool CerfVirtBlitter::BlendAAText(const CerfBltDescriptor& d, Surface& dst,
             if (!dp) FatalPixel("AA-text dst", d.dst, dst_x, dst_y);
             const bool straddle = (drun < d_bpp);
             uint32_t v;
-            if (clear_type && cov > 114u)
+            if (clear_type && cov > full_cov)
                 emu_.Get<Fatal>().Die("[CerfVirtBlitter] ClearType mask index %u outside "
-                                      "the 115-entry table at x=%d y=%d: fmt=%u stride=%d",
-                                      cov, mask_x, mask_y, d.mask.format, d.mask.stride);
-            if ((!clear_type && cov >= 15u) || (clear_type && cov == 114u)) {
+                                      "the %u-entry table at x=%d y=%d: fmt=%u stride=%d",
+                                      cov, d.cleartype_indices, mask_x, mask_y,
+                                      d.mask.format, d.mask.stride);
+            if (cov >= full_cov) {
                 v = on_color;
             } else {
                 const uint32_t dv = straddle
