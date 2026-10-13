@@ -3,16 +3,13 @@
 #include "../../core/cerf_emulator.h"
 #include "../../boards/board_context.h"
 #include "../../boards/jornada720/jornada_720_id.h"
-#include "sa1111_system_controller.h"
+#include "../../jit/guest_cycle_clock.h"
 
 namespace {
 
-constexpr uint16_t kChannels      = 2u;
-constexpr uint16_t kBitsPerSample = 16u;
-
-uint32_t RoundedHz(uint64_t num, uint64_t den) {
-    return static_cast<uint32_t>((num + den / 2u) / den);
-}
+constexpr uint16_t kChannels       = 2u;
+constexpr uint16_t kBitsPerSample  = 16u;
+constexpr uint32_t kHostIdleRateHz = 44100u;
 
 }
 
@@ -22,16 +19,14 @@ bool Sa1111SacHostOutput::ShouldRegister() {
 }
 
 void Sa1111SacHostOutput::OnReady() {
-    uint64_t num = 0, den = 1;
-    emu_.Get<Sa1111SystemController>().AudioFrameRate(num, den);
-    rate_ = RoundedHz(num, den);
-    out_.Start("Sa1111Sac", rate_, kChannels, kBitsPerSample, true);
+    out_.Start("Sa1111Sac", kHostIdleRateHz, kChannels, kBitsPerSample, true);
+    rate_ = kHostIdleRateHz;
 }
 
 void Sa1111SacHostOutput::OnShutdown() { out_.Stop(); }
 
 void Sa1111SacHostOutput::SetRate(uint64_t fs_num, uint64_t fs_den) {
-    const uint32_t rate = RoundedHz(fs_num, fs_den);
+    const uint32_t rate = static_cast<uint32_t>(GuestCycleClock::Rate{fs_num, fs_den}.RoundedHz());
     if (rate == rate_) return;
     rate_ = rate;
     out_.SetFormat(rate, kChannels, kBitsPerSample);

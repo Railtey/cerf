@@ -266,6 +266,44 @@ void EmulatedMemory::CopyOut(uint32_t vaddr, void* host_dst, size_t size) {
     std::memcpy(host_dst, host + (vaddr - r->base), size);
 }
 
+uint32_t EmulatedMemory::TryCopyOut(uint32_t paddr, uint8_t* host_dst, uint32_t size) {
+    if (size == 0u) return 0u;
+    if (const uint8_t* span = TryTranslateRange(paddr, size)) {
+        std::memcpy(host_dst, span, size);
+        return size;
+    }
+    uint32_t k = 0;
+    for (; k < size; ++k) {
+        const uint8_t* byte = TryTranslate(paddr + k);
+        if (byte == nullptr) break;
+        host_dst[k] = *byte;
+    }
+    return k;
+}
+
+uint32_t EmulatedMemory::TryCopyIn(uint32_t paddr, const uint8_t* host_src, uint32_t size) {
+    if (size == 0u) return 0u;
+    if (uint8_t* span = TryTranslateRange(paddr, size, true)) {
+        std::memcpy(span, host_src, size);
+        return size;
+    }
+    uint32_t k = 0;
+    for (; k < size; ++k) {
+        uint8_t* byte = TryTranslateWrite(paddr + k);
+        if (byte == nullptr) break;
+        *byte = host_src[k];
+    }
+    return k;
+}
+
+uint32_t EmulatedMemory::WritableLength(uint32_t paddr, uint32_t size) {
+    if (size == 0u) return 0u;
+    if (TryTranslateRange(paddr, size, true) != nullptr) return size;
+    uint32_t k = 0;
+    while (k < size && TryTranslateWrite(paddr + k) != nullptr) ++k;
+    return k;
+}
+
 void EmulatedMemory::WipeVolatileRegions() {
     const size_t n = count_.load(std::memory_order_acquire);
     for (size_t i = 0; i < n; ++i) {

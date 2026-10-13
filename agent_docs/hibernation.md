@@ -164,6 +164,12 @@ Put a part that another build can lack, for example an optional card, in its own
 `BeginFrame` / `EndFrame`. For `std::atomic<uintN>`, use
 `.load(std::memory_order_acquire)` / `.store(v, std::memory_order_release)`.
 
+`SaveState` writes no guest RAM, because the image holds RAM ahead of the
+peripherals. Some peripherals write guest RAM late, at the next access after the
+write falls due. Such a peripheral does those writes in a
+`Hibernation::RegisterPreSaveListener` callback. Hibernation runs that callback
+before it writes the image.
+
 ### 2. `PostRestore()`
 
 It runs in a **second pass, after the `RestoreState` of every peripheral is

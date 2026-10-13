@@ -52,6 +52,10 @@ void Hibernation::JoinWorker() {
     if (worker_.joinable()) worker_.join();
 }
 
+void Hibernation::RegisterPreSaveListener(std::function<void()> fn) {
+    pre_save_listeners_.push_back(std::move(fn));
+}
+
 void Hibernation::SaveAsync(const std::wstring& path, std::function<void(bool)> on_done) {
     JoinWorker();
     ResetEvent(done_event_);
@@ -117,6 +121,7 @@ StateImageHeader Hibernation::LiveHeader() const {
 }
 
 bool Hibernation::WriteImage(const std::wstring& path, std::string& error) {
+    for (auto& fn : pre_save_listeners_) fn();
     StateWriter w(path);
     if (!w.Ok()) {
         error = w.Error();

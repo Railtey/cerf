@@ -2,6 +2,7 @@
 
 #include "../../core/cerf_emulator.h"
 #include "../../boards/board_context.h"
+#include "../../jit/guest_cycle_clock.h"
 #include "../guest_cpu_reset.h"
 #include "../../state/state_stream.h"
 #include "sa1100_id.h"
@@ -10,14 +11,25 @@
 
 namespace {
 
-/* SA-1110 Developer's Manual App. D.1: TUCR bit 10 MR, bits 31:29 TSEL2..0. SA-1100 TRM §10.8
-   (printed 10-31): "Test unit control register (TUCR) to set bit 10." */
-constexpr uint32_t kMr        = 1u << 10;
-constexpr uint32_t kTselShift = 29u;
+/* SA-1110 Developer's Manual App. D.1: TUCR bit 10 MR. SA-1100 TRM §10.8 (printed 10-31): "Test
+   unit control register (TUCR) to set bit 10." */
+constexpr uint32_t kMr = 1u << 10;
 
 constexpr uint32_t kGp21 = 21u;
 constexpr uint32_t kGp22 = 22u;
 constexpr uint32_t kGp27 = 27u;
+
+constexpr uint32_t kTselShift     = 29u;
+constexpr uint32_t kTsel32k       = 0u;
+constexpr uint32_t kTsel3686k     = 1u;
+constexpr uint32_t kTselVddRing   = 2u;
+constexpr uint32_t kTsel96MhzPll  = 3u;
+constexpr uint32_t kTsel32kRclk   = 4u;
+constexpr uint32_t kTsel3686kB    = 5u;
+constexpr uint32_t kTselMainPll   = 6u;
+
+constexpr uint64_t kOscillatorHz    = 3686400u;
+constexpr uint64_t kSecondaryPllMul = 13u;
 
 }
 
@@ -32,6 +44,9 @@ bool Sa11xxTestUnit::ShouldRegister() {
 void Sa11xxTestUnit::OnReady() {
     emu_.Get<GuestCpuReset>().RegisterResetListener([this](ResetLineKind) { tucr_ = 0u; });
     emu_.Get<Sa11xxGpio>().RegisterPinConfigListener([this] { NotifyChange(); });
+    emu_.Get<GuestCycleClock>().RegisterRateListener([this] {
+        if ((tucr_ >> kTselShift) == kTselMainPll) NotifyChange();
+    });
 }
 
 void Sa11xxTestUnit::Write(uint32_t value) {
@@ -54,11 +69,35 @@ Sa11xxTestUnit::Mbgnt Sa11xxTestUnit::MbgntPin() const {
     return gp21.latch ? Mbgnt::High : Mbgnt::Low;
 }
 
-bool Sa11xxTestUnit::Gp27Clock3686400() const {
+/* App. D.1 TSEL: "To observe these clocks, set bit 27 to one in the GAFR and GPDR registers";
+   §8.1: the 32.768-kHz and 3.6864-MHz crystals; §8: "The primary PLL provides clocks for the
+   core logic". */
+bool Sa11xxTestUnit::Gp27ClockRate(GuestCycleClock::Rate& rate) const {
     const Sa11xxGpio::PinConfig gp27 = emu_.Get<Sa11xxGpio>().Pin(kGp27);
     if (!gp27.alternate || !gp27.output) return false;
-    const uint32_t tsel = tucr_ >> kTselShift;
-    return tsel == 0x1u || tsel == 0x5u;
+    switch (tucr_ >> kTselShift) {
+        case kTsel32k:
+        case kTsel32kRclk:
+            rate = {32768u, 1u};
+            return true;
+        case kTselMainPll:
+            rate = emu_.Get<GuestCycleClock>().ClockRate();
+            rate.den *= 16u;
+            return true;
+        /* §11.12.1 (printed 11-127): "multiplying the 3.6864-MHz on-chip oscillator by 13";
+           App. D.1 TSEL 011 "96-MHz PLL/4". */
+        case kTsel96MhzPll:
+            rate = {kOscillatorHz * kSecondaryPllMul * 2u, 4u};
+            return true;
+        case kTsel3686k:
+        case kTsel3686kB:
+            rate = {kOscillatorHz, 1u};
+            return true;
+        case kTselVddRing:
+        default:
+            rate = {kOscillatorHz, 1u};
+            return true;
+    }
 }
 
 void Sa11xxTestUnit::RegisterChangeListener(std::function<void()> fn) {

@@ -10,6 +10,7 @@
 #include <functional>
 #include <string>
 #include <thread>
+#include <vector>
 
 class StateWriter;
 class StateReader;
@@ -36,6 +37,8 @@ public:
     void SaveAsync(const std::wstring& path, std::function<void(bool)> on_done = {});
     void RestoreAsync(const std::wstring& path, bool ram_only = false);
 
+    void RegisterPreSaveListener(std::function<void()> fn);
+
     void OnShutdown() override;
 
 private:
@@ -56,4 +59,6 @@ private:
 
     std::thread worker_;
     HANDLE      done_event_ = nullptr;
+
+    std::vector<std::function<void()>> pre_save_listeners_;
 };

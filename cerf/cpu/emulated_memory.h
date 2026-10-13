@@ -60,6 +60,10 @@ public:
        CopyIn. */
     void CopyOut(uint32_t vaddr, void* host_dst, size_t size);
 
+    uint32_t TryCopyOut(uint32_t paddr, uint8_t* host_dst, uint32_t size);
+    uint32_t TryCopyIn(uint32_t paddr, const uint8_t* host_src, uint32_t size);
+    uint32_t WritableLength(uint32_t paddr, uint32_t size);
+
     bool CanCopyRange(uint32_t paddr, size_t size, bool writable);
 
     /* Power-cycle RAM loss: zero every backed volatile region. Flash

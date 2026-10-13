@@ -3,10 +3,10 @@
 #include "../core/cerf_emulator.h"
 #include "../core/log.h"
 #include "../core/service.h"
+#include "../cpu/emulated_memory.h"
 #include "../state/state_stream.h"
 #include "freescale_module_clocks.h"
 #include "freescale_sdma_bus.h"
-#include "freescale_sdma_guest_memory.h"
 #include "freescale_sdma_ssi_stream.h"
 #include "freescale_ssi_core.h"
 #include "freescale_ssi_sdma_wiring.h"
@@ -102,10 +102,10 @@ private:
 
     void Fill(uint32_t buffer, uint32_t bytes) {
         const uint8_t zeros[256] = {};
-        auto&         guest      = emu_.Get<FreescaleSdmaGuestMemory>();
+        auto&         mem        = emu_.Get<EmulatedMemory>();
         for (uint32_t off = 0; off < bytes;) {
             const uint32_t n = std::min<uint32_t>(bytes - off, sizeof(zeros));
-            if (guest.Write(buffer + off, zeros, n) != n) return;
+            if (mem.TryCopyIn(buffer + off, zeros, n) != n) return;
             off += n;
         }
     }

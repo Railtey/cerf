@@ -6,7 +6,6 @@
 #include "../host/audio_activity_widget.h"
 #include "../state/state_stream.h"
 #include "freescale_module_clocks.h"
-#include "freescale_sdma_guest_memory.h"
 #include "freescale_ssi_core.h"
 #include "freescale_ssi_sdma_wiring.h"
 #include "guest_cpu_reset.h"
@@ -118,12 +117,11 @@ void FreescaleSdmaAudioPlayer::ReleaseChannel(uint32_t channel) {
 
 void FreescaleSdmaAudioPlayer::QueueSamples(uint32_t buf_pa, uint32_t bytes) {
     if (bytes == 0u || format_.rate_hz == 0u) return;
-    auto&   guest = emu_.Get<FreescaleSdmaGuestMemory>();
-    auto&   mem   = emu_.Get<EmulatedMemory>();
+    auto&   mem = emu_.Get<EmulatedMemory>();
     uint8_t chunk[PacedWaveOut::kMaxBlock];
     for (uint32_t off = 0; off < bytes;) {
         const uint32_t n = std::min<uint32_t>(bytes - off, PacedWaveOut::kMaxBlock);
-        for (uint32_t i = guest.Read(buf_pa + off, chunk, n); i < n; ++i) {
+        for (uint32_t i = mem.TryCopyOut(buf_pa + off, chunk, n); i < n; ++i) {
             chunk[i] = mem.ReadByte(buf_pa + off + i);
         }
         out_.QueueOutput(chunk, n);

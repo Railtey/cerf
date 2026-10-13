@@ -44,6 +44,12 @@ uint32_t Sa1111SacRxFifo::StatusBits(uint64_t pos, bool enabled, uint32_t thresh
     return bits;
 }
 
+bool Sa1111SacRxFifo::NextReach(uint64_t pos, uint64_t received, uint64_t& at) const {
+    if (!running_ || Received(pos) >= received) return false;
+    at = pos0_ + (received - level0_);
+    return true;
+}
+
 void Sa1111SacRxFifo::Start(uint64_t pos) {
     pos0_    = pos;
     running_ = true;
@@ -65,6 +71,19 @@ void Sa1111SacRxFifo::ClearOverrun(uint64_t pos) {
     level0_  = Level(pos);
     pos0_    = pos;
     overrun_ = false;
+}
+
+bool Sa1111SacRxFifo::Pop(uint64_t pos) {
+    if (Level(pos) == 0u) return false;
+    Take(pos, 1u);
+    return true;
+}
+
+void Sa1111SacRxFifo::Take(uint64_t pos, uint32_t words) {
+    const uint32_t level = Level(pos);
+    overrun_ = Overrun(pos);
+    level0_  = level > words ? level - words : 0u;
+    pos0_    = pos;
 }
 
 void Sa1111SacRxFifo::Save(StateWriter& w, uint64_t pos) const {

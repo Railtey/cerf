@@ -6,7 +6,6 @@
 #include "../core/log.h"
 #include "../cpu/emulated_memory.h"
 #include "../state/state_stream.h"
-#include "freescale_sdma_guest_memory.h"
 #include "freescale_uart_receiver.h"
 #include "freescale_uart_regs.h"
 #include "freescale_uart_transmitter.h"
@@ -124,13 +123,13 @@ void FreescaleUartSdma::RetireTx() {
 /* MCIMX51RM Table 59-22 (page 59-34): dma_req_tx is TXDMAEN with TRDY; Table 59-13 TRDY: "the TxFIFO
    emptied below its target threshold". */
 void FreescaleUartSdma::ServiceTx(uint64_t tick, const FreescaleUartDmaEnables& en) {
-    auto& guest = emu_.Get<FreescaleSdmaGuestMemory>();
+    auto& mem = emu_.Get<EmulatedMemory>();
     while (tx_active_ && en.tx && tx_.Level() <= en.txtl) {
         if (!OpenTx()) return;
         const uint32_t burst = std::min(tx_wm_, tx_left_);
         for (uint32_t i = 0; i < burst; ++i) {
             uint8_t byte = 0;
-            if (guest.Read(tx_buf_, &byte, 1u) == 0u) {
+            if (mem.TryCopyOut(tx_buf_, &byte, 1u) == 0u) {
                 tx_left_ = 0u;
                 break;
             }
@@ -170,7 +169,7 @@ void FreescaleUartSdma::CloseRx() {
    with IDLE; Linux imx.c imx_uart_dma_rx_callback: "The UART script from the SDMA firmware will jump
    to the next buffer descriptor, once a DMA transaction if finalized". */
 void FreescaleUartSdma::ServiceRx(uint64_t tick, const FreescaleUartDmaEnables& en) {
-    auto& guest = emu_.Get<FreescaleSdmaGuestMemory>();
+    auto& mem = emu_.Get<EmulatedMemory>();
     while (rx_active_) {
         const bool ready = en.rx && rx_.Level() >= en.rxtl;
         const bool aging = en.aging && (rx_.Usr1() & kUsr1Agtim) != 0u;
@@ -179,14 +178,14 @@ void FreescaleUartSdma::ServiceRx(uint64_t tick, const FreescaleUartDmaEnables& 
         if (!OpenRx()) return;
         const uint32_t want = aging || idle ? rx_.Level() : std::min(rx_wm_, rx_.Level());
         const uint32_t limit = std::min({want, rx_cap_ - rx_fill_, kFifoDepth});
-        const uint32_t room  = guest.Writable(rx_buf_ + rx_fill_, limit);
+        const uint32_t room  = mem.WritableLength(rx_buf_ + rx_fill_, limit);
         if (limit != 0u && room == 0u) {
             CloseRx();
             continue;
         }
         uint8_t data[kFifoDepth];
         const uint32_t n = rx_.Take(tick, room, data);
-        guest.Write(rx_buf_ + rx_fill_, data, n);
+        mem.TryCopyIn(rx_buf_ + rx_fill_, data, n);
         rx_fill_ += n;
         if (rx_fill_ == rx_cap_) {
             CloseRx();

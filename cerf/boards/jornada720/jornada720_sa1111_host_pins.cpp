@@ -18,8 +18,8 @@ Sa1111Sbi::Mbgnt ToSbi(Sa11xxTestUnit::Mbgnt pin) {
     return Sa1111Sbi::Mbgnt::Undetermined;
 }
 
-/* SA-1111 Developer's Manual Table 1-1: MBGNT "Memory bus grant, from SA-1110 processor"; CLK
-   "Master clock in, 3.6864 MHz. Connect to SA-1110 GPIO<27>." */
+/* SA-1111 Developer's Manual Table 1-2 (printed 1-4): MBGNT "Memory bus grant, from SA-1110
+   processor." */
 class Jornada720Sa1111HostPins : public Service {
 public:
     using Service::Service;
@@ -32,8 +32,7 @@ public:
     void OnReady() override {
         auto& sbi = emu_.Get<Sa1111Sbi>();
         auto& tu  = emu_.Get<Sa11xxTestUnit>();
-        sbi.SetHostPins([&tu] { return ToSbi(tu.MbgntPin()); },
-                        [&tu] { return tu.Gp27Clock3686400(); });
+        sbi.SetHostPins([&tu] { return ToSbi(tu.MbgntPin()); });
         tu.RegisterChangeListener([&sbi] { sbi.OnHostPinsChange(); });
         emu_.Get<GuestCpuReset>().RegisterResetReleaseListener([&sbi] { sbi.OnHostPinsChange(); });
     }

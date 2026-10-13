@@ -17,12 +17,15 @@ public:
     void Stop(uint64_t pos);
     void Clear(uint64_t pos);
     void ClearOverrun(uint64_t pos);
+    bool Pop(uint64_t pos);
+    void Take(uint64_t pos, uint32_t words);
 
     bool     Running() const { return running_; }
     uint32_t Level(uint64_t pos) const;
     bool     Overrun(uint64_t pos) const;
     bool     ServiceRequest(uint64_t pos, bool enabled, uint32_t threshold) const;
     uint32_t StatusBits(uint64_t pos, bool enabled, uint32_t threshold) const;
+    bool     NextReach(uint64_t pos, uint64_t received, uint64_t& at) const;
 
     void Save(StateWriter& w, uint64_t pos) const;
     void Restore(StateReader& r, uint64_t pos);

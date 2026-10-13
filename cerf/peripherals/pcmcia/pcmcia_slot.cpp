@@ -28,13 +28,17 @@ void PcmciaSlot::PublishPinsLocked() {
 }
 
 void PcmciaSlot::SetPowered(bool on) {
-    std::lock_guard<std::mutex> lk(bus_mutex_);
-    if (powered_ == on) return;
-    powered_ = on;
-    PublishPinsLocked();
-    if (!card_) return;
-    if (on) card_->PowerOn();
-    else    card_->PowerOff();
+    {
+        std::lock_guard<std::mutex> lk(bus_mutex_);
+        if (powered_ == on) return;
+        powered_ = on;
+        PublishPinsLocked();
+        if (card_) {
+            if (on) card_->PowerOn();
+            else    card_->PowerOff();
+        }
+    }
+    host_.OnCardPowerChanged(*this);
 }
 
 void PcmciaSlot::ResetCard() {
@@ -43,10 +47,13 @@ void PcmciaSlot::ResetCard() {
     card_->SocketReset();
 }
 
+void PcmciaSlot::SetCardEnabled(bool on) {
+    std::lock_guard<std::mutex> lk(bus_mutex_);
+    enabled_ = on;
+}
+
 bool PcmciaSlot::CardSelectedLocked() {
-    if (!card_ || !powered_) return false;
-    if (access_gate_) host_.OnCardAccess(*this);
-    return true;
+    return card_ && powered_ && enabled_;
 }
 
 uint8_t PcmciaSlot::ReadAttribute8(uint32_t offset) {

@@ -9,7 +9,6 @@
 #include "../../boards/board_context.h"
 #include "../../boards/jornada720/jornada_720_id.h"
 #include "../../core/cerf_emulator.h"
-#include "../../core/fatal.h"
 #include "../../host/host_widget_registry.h"
 #include "../../state/state_stream.h"
 
@@ -87,48 +86,25 @@ public:
         r.Read("pcssr", pcssr_);
         r.ReadBytes("irq_asserted", irq_asserted_, sizeof(irq_asserted_));
     }
-    void PostRestore() override { UpdateResetSignals(true); }
+    void PostRestore() override {
+        UpdateResetSignals(true);
+        for (int n = 0; n < 2; ++n) {
+            DriveCardDetect(*slots_[n]);
+            DriveReady(n);
+        }
+    }
 
-    void OnCardDetectChanged(PcmciaSlot& slot) override { DriveCardDetect(slot); }
+    void OnCardDetectChanged(PcmciaSlot& slot) override {
+        DriveCardDetect(slot);
+        DriveReady(SocketOf(slot));
+    }
+    void OnCardPowerChanged(PcmciaSlot& slot) override { DriveReady(SocketOf(slot)); }
 
-    /* Table 12-3 (printed 12-8) S0_nCE: "If PCCR<2> = 1 Then {if it is in sleep mode, {if
-       PCSSR<0> =0, This signal is tri-stated, elseif This signal is forced to high.} ...}
-       Else S0_nCE is tri-stated." */
-    void OnCardAccess(PcmciaSlot& slot) override {
-        const int n = SocketOf(slot);
-        uint32_t pccr = 0u;
-        {
-            std::lock_guard<std::mutex> lk(state_mutex_);
-            pccr = pccr_;
-        }
-        if (!ChipHeld() && (pccr & (kPccrS0Flt << n)) != 0u && !sbi_->SleepRequested()) return;
-        emu_.Get<Fatal>().Die("Sa1111Pcmcia: card access on socket %d with PCCR 0x%02X (FLT "
-                              "clear), the SA-1111 held in reset, or SKCR Sleep set is not "
-                              "modelled", n, pccr);
-    }
-    void OnCardIrqAsserted(PcmciaSlot& slot) override {
-        const int n = SocketOf(slot);
-        {
-            std::lock_guard<std::mutex> lk(state_mutex_);
-            irq_asserted_[n] = true;
-        }
-        emu_.Get<Sa1111Intc>().RaiseInterrupt(n == 0 ? kIntS0Ready
-                                                     : kIntS1Ready);
-    }
-    void OnCardIrqDeasserted(PcmciaSlot& slot) override {
-        const int n = SocketOf(slot);
-        {
-            std::lock_guard<std::mutex> lk(state_mutex_);
-            irq_asserted_[n] = false;
-        }
-        emu_.Get<Sa1111Intc>().LowerInterrupt(n == 0 ? kIntS0Ready
-                                                     : kIntS1Ready);
-    }
+    void OnCardIrqAsserted(PcmciaSlot& slot) override { SetCardIrq(SocketOf(slot), true); }
+    void OnCardIrqDeasserted(PcmciaSlot& slot) override { SetCardIrq(SocketOf(slot), false); }
 
 protected:
     void OnUnitReady() override {
-        slot0_.GateCardAccess();
-        slot1_.GateCardAccess();
         emu_.Get<PcmciaSpaceRouter>().ProvideSockets(slots_[0], slots_[1]);
         auto& widgets = emu_.Get<HostWidgetRegistry>();
         widgets.Register(slots_[0]);
@@ -136,6 +112,7 @@ protected:
         sbi_ = &emu_.Get<Sa1111Sbi>();
         emu_.Get<Sa1111SystemController>().RegisterClockListener(
             [this] { UpdateResetSignals(false); });
+        UpdateResetSignals(true);
     }
 
     uint32_t UnitReadWord(uint32_t addr) override {
@@ -195,25 +172,39 @@ private:
                                               !slot.HasCard());
     }
 
+    /* Table 12-3 (page 12-7) S0_READY_nIREQ: "Input from PC Card Socket RDY/nIRQ signal. This
+       signal can be accessed through Status Register and used as an interrupt source." */
+    bool ReadyPinLocked(int n) const { return slots_[n]->IsPowered() && !irq_asserted_[n]; }
+
+    void PublishReadyLocked(int n) {
+        emu_.Get<Sa1111Intc>().SetSourceLevel(n == 0 ? kIntS0Ready : kIntS1Ready,
+                                              ReadyPinLocked(n));
+    }
+
+    void DriveReady(int n) {
+        std::lock_guard<std::mutex> lk(state_mutex_);
+        PublishReadyLocked(n);
+    }
+
+    void SetCardIrq(int n, bool asserted) {
+        std::lock_guard<std::mutex> lk(state_mutex_);
+        irq_asserted_[n] = asserted;
+        PublishReadyLocked(n);
+    }
+
     uint32_t ComputePcsr() {
-        bool present0, present1, powered0, powered1, irq0, irq1;
-        present0 = slots_[0]->HasCard();
-        present1 = slots_[1]->HasCard();
-        powered0 = slots_[0]->IsPowered();
-        powered1 = slots_[1]->IsPowered();
+        bool ready0, ready1;
         {
             std::lock_guard<std::mutex> lk(state_mutex_);
-            irq0 = irq_asserted_[0];
-            irq1 = irq_asserted_[1];
+            ready0 = ReadyPinLocked(0);
+            ready1 = ReadyPinLocked(1);
         }
-        /* Empty-socket pins float high: CD invalid, VS/BVD pulled up.
-           READY_nIREQ reads low while the card asserts its IRQ. */
         uint32_t v = kPcsrS0Vs1 | kPcsrS0Vs2 | kPcsrS1Vs1 | kPcsrS1Vs2 |
                      kPcsrS0Bvd1 | kPcsrS0Bvd2 | kPcsrS1Bvd1 | kPcsrS1Bvd2;
-        if (!present0) v |= kPcsrS0CdInvalid;
-        if (!present1) v |= kPcsrS1CdInvalid;
-        if (present0 && powered0 && !irq0) v |= kPcsrS0Ready;
-        if (present1 && powered1 && !irq1) v |= kPcsrS1Ready;
+        if (!slots_[0]->HasCard()) v |= kPcsrS0CdInvalid;
+        if (!slots_[1]->HasCard()) v |= kPcsrS1CdInvalid;
+        if (ready0) v |= kPcsrS0Ready;
+        if (ready1) v |= kPcsrS1Ready;
         return v;
     }
 
@@ -235,16 +226,26 @@ private:
         return (pccr_ & (kPccrS0Rst << n)) != 0u;
     }
 
+    /* Table 12-3 (page 12-8) S0_nCE: "If PCCR<2> = 1 Then {if it is in sleep mode, {if PCSSR<0>
+       =0, This signal is tri-stated, elseif This signal is forced to high.} ...} Else S0_nCE is
+       tri-stated." */
+    bool CardEnabledLocked(int n) const {
+        return !ChipHeld() && (pccr_ & (kPccrS0Flt << n)) != 0u && !sbi_->SleepRequested();
+    }
+
     void UpdateResetSignals(bool quiet) {
         bool released[2] = {};
+        bool enabled[2]  = {};
         {
             std::lock_guard<std::mutex> lk(state_mutex_);
             for (int n = 0; n < 2; ++n) {
                 const bool asserted = ResetAssertedLocked(n);
                 released[n]         = reset_asserted_[n] && !asserted;
                 reset_asserted_[n]  = asserted;
+                enabled[n]          = CardEnabledLocked(n);
             }
         }
+        for (int n = 0; n < 2; ++n) slots_[n]->SetCardEnabled(enabled[n]);
         if (quiet) return;
         for (int n = 0; n < 2; ++n) {
             if (released[n]) slots_[n]->ResetCard();

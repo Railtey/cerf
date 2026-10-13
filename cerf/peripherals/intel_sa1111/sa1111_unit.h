@@ -6,6 +6,7 @@
 
 class Sa1111ResetLine;
 class Sa1111Sbi;
+class Sa1111SystemController;
 
 class Sa1111Unit : public Peripheral {
 public:
@@ -28,9 +29,8 @@ public:
 protected:
     virtual void OnUnitReady() {}
     virtual void OnChipReset(bool held) = 0;
-    virtual bool ClockedByRclk() const { return true; }
+    virtual bool NeedsRclk(uint32_t) const { return true; }
     bool ChipHeld() const;
-    bool ChipHoldPending() const;
 
     virtual uint8_t  UnitReadByte (uint32_t addr);
     virtual uint16_t UnitReadHalf (uint32_t addr);
@@ -42,9 +42,9 @@ protected:
     virtual void     UnitWriteDword(uint32_t addr, uint64_t value);
 
 private:
-    void RequireAccessible(uint32_t addr);
+    bool Admit(uint32_t addr);
 
-    Sa1111ResetLine*       reset_line_ = nullptr;
-    const Sa1111Sbi*       sbi_        = nullptr;
-    bool                   rclk_gated_ = true;
+    Sa1111ResetLine*        reset_line_ = nullptr;
+    Sa1111Sbi*              sbi_        = nullptr;
+    Sa1111SystemController* controller_ = nullptr;
 };

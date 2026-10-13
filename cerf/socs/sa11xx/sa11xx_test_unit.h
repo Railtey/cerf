@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../core/service.h"
+#include "../../jit/guest_cycle_clock.h"
 
 #include <cstdint>
 #include <functional>
@@ -22,7 +23,7 @@ public:
     void     Write(uint32_t value);
 
     Mbgnt MbgntPin() const;
-    bool  Gp27Clock3686400() const;
+    bool  Gp27ClockRate(GuestCycleClock::Rate& rate) const;
 
     void RegisterChangeListener(std::function<void()> fn);
 

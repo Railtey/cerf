@@ -12,7 +12,6 @@
 #include "../state/state_stream.h"
 #include "freescale_module_clocks.h"
 #include "freescale_sdma_bus.h"
-#include "freescale_sdma_guest_memory.h"
 #include "freescale_sdma_regs.h"
 #include "guest_cpu_reset.h"
 
@@ -338,8 +337,7 @@ private:
         const uint32_t count   = word0 & 0xFFFFu;
         if (count < kContextGr7Word + 1u) return;
         uint8_t gr7[4] = {};
-        if (emu_.Get<FreescaleSdmaGuestMemory>().Read(buf_pa + kContextGr7Word * 4u, gr7, 4u) !=
-            4u) {
+        if (emu_.Get<EmulatedMemory>().TryCopyOut(buf_pa + kContextGr7Word * 4u, gr7, 4u) != 4u) {
             return;
         }
         ctx_watermark_[channel] = cerf::le::U32(gr7);
