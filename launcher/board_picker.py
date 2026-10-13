@@ -57,7 +57,7 @@ class BoardPicker:
         self.tree, _ = grouped_tree(
             body, ("#0", "Board", 300, 200, "w", True),
             [("soc", "SoC", 200, 120, "w", True),
-             ("support", "Support level", support_w, support_w, "w", False)],
+             ("support", "Emulation coverage", support_w, support_w, "w", False)],
             selectmode="browse", row=1)
         self.tree.bind("<<TreeviewSelect>>", lambda _e: self._sync_ok())
         self.tree.bind("<Double-1>", self._on_double_click)
