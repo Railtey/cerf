@@ -5,73 +5,54 @@
 #include "../core/service.h"
 #include "../jit/mips/mips_cpu_state.h"
 
-/* MIPS ISA level a SoC's core implements (Linux arch/mips cpu.h MIPS_CPU_ISA_*).
-   One value today (VR5500 = MIPS IV); concretes select theirs as more land. */
+/* MIPS ISA level a SoC's core implements (Linux arch/mips cpu.h MIPS_CPU_ISA_*). */
 enum class MipsIsaLevel : uint32_t {
     kMips1,
-    kMips3,   /* MIPS_CPU_ISA_III */
-    kMips4,   /* MIPS_CPU_ISA_IV */
+    kMips3,
+    kMips4,
 };
 
-/* Per-SoC MIPS processor identity/capability strategy, MIPS analog of
-   ArmProcessorConfig. One concrete per MIPS SoC, selected by GetSocId(). */
 class MipsProcessorConfig : public Service {
 public:
     using Service::Service;
 
-    /* CP0 $15 (PRId) reset value: company<<16 | implementation<<8 | revision.
-       Seeded into MipsCpuState::cp0_prid at reset. */
-    virtual uint32_t Prid() const = 0;
+    bool ShouldRegister() override;
+    void OnReady() override;
 
-    /* Joint-TLB live entry count (QEMU nb_tlb). Seeds MipsCpuState::nb_tlb. */
-    virtual uint32_t TlbSize() const = 0;
+    uint32_t     Prid()         const { return prid_; }
+    uint32_t     TlbSize()      const { return tlb_size_; }
+    uint32_t     MinPageShift() const { return min_page_shift_; }
+    uint32_t     PhysAddrMask() const { return phys_addr_mask_; }
+    MipsIsaLevel IsaLevel()     const { return isa_level_; }
+    uint32_t     DeviceIpMask() const { return device_ip_mask_; }
 
-    /* log2(min TLB page size): VA offset bits a PFN leaves untranslated
-       (R4000/R5000 4 KB->12; VR4100 1 KB->10, VR4102 UM 5.2.2). Seeds
-       MipsCpuState::min_page_shift. */
-    virtual uint32_t MinPageShift() const = 0;
+    bool HasFpu()              const { return fpu_; }
+    bool HasLlsc()             const { return llsc_; }
+    bool HasCounter()          const { return counter_; }
+    bool HasWatch()            const { return watch_; }
+    bool HasVr41xxPowerModes() const { return vr41xx_power_modes_; }
+    bool HasMips16()           const { return mips16_; }
+    bool HasTx39MultiplyAdd()  const { return tx39_multiply_add_; }
 
-    /* AND-mask applied to a TLB-translated physical address for the SoC's
-       physical-space aliasing: the VR4102 mirrors PA 0-0x1FFFFFFF across the
-       whole space above 0x20000000 (UM Table 5-6) -> mask 0x1FFFFFFF; a SoC with
-       no such mirror returns 0xFFFFFFFF. Seeds MipsCpuState::phys_addr_mask. */
-    virtual uint32_t PhysAddrMask() const = 0;
-
-    /* ISA level the decoder must implement for this SoC (asserted at reset). */
-    virtual MipsIsaLevel IsaLevel() const = 0;
-
-    /* Cause.IP bits the SoC's interrupt controller drives. */
-    virtual uint32_t DeviceIpMask() const = 0;
-
-    /* Silicon capability flags - the cpuinfo_mips option set (Linux arch/mips
-       cpu.h MIPS_CPU_*), MIPS mirror of ArmProcessorConfig's HasX(). */
-    virtual bool HasFpu()     const = 0;   /* MIPS_CPU_FPU - CP1 present (gates COP1 decode) */
-    virtual bool HasLlsc()    const = 0;   /* MIPS_CPU_LLSC - gates LL/SC decode */
-    virtual bool HasCounter() const = 0;   /* MIPS_CPU_COUNTER - CP0 Count/Compare present */
-    virtual bool HasWatch()   const = 0;   /* MIPS_CPU_WATCH - CP0 WatchLo/WatchHi present */
-
-    /* STANDBY/SUSPEND/HIBERNATE (COP0 CO=1, funct 0x21/0x22/0x23). VR4102 UM
-       ch.27: "added in the VR4100 CPU core"; absent from MIPS I-IV, so a core
-       outside that family decodes them as reserved. */
-    virtual bool HasVr41xxPowerModes() const = 0;
-
-    /* MIPS16 ASE decode enabled (VR4100 Series UM U15509EJ2V0UM ch.3; the
-       MIPS16EN pin state at RTC reset, ibid. 3.1/3.4.3). False = JALX is a
-       reserved instruction and JR/JALR with source bit 0 set address-fault
-       (ibid. 3.4.3). */
-    virtual bool HasMips16() const = 0;
-
-    /* R3900 core MADD / MADDU (TMPR39xx-um p.155-156): major opcode 011100, funct 000000 /
-       000001. */
-    virtual bool HasTx39MultiplyAdd() const = 0;
-
-    /* Whether this SoC implements CP0 register `rd` - gates the config-dependent
-       registers (Count/Compare, WatchLo/WatchHi); always-present registers
-       return true and are further validated by Cp0RegOffset. Consumed by the
-       MFC0/MTC0 place fns. */
     bool HasCp0Reg(uint32_t rd) const {
         if (rd == MipsCp0::kCount   || rd == MipsCp0::kCompare) return HasCounter();
         if (rd == MipsCp0::kWatchLo || rd == MipsCp0::kWatchHi) return HasWatch();
         return true;
     }
+
+private:
+    uint32_t     prid_           = 0;
+    uint32_t     tlb_size_       = 0;
+    uint32_t     min_page_shift_ = 0;
+    uint32_t     phys_addr_mask_ = 0;
+    uint32_t     device_ip_mask_ = 0;
+    MipsIsaLevel isa_level_      = MipsIsaLevel::kMips1;
+
+    bool fpu_                = false;
+    bool llsc_               = false;
+    bool counter_            = false;
+    bool watch_              = false;
+    bool vr41xx_power_modes_ = false;
+    bool mips16_             = false;
+    bool tx39_multiply_add_  = false;
 };

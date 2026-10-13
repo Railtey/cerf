@@ -177,6 +177,9 @@ file is lost. The launcher therefore writes your choices here instead:
 - **`meta.name`** - your display-name override.
 - **Everything that you set in the device's *Properties***. The launcher stores only the values
   that you changed away from the device's own default.
+- **`cpu_config`** - your CPU values, from the *CPU Configuration* page. Each key is a parameter
+  `id` from `cpu_config_params` in `db.json`. Its value replaces the default of the board's SoC.
+  A hex value is a string such as `"0x6901B118"`. CERF reads this key from this file only.
 
 A ROM upgrade replaces the ROM and rewrites `cerf.json`. It does not touch `cerf-user.json`, so
 your configuration is still there afterwards.

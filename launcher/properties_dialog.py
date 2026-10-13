@@ -8,7 +8,9 @@ from board_info import board_ga_color_depth
 from branded_dialog import scaled
 from dialog_buttons import pack_actions
 from properties_model import PropertiesModel
+import cpu_config
 from properties_page_board import BoardRomPage, PAGE_BOARD
+from properties_page_cpu import CpuConfigPage, PAGE_CPU_CONFIG
 from properties_page_display import DisplayPage, PAGE_DISPLAY
 from properties_page_emulator import EmulatorSettingsPage, PAGE_EMULATOR
 from properties_page_ga import GuestAdditionsPage, PAGE_GUEST_ADDITIONS
@@ -92,10 +94,11 @@ class PropertiesDialog:
                                    self._scroll.bind_wheel)
         self._ga = GuestAdditionsPage(area, dlg, self._on_ga_toggled)
         self._display = DisplayPage(area, dlg)
+        self._cpu = CpuConfigPage(area, dlg, self._scroll.bind_wheel)
         self._emulator = EmulatorSettingsPage(area)
         self._pages: Dict[str, object] = {
             p.key: p for p in (self._board, self._ga, self._display,
-                               self._emulator)}
+                               self._cpu, self._emulator)}
         for page in self._pages.values():
             page.frame.grid(row=0, column=0, sticky="nsew", padx=pad,
                             pady=pad)
@@ -137,6 +140,7 @@ class PropertiesDialog:
             self._ok.config(state="disabled")
         elif mode == MODE_LIVE:
             self._board.set_enabled(False)
+            self._cpu.set_enabled(False)
             self._emulator.set_enabled(False)
             self._ga.lock_toggle()
 
@@ -147,6 +151,8 @@ class PropertiesDialog:
             keys.append(PAGE_GUEST_ADDITIONS)
         if self._subject.display_page_available(values):
             keys.append(PAGE_DISPLAY)
+        if cpu_config.available(values.get("board_id", "")):
+            keys.append(PAGE_CPU_CONFIG)
         keys.append(PAGE_EMULATOR)
         return keys
 
@@ -221,6 +227,7 @@ class PropertiesDialog:
         self._ga.set_auto_size(size)
         self._ga.set_auto_depth(board_ga_color_depth(board_id))
         self._display.set_auto_size(size)
+        self._cpu.set_board(board_id)
 
     def _on_board_changed(self) -> None:
         self._model.values["board_id"] = self._board.form.board_id()

@@ -55,6 +55,22 @@ vendor for the platform. If no public name exists, use the name that the ROM
 gives its platform. If the ROM gives no name, use the name of the design that
 the other members came from.
 
+## CPU configurations
+
+A `cpu_configs` row with a `soc_id` is the CPU of that SoC. A row without a
+`soc_id` is a shared base, not a preset. Only `inherits_cpu_config_id`
+reaches it.
+
+A row takes every value of the row that it inherits. Its own values replace
+the inherited values. A SoC row and the rows that it inherits give a value to
+every parameter of its architecture.
+
+Only a fact that the silicon fixes goes into `cpu_configs`. A rate or a state
+that the guest programs stays in code. The CPU clock is one example.
+
+The order of `cpu_config_params` is the display order. Put a new parameter
+next to the parameters that it relates to.
+
 ## Where an id constant lives
 
 Declare each id constant once, in its own header, next to the thing that it

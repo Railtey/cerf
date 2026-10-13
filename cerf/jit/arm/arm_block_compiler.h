@@ -13,6 +13,7 @@ struct ArmCpuState;
 class ArmCpu;
 class ArmDecoder;
 class ArmEmitServices;
+class ArmInstructionTiming;
 class ArmMmu;
 class ArmMmuProbe;
 class ThumbDecoder;
@@ -68,4 +69,5 @@ private:
     ArmMmuProbe*          probe_     = nullptr;
     ArmPageWalker*        walker_    = nullptr;
     ArmRoutedInstruction* routed_    = nullptr;
+    ArmInstructionTiming* timing_    = nullptr;
 };

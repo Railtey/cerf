@@ -342,7 +342,7 @@ void ConfigLoader::LoadInto(DeviceConfig& config) {
     std::string device_name;
     const std::string top_path = GetCerfDir() + "cerf.json";
     {
-        json j = CfgReadJsonFile(top_path);
+        json j = CfgReadLoggedJsonFile(top_path);
         if (!j.is_null()) {
             if (j.contains("device")) {
                 if (!j["device"].is_string())
@@ -369,7 +369,7 @@ void ConfigLoader::LoadInto(DeviceConfig& config) {
     config.device_name = device_name;
 
     const std::string dev_path = GetDeviceDir(device_name) + "cerf.json";
-    json dev = CfgReadJsonFile(dev_path);
+    json dev = CfgReadLoggedJsonFile(dev_path);
     if (dev.is_null()) {
         LOG(Cfg, "No device config: %s (using DeviceConfig defaults)\n", dev_path.c_str());
     } else {
@@ -383,8 +383,8 @@ void ConfigLoader::LoadInto(DeviceConfig& config) {
         LoadAdditionalPackages(dev, config, dev_path);
     }
 
-    const std::string user_path = GetDeviceDir(device_name) + "cerf-user.json";
-    json user = CfgReadJsonFile(user_path);
+    const std::string user_path = UserConfigPath(device_name);
+    json user = CfgReadLoggedJsonFile(user_path);
     if (!user.is_null()) {
         LOG(Cfg, "Loading user device config: %s\n", user_path.c_str());
         LoadMeta    (user, config.meta, user_path);

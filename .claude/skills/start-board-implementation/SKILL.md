@@ -137,11 +137,11 @@ fact gets a source.
   device specs) - not the user's word.
 - **B5 - SoC implemented in CERF? Reusable SoC?** Read the `socs` table in
   `bundled/db.json`; list
-  `cerf/socs/` + `cerf/cpu/`. Is this SoC present? Is the core's strategy set
-  under `cerf/cpu/<core>/` - `ArmProcessorConfig`/`CoprocEmitter` on ARM,
-  `MipsProcessorConfig`/`MipsCp0Emitter` on MIPS? If absent, is there a close
-  relative sharing silicon/core? Reuse is the difference between a short and a
-  long bring-up - name it.
+  `cerf/socs/` + `cerf/cpu/`. Is this SoC present? Does `cpu_configs` in
+  `bundled/db.json` have a row for it, and is the core's strategy set under
+  `cerf/cpu/<core>/` - `CoprocEmitter` on ARM, `MipsCp0Emitter` on MIPS? If
+  absent, is there a close relative sharing silicon/core? Reuse is the
+  difference between a short and a long bring-up - name it.
 
 ---
 
@@ -191,7 +191,7 @@ keep it a coarse index. Seed it with:
 - `TASK & WHY` - bring up board `<X>`; why it matters; empty FORBIDDEN
   CONCLUSIONS / BANNED APPROACHES.
 - **A standing `VERIFY GATE` line** (survives compaction): *"Every finished
-  implementation chunk - a peripheral, an `ArmProcessorConfig`/`CoprocEmitter`,
+  implementation chunk - a peripheral, a `cpu_configs` row/`CoprocEmitter`,
   the `PageTableBuilder`, the `BoardContext`, the LCD/INTC/timer/
   DMA/touch models - is run through `/verify` BEFORE the next chunk, verdict
   recorded in that session's `/tracking update` (CODE STATE, verbatim with
@@ -223,8 +223,9 @@ later write needs its own `/tracking update` from the user.
 Pick the entry point from the table, then run § The bring-up loop:
 
 - **New SoC/core (rows 6-7 ❌)** → start at the CPU/JIT strategy set for the
-  board's `CpuArch`: author `ArmProcessorConfig` + `CoprocEmitter`, or
-  `MipsProcessorConfig` + `MipsCp0Emitter`, from the CPU architecture reference
+  board's `CpuArch`: write the `cpu_configs` row of the SoC in
+  `bundled/db.json`, the core clock (`ArmCoreClock` or `MipsCoreClock`) and the
+  `CoprocEmitter` or `MipsCp0Emitter`, from the CPU architecture reference
   manual + the core TRM (downloaded to `references/<soc>/` first), then the
   `PageTableBuilder` / memory map, then the peripheral loop.
 - **SoC supported (rows 6-7 ✅)** → start at the `bundled/db.json` rows of the

@@ -22,7 +22,7 @@ void DeviceConfigRefresh::Refresh() {
     static const char* const kFiles[] = { "cerf.json", "cerf-user.json" };
     for (const char* name : kFiles) {
         const std::string path = dir + name;
-        nlohmann::json j = CfgReadJsonFile(path);
+        nlohmann::json j = CfgReadLoggedJsonFile(path);
         if (j.is_null()) continue;
         CfgLoadMutableFields(j, config, path);
     }

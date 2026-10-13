@@ -45,11 +45,15 @@ def _load() -> dict:
     return obj
 
 
-def _rows(table: str) -> List[dict]:
+def _objects(table: str) -> List[dict]:
     rows = _DB.get(table)
     if not isinstance(rows, list):
         return []
-    return [r for r in rows if isinstance(r, dict) and isinstance(r.get("id"), str)]
+    return [r for r in rows if isinstance(r, dict)]
+
+
+def _rows(table: str) -> List[dict]:
+    return [r for r in _objects(table) if isinstance(r.get("id"), str)]
 
 
 def _by_id(table: str) -> Dict[str, dict]:
@@ -90,6 +94,8 @@ BOARDS = [_effective_board(b) for b in _rows("boards")]
 BOARDS_BY_ID = {b["id"]: b for b in BOARDS}
 ROM_TYPES = _rows("rom_types")
 STORAGE_TYPES = _rows("storage_types")
+CPU_CONFIG_PARAMS = _rows("cpu_config_params")
+CPU_CONFIGS = _objects("cpu_configs")
 
 FEATURE_SPECS = [(f["id"], f.get("icon", f["id"]), f.get("name", f["id"]))
                  for f in DEVICE_FEATURES]

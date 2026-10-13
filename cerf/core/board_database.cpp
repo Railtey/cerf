@@ -16,30 +16,11 @@ using nlohmann::json;
 
 constexpr uint32_t kDefaultGaColorDepth = 24u;
 
-const json& RequireArray(const json& root, const char* key, const std::string& path) {
-    if (!root.contains(key) || !root[key].is_array())
-        CfgFatal(path, std::string("'") + key + "' must be an array");
-    return root[key];
-}
-
-std::string RequireString(const json& obj, const char* key, const std::string& path,
-                          const std::string& ctx) {
-    if (!obj.contains(key) || !obj[key].is_string() || obj[key].get<std::string>().empty())
-        CfgFatal(path, ctx + "." + key + " must be a non-empty string");
-    return obj[key].get<std::string>();
-}
-
 uint32_t RequirePositiveInt(const json& obj, const char* key, const std::string& path,
                             const std::string& ctx) {
     if (!obj.contains(key) || !obj[key].is_number_integer() || obj[key].get<int>() < 1)
         CfgFatal(path, ctx + "." + key + " must be a positive integer");
     return (uint32_t)obj[key].get<int>();
-}
-
-CpuArch ParseArch(const std::string& v, const std::string& path, const std::string& ctx) {
-    if (v == "ARM")  return CpuArch::Arm;
-    if (v == "MIPS") return CpuArch::Mips;
-    CfgFatal(path, ctx + ".arch '" + v + "' is unknown");
 }
 
 RomPlacingMode ParseRomPlacingMode(const std::string& v, const std::string& path,
@@ -81,10 +62,16 @@ struct BoardValues {
 
 }
 
+CpuArch ParseCpuArch(const std::string& value, const std::string& path,
+                     const std::string& ctx) {
+    if (value == "ARM")  return CpuArch::Arm;
+    if (value == "MIPS") return CpuArch::Mips;
+    CfgFatal(path, ctx + ".arch '" + value + "' is unknown");
+}
+
 void BoardDatabase::OnReady() {
-    const std::string path = GetCerfDir() + "db.json";
-    json root = CfgReadJsonFile(path);
-    if (root.is_null()) CfgFatal(path, "is missing: the installation is damaged");
+    const std::string path = DbJsonPath();
+    json root = CfgReadInstalledJsonFile(path);
 
     const char* kMountPointKey = "ga_shared_folder_mount_point";
     if (!root.contains(kMountPointKey) || !root[kMountPointKey].is_string() ||
@@ -93,43 +80,44 @@ void BoardDatabase::OnReady() {
                        "' must be a valid mount point name");
     ga_shared_folder_mount_point_ = root[kMountPointKey].get<std::string>();
 
-    for (const auto& f : RequireArray(root, "soc_families", path)) {
+    for (const auto& f : CfgRequireArray(root, "soc_families", path)) {
         if (!f.is_object()) CfgFatal(path, "soc_families[] entries must be objects");
         DbSocFamily row;
-        row.id   = RequireString(f, "id", path, "soc_families[]");
-        row.name = RequireString(f, "name", path, "soc_families[]");
-        row.arch = ParseArch(RequireString(f, "arch", path, "soc_families[]"), path,
-                             "soc_families[" + row.id + "]");
+        row.id   = CfgRequireString(f, "id", path, "soc_families[]");
+        row.name = CfgRequireString(f, "name", path, "soc_families[]");
+        row.arch = ParseCpuArch(CfgRequireString(f, "arch", path, "soc_families[]"),
+                                path, "soc_families[" + row.id + "]");
         soc_families_.push_back(std::move(row));
     }
 
-    for (const auto& s : RequireArray(root, "socs", path)) {
+    for (const auto& s : CfgRequireArray(root, "socs", path)) {
         if (!s.is_object()) CfgFatal(path, "socs[] entries must be objects");
         DbSoc row;
-        row.id        = RequireString(s, "id", path, "socs[]");
-        row.name      = RequireString(s, "name", path, "socs[]");
-        row.family_id = RequireString(s, "family_id", path, "socs[" + row.id + "]");
+        row.id        = CfgRequireString(s, "id", path, "socs[]");
+        row.name      = CfgRequireString(s, "name", path, "socs[]");
+        row.family_id = CfgRequireString(s, "family_id", path, "socs[" + row.id + "]");
         SocFamily(row.family_id);
         socs_.push_back(std::move(row));
     }
 
-    const json& families = RequireArray(root, "board_families", path);
-    for (const auto& b : RequireArray(root, "boards", path)) {
+    const json& families = CfgRequireArray(root, "board_families", path);
+    for (const auto& b : CfgRequireArray(root, "boards", path)) {
         if (!b.is_object()) CfgFatal(path, "boards[] entries must be objects");
         DbBoard row;
-        row.id = RequireString(b, "id", path, "boards[]");
+        row.id = CfgRequireString(b, "id", path, "boards[]");
         const std::string ctx = "boards[" + row.id + "]";
-        row.name       = RequireString(b, "name", path, ctx);
+        row.name       = CfgRequireString(b, "name", path, ctx);
         row.short_name = b.contains("short_name")
-                             ? RequireString(b, "short_name", path, ctx)
+                             ? CfgRequireString(b, "short_name", path, ctx)
                              : row.name;
-        row.family_id  = RequireString(b, "board_family_id", path, ctx);
+        row.family_id  = CfgRequireString(b, "board_family_id", path, ctx);
         const std::string family_ctx = "board_families[" + row.family_id + "]";
         const BoardValues v{ b, FindBoardFamily(families, row.family_id, path, ctx),
                              ctx, family_ctx };
         row.support_level = ParseSupportLevel(
-            RequireString(b, "support_level", path, ctx), path, ctx);
-        row.soc_id = RequireString(v.Owner("soc_id"), "soc_id", path, v.OwnerCtx("soc_id"));
+            CfgRequireString(b, "support_level", path, ctx), path, ctx);
+        row.soc_id = CfgRequireString(v.Owner("soc_id"), "soc_id", path,
+                                      v.OwnerCtx("soc_id"));
         Soc(row.soc_id);
         if (v.Owner("lcd_panel_size").contains("lcd_panel_size")) {
             const auto& p = v.Owner("lcd_panel_size")["lcd_panel_size"];
@@ -144,8 +132,8 @@ void BoardDatabase::OnReady() {
                                  v.OwnerCtx("ga_color_depth"))
             : kDefaultGaColorDepth;
         row.rom_placing_mode = ParseRomPlacingMode(
-            RequireString(v.Owner("rom_placing_mode"), "rom_placing_mode", path,
-                          v.OwnerCtx("rom_placing_mode")),
+            CfgRequireString(v.Owner("rom_placing_mode"), "rom_placing_mode", path,
+                             v.OwnerCtx("rom_placing_mode")),
             path, v.OwnerCtx("rom_placing_mode"));
         boards_.push_back(std::move(row));
     }
@@ -160,12 +148,12 @@ const DbBoard* BoardDatabase::FindBoard(std::string_view id) const {
 const DbSoc& BoardDatabase::Soc(std::string_view id) const {
     for (const auto& s : socs_)
         if (s.id == id) return s;
-    CfgFatal(GetCerfDir() + "db.json", "soc '" + std::string(id) + "' is not in socs[]");
+    CfgFatal(DbJsonPath(), "soc '" + std::string(id) + "' is not in socs[]");
 }
 
 const DbSocFamily& BoardDatabase::SocFamily(std::string_view id) const {
     for (const auto& f : soc_families_)
         if (f.id == id) return f;
-    CfgFatal(GetCerfDir() + "db.json",
+    CfgFatal(DbJsonPath(),
              "soc family '" + std::string(id) + "' is not in soc_families[]");
 }

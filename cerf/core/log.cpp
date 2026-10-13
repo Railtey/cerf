@@ -259,7 +259,7 @@ struct FloodState {
 static FloodState g_flood[(size_t)Log::Cat::COUNT] = {};
 
 static bool IsFloodSuppressed(Log::Cat cat) {
-    if (cat == Log::Cat::Cerf || cat == Log::Cat::Caution) return false;
+    if (Log::IsAlwaysOn(cat)) return false;
     if (g_allow_flood) return false;
     int idx = (int)cat;
     if (idx < 0 || idx >= (int)Log::Cat::COUNT) return false;

@@ -15,8 +15,7 @@ void UserConfigWriter::WriteConfigurableScreenSize(uint32_t width,
     if (width == 0 || height == 0) return;
 
     auto& config = emu_.Get<DeviceConfig>();
-    const std::string path =
-        GetDeviceDir(config.device_name) + "cerf-user.json";
+    const std::string path = UserConfigPath(config.device_name);
 
     nlohmann::json j = CfgReadJsonFile(path);
     if (!j.is_object()) j = nlohmann::json::object();

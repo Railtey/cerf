@@ -412,6 +412,7 @@ run_claude.cmd
           🆕 Configurable update channel<br/>
           🆕 UI revamp and optimizations<br/>
           🆕 Configurable board types, ROM and storage sources<br/>
+          🆕 CPU Configuration<br/>
           ✅ Launcher does not wait depend on internet connection and it&#x27;s speed to let you use it<br/>
           ✅ Toolbar buttons are now properly trimmed when not enough width</p>
         <p><b>💾 CE Apps</b><br/>

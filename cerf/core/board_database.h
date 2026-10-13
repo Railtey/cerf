@@ -11,6 +11,9 @@
 
 enum class CpuArch { Arm, Mips };
 
+CpuArch ParseCpuArch(const std::string& value, const std::string& path,
+                     const std::string& ctx);
+
 enum class RomPlacingMode { FlatContainer, Imx51Nand, Unknown };
 
 enum class SupportLevel { BootableFull, BootablePartial, UnknownPartial, NoSupport };

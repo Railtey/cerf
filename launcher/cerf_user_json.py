@@ -13,6 +13,7 @@ from device_state import (DeviceMeta, _load_json_object,
 
 CERF_USER_JSON_FILENAME = "cerf-user.json"
 LAUNCHER_LINK_KEY = "launcher"
+CPU_CONFIG_KEY = "cpu_config"
 
 
 def _merge_layer(base: dict, over: dict) -> dict:
@@ -207,6 +208,8 @@ def _extract_persist_fields(obj) -> dict:
             out["mount_point"] = mp
     if isinstance(obj.get("full_screen"), bool):
         out["full_screen"] = obj["full_screen"]
+    if isinstance(obj.get(CPU_CONFIG_KEY), dict):
+        out[CPU_CONFIG_KEY] = dict(obj[CPU_CONFIG_KEY])
     board = obj.get("board")
     if isinstance(board, dict):
         w = board.get("configurable_screen_width")
@@ -280,6 +283,10 @@ def write_persist_overrides(device_dir: Path, fields: dict) -> None:
             obj["full_screen"] = fields["full_screen"]
         else:
             obj.pop("full_screen", None)
+        if fields.get(CPU_CONFIG_KEY):
+            obj[CPU_CONFIG_KEY] = fields[CPU_CONFIG_KEY]
+        else:
+            obj.pop(CPU_CONFIG_KEY, None)
         board = obj.get("board") if isinstance(obj.get("board"), dict) else {}
         for field, json_key in _PERSIST_BOARD_KEYS.items():
             if field in fields:

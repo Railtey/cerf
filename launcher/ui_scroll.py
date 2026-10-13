@@ -43,12 +43,18 @@ class ScrollColumn:
         self.inner.bind("<Configure>",
                         lambda _e: fit_scrollregion(self._canvas))
 
-        def _on_canvas_config(e: object) -> None:
-            self._canvas.itemconfigure(self._inner_id, width=e.width)
+        def _follow_canvas_width(width: int) -> None:
+            self._canvas.itemconfigure(self._inner_id, width=width)
             fit_scrollregion(self._canvas)
             if on_width_changed is not None:
-                on_width_changed(e.width)
+                on_width_changed(width)
+
+        def _on_canvas_config(e: object) -> None:
+            if self._canvas.winfo_toplevel().winfo_ismapped():
+                _follow_canvas_width(e.width)
         self._canvas.bind("<Configure>", _on_canvas_config)
+        self._canvas.bind(
+            "<Map>", lambda _e: _follow_canvas_width(self._canvas.winfo_width()))
 
         self.bind_wheel(self._canvas)
         self.bind_wheel(self.inner)

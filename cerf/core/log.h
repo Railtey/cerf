@@ -20,7 +20,7 @@ namespace Log {
         X(Mmu,         "MMU",         "ARM MMU translation walker")                 \
         X(Tlb,         "TLB",         "ARM JIT page-table cache (GuestTlb)")        \
         X(Board,       "BOARD",       "board detection / BSP setup")                \
-        X(Cfg,         "CFG",         "device config loader")                       \
+        X(Cfg,         "CFG",         "device config loader (always on)")           \
         X(SocIntc,     "SOC_INTC",    "any SoC interrupt controller")               \
         X(SocWdt,      "SOC_WDT",     "any SoC watchdog")                           \
         X(SocClkpwr,   "SOC_CLKPWR",  "any SoC clock / power block")                \
@@ -83,7 +83,6 @@ namespace Log {
         | CatBit(Cat::Mmu)
         | CatBit(Cat::Tlb)
         | CatBit(Cat::Jit)
-        | CatBit(Cat::Cfg)
         | CatBit(Cat::SocReset)
         | CatBit(Cat::Discord)
         | CatBit(Cat::GuestAdditions)
@@ -98,10 +97,11 @@ namespace Log {
     inline uint64_t GetEnabled() {
         return detail::enabled_mask.load(std::memory_order_relaxed);
     }
+    inline constexpr bool IsAlwaysOn(Cat cat) {
+        return cat == Cat::Cerf || cat == Cat::Caution || cat == Cat::Cfg;
+    }
     inline bool IsEnabled(Cat cat) {
-        /* Cerf and Caution are hardcoded always-on - they describe events
-           the user must see regardless of --log= / --no-log= / --quiet. */
-        if (cat == Cat::Cerf || cat == Cat::Caution) return true;
+        if (IsAlwaysOn(cat)) return true;
         return (GetEnabled() & (1ULL << (int)cat)) != 0;
     }
 

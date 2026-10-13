@@ -12,7 +12,8 @@ from launch_options_presets import (DEFAULT_SCREEN_WIDTH,
 
 PERSIST_KEYS = ("network_enabled", "guest_additions", "color_scheme",
                 "full_screen", "width", "height", "dpi", "font_size",
-                "cleartype", "bpp", "share_folder", "mount_point")
+                "cleartype", "bpp", "share_folder", "mount_point",
+                "cpu_config")
 
 EXPLICIT_KEYS = ("width", "height", "bpp")
 

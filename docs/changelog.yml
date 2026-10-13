@@ -42,6 +42,7 @@
       Configurable update channel
       UI revamp and optimizations
       Configurable board types, ROM and storage sources
+      CPU Configuration
     fixed: |
       Launcher does not wait depend on internet connection and it's speed to let you use it
       Toolbar buttons are now properly trimmed when not enough width

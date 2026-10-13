@@ -144,6 +144,723 @@
       "family_id": "mips1"
     }
   ],
+  "cpu_config_params": [
+    {
+      "id": "midr",
+      "name": "Main ID (MIDR)",
+      "arch": "ARM",
+      "type": "hex"
+    },
+    {
+      "id": "ctr",
+      "name": "Cache Type (CTR)",
+      "arch": "ARM",
+      "type": "hex"
+    },
+    {
+      "id": "clidr",
+      "name": "Cache Level ID (CLIDR)",
+      "arch": "ARM",
+      "type": "hex"
+    },
+    {
+      "id": "ccsidr_l1i",
+      "name": "L1 instruction cache size ID (CCSIDR)",
+      "arch": "ARM",
+      "type": "hex"
+    },
+    {
+      "id": "ccsidr_l1d",
+      "name": "L1 data cache size ID (CCSIDR)",
+      "arch": "ARM",
+      "type": "hex"
+    },
+    {
+      "id": "ccsidr_l2",
+      "name": "L2 cache size ID (CCSIDR)",
+      "arch": "ARM",
+      "type": "hex"
+    },
+    {
+      "id": "pc_store_offset",
+      "name": "Stored PC value",
+      "arch": "ARM",
+      "type": "enum",
+      "enum_values": [
+        {
+          "id": "plus_8",
+          "name": "Instruction address + 8"
+        },
+        {
+          "id": "plus_12",
+          "name": "Instruction address + 12"
+        }
+      ]
+    },
+    {
+      "id": "base_restored_abort_model",
+      "name": "Base-restored data abort model",
+      "arch": "ARM",
+      "type": "boolean"
+    },
+    {
+      "id": "supersection_format",
+      "name": "Supersections",
+      "arch": "ARM",
+      "type": "enum",
+      "enum_values": [
+        {
+          "id": "unknown",
+          "name": "Undetermined"
+        },
+        {
+          "id": "none",
+          "name": "Not supported"
+        },
+        {
+          "id": "pa32",
+          "name": "32-bit physical address"
+        },
+        {
+          "id": "pa36",
+          "name": "36-bit physical address"
+        }
+      ]
+    },
+    {
+      "id": "thumb",
+      "name": "Thumb",
+      "arch": "ARM",
+      "type": "boolean"
+    },
+    {
+      "id": "thumb2",
+      "name": "Thumb-2",
+      "arch": "ARM",
+      "type": "boolean"
+    },
+    {
+      "id": "dsp",
+      "name": "DSP instructions",
+      "arch": "ARM",
+      "type": "boolean"
+    },
+    {
+      "id": "load_store_double",
+      "name": "LDRD / STRD",
+      "arch": "ARM",
+      "type": "boolean"
+    },
+    {
+      "id": "preload",
+      "name": "PLD",
+      "arch": "ARM",
+      "type": "boolean"
+    },
+    {
+      "id": "clz",
+      "name": "CLZ",
+      "arch": "ARM",
+      "type": "boolean"
+    },
+    {
+      "id": "blx_reg",
+      "name": "BLX (register)",
+      "arch": "ARM",
+      "type": "boolean"
+    },
+    {
+      "id": "armv5_unconditional_space",
+      "name": "ARMv5 unconditional instructions",
+      "arch": "ARM",
+      "type": "boolean"
+    },
+    {
+      "id": "load_to_pc_interworking",
+      "name": "Interworking loads to PC",
+      "arch": "ARM",
+      "type": "boolean"
+    },
+    {
+      "id": "data_proc_to_pc_interworking",
+      "name": "Interworking data processing to PC",
+      "arch": "ARM",
+      "type": "boolean"
+    },
+    {
+      "id": "accesses_spsr_in_system_mode",
+      "name": "SPSR access in System mode",
+      "arch": "ARM",
+      "type": "boolean"
+    },
+    {
+      "id": "mls",
+      "name": "MLS",
+      "arch": "ARM",
+      "type": "boolean"
+    },
+    {
+      "id": "movw_movt",
+      "name": "MOVW / MOVT",
+      "arch": "ARM",
+      "type": "boolean"
+    },
+    {
+      "id": "bit_field",
+      "name": "Bit field instructions",
+      "arch": "ARM",
+      "type": "boolean"
+    },
+    {
+      "id": "rev",
+      "name": "Byte reverse instructions",
+      "arch": "ARM",
+      "type": "boolean"
+    },
+    {
+      "id": "extend_rotate",
+      "name": "Extend instructions",
+      "arch": "ARM",
+      "type": "boolean"
+    },
+    {
+      "id": "ldrex_strex",
+      "name": "LDREX / STREX",
+      "arch": "ARM",
+      "type": "boolean"
+    },
+    {
+      "id": "ldrex_strex_v6k",
+      "name": "ARMv6K exclusive instructions",
+      "arch": "ARM",
+      "type": "boolean"
+    },
+    {
+      "id": "barrier_insn",
+      "name": "Barrier instructions",
+      "arch": "ARM",
+      "type": "boolean"
+    },
+    {
+      "id": "integer_divide",
+      "name": "SDIV / UDIV",
+      "arch": "ARM",
+      "type": "boolean"
+    },
+    {
+      "id": "cp15_v6",
+      "name": "ARMv6 CP15 registers",
+      "arch": "ARM",
+      "type": "boolean"
+    },
+    {
+      "id": "cp15_v7",
+      "name": "ARMv7 CP15 registers",
+      "arch": "ARM",
+      "type": "boolean"
+    },
+    {
+      "id": "security_extensions",
+      "name": "Security Extensions",
+      "arch": "ARM",
+      "type": "boolean"
+    },
+    {
+      "id": "aux_control_register",
+      "name": "Auxiliary Control Register",
+      "arch": "ARM",
+      "type": "boolean"
+    },
+    {
+      "id": "l2_cache_aux_control",
+      "name": "L2 Cache Auxiliary Control Register",
+      "arch": "ARM",
+      "type": "boolean"
+    },
+    {
+      "id": "l1_system_array_debug",
+      "name": "L1 system array debug operations",
+      "arch": "ARM",
+      "type": "boolean"
+    },
+    {
+      "id": "vfp",
+      "name": "VFP",
+      "arch": "ARM",
+      "type": "boolean"
+    },
+    {
+      "id": "neon",
+      "name": "Advanced SIMD (NEON)",
+      "arch": "ARM",
+      "type": "boolean"
+    },
+    {
+      "id": "fpsid",
+      "name": "Floating-point System ID (FPSID)",
+      "arch": "ARM",
+      "type": "hex"
+    },
+    {
+      "id": "mvfr0",
+      "name": "Media and VFP Feature 0 (MVFR0)",
+      "arch": "ARM",
+      "type": "hex"
+    },
+    {
+      "id": "mvfr1",
+      "name": "Media and VFP Feature 1 (MVFR1)",
+      "arch": "ARM",
+      "type": "hex"
+    },
+    {
+      "id": "prid",
+      "name": "Processor ID (PRId)",
+      "arch": "MIPS",
+      "type": "hex"
+    },
+    {
+      "id": "isa_level",
+      "name": "ISA level",
+      "arch": "MIPS",
+      "type": "enum",
+      "enum_values": [
+        {
+          "id": "mips1",
+          "name": "MIPS I"
+        },
+        {
+          "id": "mips3",
+          "name": "MIPS III"
+        },
+        {
+          "id": "mips4",
+          "name": "MIPS IV"
+        }
+      ]
+    },
+    {
+      "id": "tlb_size",
+      "name": "TLB entries",
+      "arch": "MIPS",
+      "type": "integer"
+    },
+    {
+      "id": "min_page_size",
+      "name": "Minimum page size",
+      "arch": "MIPS",
+      "type": "enum",
+      "enum_values": [
+        {
+          "id": "1kb",
+          "name": "1 KB"
+        },
+        {
+          "id": "4kb",
+          "name": "4 KB"
+        }
+      ]
+    },
+    {
+      "id": "phys_addr_mask",
+      "name": "Physical address mask",
+      "arch": "MIPS",
+      "type": "hex"
+    },
+    {
+      "id": "device_ip_mask",
+      "name": "Device interrupt lines (Cause.IP)",
+      "arch": "MIPS",
+      "type": "hex"
+    },
+    {
+      "id": "fpu",
+      "name": "Floating-point unit",
+      "arch": "MIPS",
+      "type": "boolean"
+    },
+    {
+      "id": "llsc",
+      "name": "LL / SC",
+      "arch": "MIPS",
+      "type": "boolean"
+    },
+    {
+      "id": "counter",
+      "name": "Count / Compare",
+      "arch": "MIPS",
+      "type": "boolean"
+    },
+    {
+      "id": "watch",
+      "name": "WatchLo / WatchHi",
+      "arch": "MIPS",
+      "type": "boolean"
+    },
+    {
+      "id": "vr41xx_power_modes",
+      "name": "VR4100 power-mode instructions",
+      "arch": "MIPS",
+      "type": "boolean"
+    },
+    {
+      "id": "mips16",
+      "name": "MIPS16",
+      "arch": "MIPS",
+      "type": "boolean"
+    },
+    {
+      "id": "tx39_multiply_add",
+      "name": "TX39 multiply-add",
+      "arch": "MIPS",
+      "type": "boolean"
+    }
+  ],
+  "cpu_configs": [
+    {
+      "id": "arm",
+      "values": {
+        "clidr": "0x00000000",
+        "ccsidr_l1i": "0x00000000",
+        "ccsidr_l1d": "0x00000000",
+        "ccsidr_l2": "0x00000000",
+        "supersection_format": "none",
+        "thumb": true,
+        "thumb2": false,
+        "preload": false,
+        "clz": false,
+        "blx_reg": false,
+        "armv5_unconditional_space": false,
+        "load_to_pc_interworking": false,
+        "data_proc_to_pc_interworking": false,
+        "accesses_spsr_in_system_mode": false,
+        "mls": false,
+        "movw_movt": false,
+        "bit_field": false,
+        "rev": false,
+        "extend_rotate": false,
+        "ldrex_strex": false,
+        "ldrex_strex_v6k": false,
+        "barrier_insn": false,
+        "integer_divide": false,
+        "cp15_v6": false,
+        "cp15_v7": false,
+        "security_extensions": false,
+        "aux_control_register": false,
+        "l2_cache_aux_control": false,
+        "l1_system_array_debug": false,
+        "vfp": false,
+        "neon": false,
+        "fpsid": "0x00000000",
+        "mvfr0": "0x00000000",
+        "mvfr1": "0x00000000"
+      }
+    },
+    {
+      "id": "strongarm",
+      "inherits_cpu_config_id": "arm",
+      "values": {
+        "pc_store_offset": "plus_8",
+        "base_restored_abort_model": true,
+        "thumb": false,
+        "dsp": false,
+        "load_store_double": false
+      }
+    },
+    {
+      "soc_id": "sa1100",
+      "inherits_cpu_config_id": "strongarm",
+      "values": {
+        "midr": "0x4401A110",
+        "ctr": "0x4401A110"
+      }
+    },
+    {
+      "soc_id": "sa1110",
+      "inherits_cpu_config_id": "strongarm",
+      "values": {
+        "midr": "0x6901B118",
+        "ctr": "0x6901B118"
+      }
+    },
+    {
+      "id": "xscale",
+      "inherits_cpu_config_id": "arm",
+      "values": {
+        "pc_store_offset": "plus_8",
+        "base_restored_abort_model": true,
+        "dsp": true,
+        "load_store_double": true,
+        "preload": true,
+        "clz": true,
+        "blx_reg": true,
+        "armv5_unconditional_space": true,
+        "load_to_pc_interworking": true,
+        "aux_control_register": true
+      }
+    },
+    {
+      "soc_id": "pxa255",
+      "inherits_cpu_config_id": "xscale",
+      "values": {
+        "midr": "0x69052D06",
+        "ctr": "0x0B1AA1AA",
+        "accesses_spsr_in_system_mode": true
+      }
+    },
+    {
+      "soc_id": "pxa270",
+      "inherits_cpu_config_id": "xscale",
+      "values": {
+        "midr": "0x69054117",
+        "ctr": "0x0D172172",
+        "accesses_spsr_in_system_mode": true
+      }
+    },
+    {
+      "soc_id": "iop13xx",
+      "inherits_cpu_config_id": "xscale",
+      "values": {
+        "midr": "0x69056000",
+        "ctr": "0x0B192192",
+        "supersection_format": "pa36"
+      }
+    },
+    {
+      "soc_id": "arm720t",
+      "inherits_cpu_config_id": "arm",
+      "values": {
+        "midr": "0x41807200",
+        "ctr": "0x41807200",
+        "pc_store_offset": "plus_12",
+        "base_restored_abort_model": false,
+        "dsp": false,
+        "load_store_double": false
+      }
+    },
+    {
+      "soc_id": "s3c2410",
+      "inherits_cpu_config_id": "arm",
+      "values": {
+        "midr": "0x69059201",
+        "ctr": "0x0B172172",
+        "pc_store_offset": "plus_12",
+        "base_restored_abort_model": true,
+        "dsp": true,
+        "load_store_double": true
+      }
+    },
+    {
+      "soc_id": "imx31",
+      "inherits_cpu_config_id": "arm",
+      "values": {
+        "midr": "0x4127B363",
+        "ctr": "0x1D152152",
+        "pc_store_offset": "plus_8",
+        "base_restored_abort_model": true,
+        "supersection_format": "pa32",
+        "dsp": true,
+        "load_store_double": true,
+        "preload": true,
+        "clz": true,
+        "blx_reg": true,
+        "armv5_unconditional_space": true,
+        "load_to_pc_interworking": true,
+        "rev": true,
+        "extend_rotate": true,
+        "ldrex_strex": true,
+        "ldrex_strex_v6k": true,
+        "cp15_v6": true,
+        "aux_control_register": true,
+        "vfp": true,
+        "fpsid": "0x410120B3",
+        "mvfr0": "0x11111111",
+        "mvfr1": "0x00000000"
+      }
+    },
+    {
+      "id": "armv7a",
+      "inherits_cpu_config_id": "arm",
+      "values": {
+        "pc_store_offset": "plus_8",
+        "base_restored_abort_model": true,
+        "supersection_format": "unknown",
+        "thumb2": true,
+        "dsp": true,
+        "load_store_double": true,
+        "preload": true,
+        "clz": true,
+        "blx_reg": true,
+        "armv5_unconditional_space": true,
+        "load_to_pc_interworking": true,
+        "data_proc_to_pc_interworking": true,
+        "mls": true,
+        "movw_movt": true,
+        "bit_field": true,
+        "rev": true,
+        "extend_rotate": true,
+        "ldrex_strex": true,
+        "ldrex_strex_v6k": true,
+        "barrier_insn": true,
+        "cp15_v6": true,
+        "cp15_v7": true
+      }
+    },
+    {
+      "id": "cortex_a8",
+      "inherits_cpu_config_id": "armv7a",
+      "values": {
+        "ctr": "0x82048004",
+        "supersection_format": "pa32",
+        "security_extensions": true,
+        "aux_control_register": true,
+        "l2_cache_aux_control": true,
+        "l1_system_array_debug": true,
+        "vfp": true,
+        "neon": true,
+        "fpsid": "0x410330C0",
+        "mvfr0": "0x11110222",
+        "mvfr1": "0x00011111"
+      }
+    },
+    {
+      "soc_id": "imx51",
+      "inherits_cpu_config_id": "cortex_a8",
+      "values": {
+        "midr": "0x412FC085",
+        "clidr": "0x0A000023",
+        "ccsidr_l1i": "0x200FE01A",
+        "ccsidr_l1d": "0xE00FE01A",
+        "ccsidr_l2": "0xF03FE03A"
+      }
+    },
+    {
+      "soc_id": "omap3530",
+      "inherits_cpu_config_id": "cortex_a8",
+      "values": {
+        "midr": "0x410FC080",
+        "clidr": "0x0A000003",
+        "ccsidr_l1i": "0x2007E01A",
+        "ccsidr_l1d": "0xE007E01A",
+        "ccsidr_l2": "0xF0000000"
+      }
+    },
+    {
+      "soc_id": "msm8255",
+      "inherits_cpu_config_id": "armv7a",
+      "values": {
+        "midr": "0x510F02D0",
+        "ctr": "0x8003C003",
+        "clidr": "0x0A000023",
+        "ccsidr_l1i": "0x201FE019",
+        "ccsidr_l1d": "0xE01FE019",
+        "ccsidr_l2": "0xF07FE039",
+        "security_extensions": true,
+        "aux_control_register": true,
+        "vfp": true,
+        "neon": true,
+        "fpsid": "0x51400000",
+        "mvfr0": "0x11110222",
+        "mvfr1": "0x00011111"
+      }
+    },
+    {
+      "id": "vr41xx",
+      "values": {
+        "isa_level": "mips3",
+        "tlb_size": 32,
+        "min_page_size": "1kb",
+        "phys_addr_mask": "0x1FFFFFFF",
+        "device_ip_mask": "0x00003C00",
+        "fpu": false,
+        "llsc": false,
+        "counter": true,
+        "watch": true,
+        "vr41xx_power_modes": true,
+        "mips16": false,
+        "tx39_multiply_add": false
+      }
+    },
+    {
+      "soc_id": "vr4102",
+      "inherits_cpu_config_id": "vr41xx",
+      "values": {
+        "prid": "0x00000C00"
+      }
+    },
+    {
+      "soc_id": "vr4111",
+      "inherits_cpu_config_id": "vr41xx",
+      "values": {
+        "prid": "0x00000C50"
+      }
+    },
+    {
+      "soc_id": "vr4121",
+      "inherits_cpu_config_id": "vr41xx",
+      "values": {
+        "prid": "0x00000C60"
+      }
+    },
+    {
+      "soc_id": "vr4122",
+      "inherits_cpu_config_id": "vr41xx",
+      "values": {
+        "prid": "0x00000C70",
+        "device_ip_mask": "0x00001C00",
+        "mips16": true
+      }
+    },
+    {
+      "id": "tx39",
+      "values": {
+        "isa_level": "mips1",
+        "tlb_size": 32,
+        "min_page_size": "4kb",
+        "phys_addr_mask": "0xFFFFFFFF",
+        "device_ip_mask": "0x00005000",
+        "fpu": false,
+        "llsc": false,
+        "counter": false,
+        "watch": false,
+        "vr41xx_power_modes": false,
+        "mips16": false,
+        "tx39_multiply_add": true
+      }
+    },
+    {
+      "soc_id": "pr31500",
+      "inherits_cpu_config_id": "tx39",
+      "values": {
+        "prid": "0x00002200"
+      }
+    },
+    {
+      "soc_id": "pr31700",
+      "inherits_cpu_config_id": "tx39",
+      "values": {
+        "prid": "0x00002202"
+      }
+    },
+    {
+      "soc_id": "vr5500",
+      "values": {
+        "prid": "0x00005500",
+        "isa_level": "mips4",
+        "tlb_size": 48,
+        "min_page_size": "4kb",
+        "phys_addr_mask": "0xFFFFFFFF",
+        "device_ip_mask": "0x00003C00",
+        "fpu": true,
+        "llsc": true,
+        "counter": true,
+        "watch": true,
+        "vr41xx_power_modes": false,
+        "mips16": false,
+        "tx39_multiply_add": false
+      }
+    }
+  ],
   "device_features": [
     {
       "id": "touch",

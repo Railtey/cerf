@@ -13,8 +13,10 @@ from device_file_types import device_file_types
 from launch_options_bpp import bpp_label, model_bpp
 from launch_options_dpi import dpi_label, model_dpi
 from launch_options_font_size import font_size_label, model_font_size
+import cpu_config
 from properties_model import PropertiesModel
 from properties_page_board import BoardRomPage, PAGE_BOARD
+from properties_page_cpu import CpuConfigPage, PAGE_CPU_CONFIG
 from properties_page_display import DisplayPage, PAGE_DISPLAY
 from properties_page_emulator import EmulatorSettingsPage, PAGE_EMULATOR
 from properties_page_ga import (GuestAdditionsPage, PAGE_GUEST_ADDITIONS,
@@ -51,8 +53,10 @@ class ConfigPreviewPanel:
         self.board = block(BoardRomPage.title, 0, PAGE_BOARD)
         self.ga = block(GuestAdditionsPage.title, 1, PAGE_GUEST_ADDITIONS)
         self.display = block(DisplayPage.title, 2, PAGE_DISPLAY)
-        self.emulator = block(EmulatorSettingsPage.title, 3, PAGE_EMULATOR)
-        self._blocks = [self.board, self.ga, self.display, self.emulator]
+        self.cpu = block(CpuConfigPage.title, 3, PAGE_CPU_CONFIG)
+        self.emulator = block(EmulatorSettingsPage.title, 4, PAGE_EMULATOR)
+        self._blocks = [self.board, self.ga, self.display, self.cpu,
+                        self.emulator]
         self._rows: Dict[SideBlock, KeyValueRows] = {
             b: KeyValueRows(b.body) for b in self._blocks}
         self._shown: Set[SideBlock] = set()
@@ -115,6 +119,12 @@ class ConfigPreviewPanel:
         else:
             self._hide(self.display)
 
+        if cpu_config.available(board_id):
+            self._fill(self.cpu, self._cpu_rows(board_id,
+                                                values.get("cpu_config")))
+        else:
+            self._hide(self.cpu)
+
         self._fill(self.emulator, [
             ("Borderless full screen", _on_off(values.get("full_screen",
                                                           False))),
@@ -147,14 +157,34 @@ class ConfigPreviewPanel:
         if share:
             rows.append(("Mount point",
                          MOUNT_PREFIX + values.get("mount_point", "")))
-        rows += [("Resolution",
-                  resolution_label(model_size(values), auto_size)),
-                 ("Color depth", bpp_label(model_bpp(values), auto_depth)),
-                 ("DPI", dpi_label(model_dpi(values))),
-                 ("Font size", font_size_label(model_font_size(values))),
-                 ("ClearType", cleartype_label(model_cleartype(values))),
-                 ("Color scheme",
-                  color_scheme_label(values.get("color_scheme", "")))]
+        size = model_size(values)
+        if size is not None:
+            rows.append(("Resolution", resolution_label(size, auto_size)))
+        bpp = model_bpp(values)
+        if bpp is not None:
+            rows.append(("Color depth", bpp_label(bpp, auto_depth)))
+        dpi = model_dpi(values)
+        if dpi is not None:
+            rows.append(("DPI", dpi_label(dpi)))
+        font_size = model_font_size(values)
+        if font_size is not None:
+            rows.append(("Font size", font_size_label(font_size)))
+        cleartype = model_cleartype(values)
+        if cleartype is not None:
+            rows.append(("ClearType", cleartype_label(cleartype)))
+        scheme = values.get("color_scheme", "")
+        if scheme:
+            rows.append(("Color scheme", color_scheme_label(scheme)))
+        return rows
+
+    def _cpu_rows(self, board_id: str, overrides: object) -> Rows:
+        overrides = cpu_config.applicable_overrides(board_id, overrides)
+        rows: Rows = [("Preset", cpu_config.preset_label(board_id, overrides))]
+        for param in cpu_config.params_for_arch(cpu_config.board_arch(board_id)):
+            if param["id"] in overrides:
+                rows.append((param.get("name", param["id"]),
+                             cpu_config.value_label(param,
+                                                    overrides[param["id"]])))
         return rows
 
     def _fill(self, block: SideBlock, rows: Rows) -> None:

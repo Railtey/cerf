@@ -6,7 +6,6 @@
 #include "../../core/fatal.h"
 #include "../../core/log.h"
 #include "../../core/rate_probe.h"
-#include "../../cpu/arm_processor_config.h"
 #include "../../tracing/trace_manager.h"
 #include "../x86_emit.h"
 #include "../x86_emit_alu.h"
@@ -15,6 +14,7 @@
 #include "thumb32_decoder.h"
 #include "thumb_decoder.h"
 #include "arm_emit_services.h"
+#include "arm_instruction_timing.h"
 #include "arm_mmu.h"
 #include "arm_mmu_probe.h"
 #include "arm_mmu_state.h"
@@ -107,6 +107,7 @@ void ArmBlockCompiler::OnReady() {
     probe_     = &emu_.Get<ArmMmuProbe>();
     walker_    = &emu_.Get<ArmPageWalker>();
     routed_    = &emu_.Get<ArmRoutedInstruction>();
+    timing_    = &emu_.Get<ArmInstructionTiming>();
 
     block_ctx_.emit = emit_;
     BuildTrampolines();
@@ -281,8 +282,7 @@ size_t ArmBlockCompiler::GenerateCode(uint8_t* code, uint8_t* code_end) {
     block_ctx_.native_start = start;
     const uint32_t self =
         static_cast<uint32_t>(reinterpret_cast<uintptr_t>(this));
-    TraceManager&             tm     = emu_.Get<TraceManager>();
-    const ArmProcessorConfig* config = emit_->ProcessorConfig();
+    TraceManager& tm = emu_.Get<TraceManager>();
 
     for (uint32_t i = 0; i < block_ctx_.num_insns; ++i) {
         if (static_cast<size_t>(code_end - cursor) < kArmBlockReserveBytes) {
@@ -303,7 +303,7 @@ size_t ArmBlockCompiler::GenerateCode(uint8_t* code, uint8_t* code_end) {
             EmitAddRegImm32(cursor, kEsp, 8);
         }
 
-        EmitCycleAdvance(cursor, config->CycleCostFor(insn));
+        EmitCycleAdvance(cursor, timing_->CycleCostFor(insn));
         uint8_t* skip = nullptr;
         if (insn.cond != 14u) {
             skip = EmitConditionGuard(cursor, insn.cond);

@@ -4,8 +4,6 @@
 
 #include "../core/service.h"
 
-struct DecodedInsn;
-
 /* ARM DDI 0406C.c B3.5: whether a VMSAv7 implementation supports Supersections
    is IMPLEMENTATION DEFINED, and the extended base address in descriptor
    bits[8:5, 23:20] is a further option on top. */
@@ -20,99 +18,121 @@ class ArmProcessorConfig : public Service {
 public:
     using Service::Service;
 
-    virtual uint32_t PcStoreOffset()              const = 0;
-    virtual bool     BaseRestoredAbortModel()     const = 0;
-    virtual uint32_t CacheLineSize()              const = 0;
-    virtual uint32_t Midr()                       const = 0;
-    virtual uint32_t Ctr()                        const = 0;
+    bool ShouldRegister() override;
+    void OnReady() override;
 
-    /* Issue cycles for one decoded ARM/Thumb instruction. Concretes
-       classify by place_fn or DecodedInsn fields and return the
-       value per their chip's instruction-timing reference. Used by
-       the JIT to advance ArmCpuState::guest_cycle_counter inline. */
-    virtual uint16_t CycleCostFor(const DecodedInsn& d) const;
+    uint32_t PcStoreOffset()          const { return pc_store_offset_; }
+    bool     BaseRestoredAbortModel() const { return base_restored_abort_model_; }
+    uint32_t Midr()                   const { return midr_; }
+    uint32_t Ctr()                    const { return ctr_; }
 
-    virtual uint32_t CpuClockHz()                 const = 0;
-
-    virtual bool     HasDsp()                     const = 0;
-    virtual bool     HasLoadStoreDouble()         const = 0;
+    bool HasDsp()             const { return dsp_; }
+    bool HasLoadStoreDouble() const { return load_store_double_; }
 
     /* DDI 0406C.c A1.3, p. A1-30: ARMv5TE "Adds Preload Data (PLD),
        Load Register Dual (LDRD), Store Register Dual (STRD)". */
-    virtual bool     HasPreload()                 const { return false; }
+    bool HasPreload() const { return preload_; }
 
-    /* Thumb ISA presence (v4T+). On a no-Thumb core CPSR.T is
-       unwritable and BX is undefined - guests rely on that:
-       jlime's linexec writes CPSR|0xEF (T set) on SA-1110 and
-       expects the T write ignored, as on real silicon. */
-    virtual bool     HasThumb()                   const { return true; }
+    bool HasThumb() const { return thumb_; }
 
-    /* DDI 0406C.c p. A1-29: "ARMv6T2 introduced Thumb-2 technology. This
-       technology extends the original Thumb instruction set with many 32-bit
-       instructions." A6.1, p. A6-220: a halfword whose bits[15:11] are 0b11101,
-       0b11110 or 0b11111 is the first halfword of a 32-bit instruction. */
-    virtual bool     HasThumb2()                  const { return false; }
+    bool HasThumb2() const { return thumb2_; }
 
     /* DDI0406C §A2.3.1: LDR/POP/LDM with Rt==PC interwork (bit 0
        selects the ISA state) from ARMv5T on; on v4T they branch
        remaining in the current ISA state. */
-    virtual bool     HasLoadToPcInterworking()    const { return false; }
+    bool HasLoadToPcInterworking() const { return load_to_pc_interworking_; }
 
     /* DDI0406C §A2.3.1: ARM-state data-processing with Rd==PC and
        no flag-setting interworks only from ARMv7 on; earlier
        versions branch remaining in the current ISA state. */
-    virtual bool     HasDataProcToPcInterworking() const { return false; }
+    bool HasDataProcToPcInterworking() const { return data_proc_to_pc_interworking_; }
 
-    virtual bool     HasClz()                     const { return false; }
-    virtual bool     HasBlxReg()                  const { return false; }
+    bool HasClz()    const { return clz_; }
+    bool HasBlxReg() const { return blx_reg_; }
 
-    /* ARM DDI 0100I A3.2.1 (p. A3-4): "In ARMv4, any instruction with a
-       condition field of 0b1111 is UNPREDICTABLE." ARM DDI 0406C.c A5.7
-       (p. A5-216): "All encodings in this space are UNPREDICTABLE in
-       ARMv4 and ARMv4T." */
-    virtual bool     HasArmv5UnconditionalSpace() const { return false; }
+    bool HasArmv5UnconditionalSpace() const { return armv5_unconditional_space_; }
 
     /* ARM DDI 0100I p. A4-75: "Accessing the SPSR when in User mode or
        System mode is UNPREDICTABLE." */
-    virtual bool     AccessesSpsrInSystemMode()   const { return false; }
+    bool AccessesSpsrInSystemMode() const { return accesses_spsr_in_system_mode_; }
 
-    virtual bool     HasMls()                     const { return false; }
-    virtual bool     HasMovwMovt()                const { return false; }
-    virtual bool     HasBitField()                const { return false; }
-    virtual bool     HasRev()                     const { return false; }
-    virtual bool     HasExtendRotate()            const { return false; }
-    virtual bool     HasLdrexStrex()              const { return false; }
-    virtual bool     HasLdrexStrexV6k()           const { return false; }
-    virtual bool     HasBarrierInsn()             const { return false; }
+    bool HasMls()           const { return mls_; }
+    bool HasMovwMovt()      const { return movw_movt_; }
+    bool HasBitField()      const { return bit_field_; }
+    bool HasRev()           const { return rev_; }
+    bool HasExtendRotate()  const { return extend_rotate_; }
+    bool HasLdrexStrex()    const { return ldrex_strex_; }
+    bool HasLdrexStrexV6k() const { return ldrex_strex_v6k_; }
+    bool HasBarrierInsn()   const { return barrier_insn_; }
 
     /* DDI 0406C.c A4.4.8, p. A4-172: SDIV and UDIV are OPTIONAL in an ARMv7-A
        implementation without the Virtualization Extensions, and
        ID_ISAR0.Divide_instrs indicates the level of support. */
-    virtual bool     HasIntegerDivide()           const { return false; }
+    bool HasIntegerDivide() const { return integer_divide_; }
 
     /* ARM DDI 0344K Table 3-3, p. 3-17: Cortex-A8 allocates the L1 system
        array debug operations at c15, write-only and Secure state only. */
-    virtual bool     HasL1SystemArrayDebug()      const { return false; }
+    bool HasL1SystemArrayDebug() const { return l1_system_array_debug_; }
 
-    virtual bool     HasCp15V6()                  const { return false; }
-    virtual bool     HasCp15V7()                  const { return false; }
-    virtual bool     HasVmsav7()                  const { return false; }
-    virtual ArmSupersectionFormat SupersectionFormat() const { return ArmSupersectionFormat::kNone; }
-    virtual bool     HasSecurityExtensions()      const { return false; }
+    bool HasCp15V6()             const { return cp15_v6_; }
+    bool HasCp15V7()             const { return cp15_v7_; }
+    bool HasSecurityExtensions() const { return security_extensions_; }
 
-    /* c9,c0,2 op1=1 L2 Cache Auxiliary Control Register present (Cortex-A8). */
-    virtual bool     HasL2CacheAuxControl()       const { return false; }
+    ArmSupersectionFormat SupersectionFormat() const { return supersection_format_; }
 
-    /* c1,c0,1 ACTLR present. ARM920T allocates no c1 op2=1 register
-       (S3C2410A UM Table 2-2, p. 2-4). */
-    virtual bool     HasAuxControlRegister()      const { return false; }
+    bool HasL2CacheAuxControl()  const { return l2_cache_aux_control_; }
+    bool HasAuxControlRegister() const { return aux_control_register_; }
 
-    virtual uint32_t Clidr()                      const { return 0; }
-    virtual uint32_t Ccsidr(uint32_t /*csselr*/)  const { return 0; }
+    uint32_t Clidr() const { return clidr_; }
+    uint32_t Ccsidr(uint32_t csselr) const;
 
-    virtual bool     HasVfp()                     const { return false; }
-    virtual bool     HasNeon()                    const { return false; }
-    virtual uint32_t Fpsid()                      const { return 0; }
-    virtual uint32_t Mvfr0()                      const { return 0; }
-    virtual uint32_t Mvfr1()                      const { return 0; }
+    bool     HasVfp()  const { return vfp_; }
+    bool     HasNeon() const { return neon_; }
+    uint32_t Fpsid()   const { return fpsid_; }
+    uint32_t Mvfr0()   const { return mvfr0_; }
+    uint32_t Mvfr1()   const { return mvfr1_; }
+
+private:
+    uint32_t pc_store_offset_ = 0;
+    uint32_t midr_            = 0;
+    uint32_t ctr_             = 0;
+    uint32_t clidr_           = 0;
+    uint32_t ccsidr_l1i_      = 0;
+    uint32_t ccsidr_l1d_      = 0;
+    uint32_t ccsidr_l2_       = 0;
+    uint32_t fpsid_           = 0;
+    uint32_t mvfr0_           = 0;
+    uint32_t mvfr1_           = 0;
+
+    ArmSupersectionFormat supersection_format_ = ArmSupersectionFormat::kNone;
+
+    bool base_restored_abort_model_    = false;
+    bool thumb_                        = false;
+    bool thumb2_                       = false;
+    bool dsp_                          = false;
+    bool load_store_double_            = false;
+    bool preload_                      = false;
+    bool clz_                          = false;
+    bool blx_reg_                      = false;
+    bool armv5_unconditional_space_    = false;
+    bool load_to_pc_interworking_      = false;
+    bool data_proc_to_pc_interworking_ = false;
+    bool accesses_spsr_in_system_mode_ = false;
+    bool mls_                          = false;
+    bool movw_movt_                    = false;
+    bool bit_field_                    = false;
+    bool rev_                          = false;
+    bool extend_rotate_                = false;
+    bool ldrex_strex_                  = false;
+    bool ldrex_strex_v6k_              = false;
+    bool barrier_insn_                 = false;
+    bool integer_divide_               = false;
+    bool cp15_v6_                      = false;
+    bool cp15_v7_                      = false;
+    bool security_extensions_          = false;
+    bool aux_control_register_         = false;
+    bool l2_cache_aux_control_         = false;
+    bool l1_system_array_debug_        = false;
+    bool vfp_                          = false;
+    bool neon_                         = false;
 };

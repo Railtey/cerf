@@ -4,7 +4,7 @@
 
 #include "../../boards/board_context.h"
 #include "../../core/cerf_emulator.h"
-#include "../../cpu/arm_processor_config.h"
+#include "arm_core_clock.h"
 #include "arm_cpu.h"
 #include "cpu_state.h"
 
@@ -28,8 +28,8 @@ public:
     }
 
     void OnReady() override {
-        state_ = emu_.Get<ArmCpu>().State();
-        hz_    = emu_.Get<ArmProcessorConfig>().CpuClockHz();
+        state_      = emu_.Get<ArmCpu>().State();
+        reset_rate_ = emu_.Get<ArmCoreClock>().ResetRate();
         GuestCycleClock::OnReady();
 #if CERF_DEV_MODE
         emu_.Get<RateProbe>().RegisterStallDump([this] {
@@ -57,7 +57,7 @@ public:
     }
 
 protected:
-    Rate InitialRate() override { return Rate{hz_, 1u}; }
+    Rate InitialRate() override { return reset_rate_; }
 
     uint64_t CyclesNow() override {
         const uint32_t c = state_->guest_cycle_counter;
@@ -79,8 +79,8 @@ protected:
     }
 
 private:
-    ArmCpuState* state_ = nullptr;
-    uint32_t     hz_    = 0;
+    ArmCpuState* state_      = nullptr;
+    Rate         reset_rate_ = {};
 };
 
 }

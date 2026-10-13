@@ -24,9 +24,17 @@ inline std::string GetCerfDir() {
     return WideToUtf8(ws.substr(0, sep + 1));
 }
 
+inline std::string DbJsonPath() {
+    return GetCerfDir() + "db.json";
+}
+
 /* Device directory: "<exe dir>devices\<name>\". */
 inline std::string GetDeviceDir(const std::string& device_name) {
     return GetCerfDir() + "devices\\" + device_name + "\\";
+}
+
+inline std::string UserConfigPath(const std::string& device_name) {
+    return GetDeviceDir(device_name) + "cerf-user.json";
 }
 
 inline bool IsAbsoluteHostPath(const std::string& path) {

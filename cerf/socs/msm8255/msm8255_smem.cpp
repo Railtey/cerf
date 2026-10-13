@@ -7,8 +7,8 @@
 #include "../../boot/guest_cold_boot.h"
 #include "../../core/cerf_emulator.h"
 #include "../../core/fatal.h"
-#include "../../cpu/arm_processor_config.h"
 #include "../../cpu/emulated_memory.h"
+#include "../../jit/arm/arm_core_clock.h"
 
 #include <cstdint>
 
@@ -259,7 +259,8 @@ uint32_t Msm8255Smem::RecordPa(uint32_t index) const {
 void Msm8255Smem::SeedSpeedRecord() {
     auto& mem = emu_.Get<EmulatedMemory>();
     const uint32_t rec = RecordPa(kBspRecordIndex);
-    mem.WriteWord(rec + 0u, emu_.Get<ArmProcessorConfig>().CpuClockHz());
+    mem.WriteWord(rec + 0u, static_cast<uint32_t>(
+                                emu_.Get<ArmCoreClock>().ResetRate().RoundedHz()));
     mem.WriteWord(rec + kRecKeySrcOff,     kRecKeySrc);
     mem.WriteWord(rec + kRecKeyLevelOff,   kRecKeyLevel);
     mem.WriteWord(rec + kRecVddMvOff,      kVddMv);

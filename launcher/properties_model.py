@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Iterable, Optional, Tuple
 
 from board_info import board_configurable_screen, board_features
+from cpu_config import applicable_overrides
 from cerf_user_json import (read_board_id, read_device_files, read_device_meta,
                             write_board_file_overrides, write_user_meta_name)
 from device_state import DeviceBundle
@@ -90,6 +91,8 @@ class PropertiesModel:
         values = dict(self.values)
         if not self.subject.guest_additions_available(values["board_id"]):
             values["guest_additions"] = False
+        values["cpu_config"] = applicable_overrides(values["board_id"],
+                                                    values.get("cpu_config"))
         device_dir = self.subject.device_dir
         if board_rom:
             write_board_file_overrides(device_dir, values["board_id"],

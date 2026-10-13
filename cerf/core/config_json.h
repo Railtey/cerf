@@ -28,6 +28,43 @@ inline nlohmann::json CfgReadJsonFile(const std::string& path) {
     return j;
 }
 
+inline nlohmann::json CfgReadLoggedJsonFile(const std::string& path) {
+    nlohmann::json j = CfgReadJsonFile(path);
+    if (j.is_null()) {
+        LOG(Cfg, "%s: absent\n", path.c_str());
+        return j;
+    }
+    constexpr size_t kChunk = 1000;
+    const std::string text = j.dump();
+    LOG(Cfg, "%s:\n", path.c_str());
+    for (size_t start = 0; start < text.size(); start += kChunk)
+        LOG(Cfg, "  %s\n", text.substr(start, kChunk).c_str());
+    return j;
+}
+
+inline nlohmann::json CfgReadInstalledJsonFile(const std::string& path) {
+    nlohmann::json j = CfgReadJsonFile(path);
+    if (j.is_null()) CfgFatal(path, "is missing: the installation is damaged");
+    return j;
+}
+
+inline const nlohmann::json& CfgRequireArray(const nlohmann::json& root,
+                                             const char* key,
+                                             const std::string& path) {
+    if (!root.contains(key) || !root[key].is_array())
+        CfgFatal(path, std::string("'") + key + "' must be an array");
+    return root[key];
+}
+
+inline std::string CfgRequireString(const nlohmann::json& obj, const char* key,
+                                    const std::string& path,
+                                    const std::string& ctx) {
+    if (!obj.contains(key) || !obj[key].is_string() ||
+        obj[key].get<std::string>().empty())
+        CfgFatal(path, ctx + "." + key + " must be a non-empty string");
+    return obj[key].get<std::string>();
+}
+
 inline std::string CfgReadOptString(const nlohmann::json& obj, const char* key,
                                     const std::string& path,
                                     const std::string& ctx) {

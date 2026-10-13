@@ -74,15 +74,18 @@ The `ShouldRegister` of a concrete returns
 never knows its board. It knows only its chip.
 
 The VA→PA placement map (`PageTableBuilder`) does not live here. The core
-CPU strategies (`ArmProcessorConfig`, `CoprocEmitter`) split on a different
-axis. VA→PA placement is a BSP/board choice, because the OEMAddressTable
-differs per board. Its concretes live under `cerf/boards/<family>/`, and
-`GetBoardFamilyId()` selects them.
+CPU strategies (`CoprocEmitter`) split on a different axis. VA→PA placement
+is a BSP/board choice, because the OEMAddressTable differs per board. Its
+concretes live under `cerf/boards/<family>/`, and `GetBoardFamilyId()`
+selects them.
 
 A core strategy is a CPU-arch property that
 is identical across every board on that core. Its concretes live under
 `cerf/cpu/<core>/`, and `GetSocId()` selects them. A core strategy that a board
 family gates leaves every other family on that SoC with no winner.
+
+The static facts of a core are data, not a strategy. ID register values and
+instruction-set capabilities live in the `cpu_configs` rows of `db.json`.
 
 ### `cerf/boards/<family>/` - one board family
 
