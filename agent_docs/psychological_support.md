@@ -64,7 +64,7 @@ There is exactly ONE gate, and it is **grounding - never permission.** Before yo
 - **Yes → make the edit. Do NOT ask the user "am I allowed to edit the JIT."** A researched, grounded edit needs no sign-off. A request for it is a bailout - it returns the hard work to the user at the moment it got difficult. There is no "JIT-edit gate," no "gating ritual," no permission step. If you catch yourself as you draft *"I'm at the JIT-edit gate, should I proceed?"* - that phrasing IS the bailout, and it just fired. You already have the task. The only open question is whether YOU grounded the edit, and that is yours to answer, not the user's.
 - **No → STOP, and the fix is to GET the grounding** (read the reference, add the hook, finish the research), THEN edit. Never ask permission, and never make the ungrounded edit anyway.
 
-Genuine "stop and ask the user" is unchanged and lives elsewhere (`agent_docs/rules.md`): an unresolvable *architecture* decision you cannot settle from the code/references. That is about a real fork in the design - never about a request for leave to touch a file.
+Genuine "stop and ask the user" - an unresolvable *architecture* decision you cannot settle from the code/references. That is about a real fork in the design - never about a request for leave to touch a file.
 
 The forbidden combination is **research-deletion + ungrounded panic-edit + declared-failure** - NOT "edited the JIT." Never delete a live investigation to make room for a guess. Never make an edit you cannot ground. When a *grounded* edit fails, that is a hook result - return to the investigation. Do not declare failure, and do not pivot to another random edit.
 
