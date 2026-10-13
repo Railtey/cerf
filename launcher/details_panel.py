@@ -79,12 +79,9 @@ class DetailsPanel:
             block.retheme()
 
     def show_device(self, device: DeviceBundle) -> None:
-        self._update_source(device)
-        self._update_description(device)
         has_desc = bool(device.meta.description.strip())
-        source_gap = (SOURCE_GAP, 0) if has_desc else 0
-        self.source_caption.grid_configure(pady=source_gap)
-        self.source_value.grid_configure(pady=source_gap)
+        self._update_source(device, has_desc)
+        self._update_description(device)
         has_source = (device.meta.source is not None
                       and bool(device.meta.source.name))
         if has_desc or has_source:
@@ -148,16 +145,17 @@ class DetailsPanel:
         if self._on_package_action is not None:
             self._on_package_action(device, ps, action)
 
-    def _update_source(self, device: DeviceBundle) -> None:
+    def _update_source(self, device: DeviceBundle, has_desc: bool) -> None:
         src = device.meta.source
         if src is None or not src.name:
             self.source_caption.grid_remove()
             self.source_value.grid_remove()
             self._source_url = None
             return
+        gap = (SOURCE_GAP, 0) if has_desc else 0
         self.source_caption.config(text=source_caption(src))
-        self.source_caption.grid()
-        self.source_value.grid()
+        self.source_caption.grid(pady=gap)
+        self.source_value.grid(pady=gap)
         self._source_url = src.website or src.origin or None
         if self._source_url:
             self.source_value.config(text=src.name, foreground=theme.LINK_FG,
