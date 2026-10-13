@@ -92,8 +92,8 @@ bool FooService::DoThing(int arg) { /* ... */ }
   A split of one service across two `.cpp` files is forbidden under either shape. If the file approaches the 500-line cap, the only sanctioned response is to split into multiple smaller services with distinct responsibilities (each its own `foo_*_service.{h,cpp}` or `foo_*.cpp`), never to spread one service across two `.cpp` files.
 - **Three orthogonal per-impl trees, picked by what the thing IS:**
     - `cerf/socs/<chip>/` - on-die silicon for one SoC family. `*PageTableBuilder`, every chip-level peripheral (UART, INTC, GPIO, RTC, timer, watchdog, memctrl, LCD controller, NAND controller, …). Concretes' `ShouldRegister` evaluates `emu_.Get<BoardContext>().GetSocId() == SocId::X`. Shape S allowed for cross-TU base concretes. Shape P more common for peripherals.
-    - `cerf/boards/<board>/` - one specific OEM board / BSP. The `BoardContext` impl (returns the board's id, and registers when the configured `board_id` names it), board-only virtual peripherals (host-emulator notification channels, virtual DMA transports), BSP-specific config writers (BSP_ARGS layout). Concretes' `ShouldRegister` evaluates `emu_.Get<BoardContext>().GetBoardId() == BoardId::X`.
-    - `cerf/peripherals/<vendor>_<part>/` - off-chip silicon any board can connect (for example `cirrus_pd6710/` PCMCIA controller, `amd_am29lv800bb/` NOR flash). Concretes' `ShouldRegister` evaluates a board-list - `auto b = emu_.Get<BoardContext>().GetBoardId(); return b == BoardId::X || b == BoardId::Y;`. The list grows when a new board adopts the same part. The file is never duplicated. The `cerf/peripherals/` root also holds the abstract `Peripheral` base (`peripheral_base.{h,cpp}`) and the MMIO router (`peripheral_dispatcher.{h,cpp}`) - all peripheral-domain code, framework + concretes, lives in this one tree.
+    - `cerf/boards/<family>/` - one board family. The directory holds the `BoardContext` impl, board-only virtual peripherals (host-emulator notification channels, virtual DMA transports), and BSP-specific configuration writers (BSP_ARGS layout). The `ShouldRegister` of a concrete evaluates `emu_.Get<BoardContext>().GetBoardFamilyId() == BoardFamilyId::X`.
+    - `cerf/peripherals/<vendor>_<part>/` - off-chip silicon any board can connect (for example `cirrus_pd6710/` PCMCIA controller, `amd_am29lv800bb/` NOR flash). Concretes' `ShouldRegister` evaluates a family list - `auto f = emu_.Get<BoardContext>().GetBoardFamilyId(); return f == BoardFamilyId::X || f == BoardFamilyId::Y;`. The list grows when a new family adopts the same part. The file is never duplicated. The `cerf/peripherals/` root also holds the abstract `Peripheral` base (`peripheral_base.{h,cpp}`) and the MMIO router (`peripheral_dispatcher.{h,cpp}`) - all peripheral-domain code, framework + concretes, lives in this one tree.
   Abstract bases (`BoardContext`, `PageTableBuilder`, `Peripheral`) live next to their consumers (`cerf/boards/`, `cerf/core/`, `cerf/cpu/`, `cerf/peripherals/`), not under any per-impl tree. The addition or removal of a chip / board / vendor-part touches exactly one directory. A split of one impl's pieces across multiple trees (chip pieces in board dir, board pieces in chip dir) is the wrong axis.
 - **Before you write a new concrete, list that tree's root.** The base it implements is usually already there. A sibling concrete shows the idiom, but it does not name the seam.
 - **Find an existing impl by enumerating the trees, not by keyword search.** CERF names off-chip parts by vendor and part number, and SoC units by chip. A grep for what the part does ("flash", "nor", "timer") therefore finds nothing, and you write a duplicate. `ls` the directories and files under `cerf/peripherals/`, `cerf/socs/`, and sometimes `cerf/boards/`, and read the names. When `cerf/socs/` carries a per-chip directory for each family member next to a shared one, that split is itself the signal: `ls` inside each and see whether a shared `*_impl.h` base or a sibling concrete already covers your unit.
@@ -115,9 +115,9 @@ When a subsystem's behavior must differ between SoCs / boards / off-chip parts, 
 
 The query axis matches the per-impl tree (see `subsystems.md` § "Per-chip / per-board / per-part strategies"):
 
-- **SoC-family code** under `cerf/socs/<chip>/` - `ShouldRegister` evaluates `emu_.Get<BoardContext>().GetSocId() == SocId::X`.
-- **Board-specific code** under `cerf/boards/<board>/` - `ShouldRegister` evaluates `emu_.Get<BoardContext>().GetBoardId() == BoardId::X`.
-- **Off-chip-part code** under `cerf/peripherals/<vendor>_<part>/` - `ShouldRegister` evaluates a board-list: `auto b = emu_.Get<BoardContext>().GetBoardId(); return b == BoardId::X || b == BoardId::Y;`.
+- SoC-family code under `cerf/socs/<chip>/` - `ShouldRegister` evaluates `emu_.Get<BoardContext>().GetSocId() == SocId::X`.
+- Board-family code under `cerf/boards/<family>/` - `ShouldRegister` evaluates `emu_.Get<BoardContext>().GetBoardFamilyId() == BoardFamilyId::X`. Code for one member evaluates `GetBoardId() == BoardId::X`.
+- Off-chip-part code under `cerf/peripherals/<vendor>_<part>/` - `ShouldRegister` evaluates a family list: `auto f = emu_.Get<BoardContext>().GetBoardFamilyId(); return f == BoardFamilyId::X || f == BoardFamilyId::Y;`.
 
 This takes two shapes, and the shape depends on whether the service has external callers:
 
@@ -148,7 +148,7 @@ A sibling file `pxa27x_foo_peripheral.cpp` whose `ShouldRegister` evaluates `Soc
 
 If other services need to call into this one, consumers must depend on an interface, not on any specific impl. Declare a pure-virtual base that derives from `Service`, put each concrete impl in its own file, and register each with `REGISTER_SERVICE_AS(Impl, Base)`. Consumer code calls `emu.Get<Base>()`. The winning impl (chosen by `ShouldRegister()`) is the one it returns.
 
-Verified example - `cerf/boards/page_table_builder.h` + `cerf/boards/smdk2410_devemu/smdk2410_devemu_page_table_builder.cpp`:
+Verified example - `cerf/boards/page_table_builder.h` + `cerf/boards/samsung_smdk2410/samsung_smdk2410_page_table_builder.cpp`:
 
 ```cpp
 /* page_table_builder.h - abstract base. */
@@ -160,27 +160,27 @@ public:
     /* ... */
 };
 
-/* smdk2410_devemu_page_table_builder.cpp - one concrete impl. */
-class Smdk2410DevEmuPageTableBuilder : public PageTableBuilder {
+/* samsung_smdk2410_page_table_builder.cpp - one concrete impl. */
+class SamsungSmdk2410PageTableBuilder : public PageTableBuilder {
 public:
     using PageTableBuilder::PageTableBuilder;
 
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
-        return bd && bd->GetBoardId() == BoardId::Devemu;
+        return bd && bd->GetBoardFamilyId() == BoardFamilyId::SamsungSmdk2410;
     }
 
     uint32_t InitStackTopPa() const override { /* SMDK2410 DRAM top */ }
     uint32_t VaToPa(uint32_t va) const override { /* SMDK2410 OEMAddressTable mapping */ }
 };
-REGISTER_SERVICE_AS(Smdk2410DevEmuPageTableBuilder, PageTableBuilder);
+REGISTER_SERVICE_AS(SamsungSmdk2410PageTableBuilder, PageTableBuilder);
 ```
 
-A sibling `jornada720_page_table_builder.cpp` registers itself for `BoardId::Jornada720` and so on. Consumers always write `emu.Get<PageTableBuilder>()` - they neither know nor care which concrete answered. (`PageTableBuilder` is the VA→PA map, a per-board choice, so its concretes select on `GetBoardId()`. A SoC-family strategy like `ArmProcessorConfig` selects on `GetSocId()` instead.)
+A sibling `hp_jornada_700_page_table_builder.cpp` registers itself for `BoardFamilyId::HpJornada700`. Consumers always write `emu.Get<PageTableBuilder>()`. They do not know which concrete answered.
 
 #### Rules that apply to both shapes
 
-- **Exactly one impl wins for a required base.** Two `ShouldRegister` that return `true` for the same base is a bug. Two that return `false` for a required base is also a bug. `BoardContext` is the gate - the configured `board_id` (`cerf.json board.id` / `--board-id`) selects exactly one `BoardContext`, whose `GetBoardId()` / `GetSocId()` then bucket every other strategy. Optional bases (a peripheral that not every board has) can have zero winners - consumers use `emu.TryGet<Base>()` and tolerate absence.
+- **Exactly one impl wins for a required base.** Two `ShouldRegister` that return `true` for the same base is a bug. Two that return `false` for a required base is also a bug. `BoardContext` is the gate - the configured `board_id` (`cerf.json board.id` / `--board-id`) selects exactly one `BoardContext`, whose `GetBoardFamilyId()` / `GetBoardId()` / `GetSocId()` then bucket every other strategy. Optional bases (a peripheral that not every board has) can have zero winners - consumers use `emu.TryGet<Base>()` and tolerate absence.
 - **`ShouldRegister` can resolve any service via `emu_.Get<>()`** - same lazy/recursive shape as `OnReady`. The framework defers slot resolution until first `Get<>` and walks each candidate's `ShouldRegister` on demand, so a strategy whose decision depends on another service (for example "register this MMU policy iff `Get<BoardContext>().GetSocId() == SocId::S3c2410`") composes cleanly. Cycles (`A.ShouldRegister` → `Get<B>` → `B.ShouldRegister` → `Get<A>`) halt loudly. NEVER reach into a specific concrete subclass by name (for example `Smdk2410DevEmuDetector::Fingerprint`) - that is a Dependency Inversion violation. Depend on the abstract `Base` only.
 - **Never put `if (board == X)` or `if (soc == X)` inside the impl body.** The impl already represents one specific board / SoC. That branch belongs in `ShouldRegister` and nowhere else. If two boards share most of an impl and diverge in one method, the divergence goes into a separate Service that the shared impl resolves via `emu_.Get<>()` - not an inline branch.
 - **A shared-capable ISA capability goes in the shared path behind a `ProcessorConfig::HasX()` flag, never localized in one SoC's strategy.** When an instruction-set capability (VFP, NEON, DSP, …) currently appears on only one implemented SoC, its decode/dispatch still belongs in the shared decoder / emit path, gated by the engine's processor-config capability flag (`ArmProcessorConfig` / `MipsProcessorConfig` `HasX()`). It must never be hardcoded into that SoC's coprocessor emitter (`CoprocEmitter` / `MipsCp0Emitter`) or strategy. "Only one current SoC has it" is an artifact of the implemented-SoC set, not a property of the capability, and a localization of it forces an expensive later re-extraction into the shared path.

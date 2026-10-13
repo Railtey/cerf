@@ -23,7 +23,7 @@ public:
     void WriteWord (uint32_t addr, uint32_t value) override;
 
 protected:
-    virtual std::string_view WindowBoardId() const = 0;
+    virtual std::string_view WindowBoardFamilyId() const = 0;
     virtual const char*      WindowTag()     const = 0;
 
     void Trace(const char* op, uint32_t addr);

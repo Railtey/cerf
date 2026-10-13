@@ -1,7 +1,7 @@
 #include "tps65950_audio_downlink.h"
 
 #include "../../boards/board_context.h"
-#include "../../boards/omap_evm_3530/omap_3530_evm_id.h"
+#include "../../boards/ti_omap35x_evm/ti_omap35x_evm_family_id.h"
 #include "../../core/cerf_emulator.h"
 #include "../../core/fatal.h"
 #include "tps65950_gain.h"
@@ -60,7 +60,7 @@ constexpr double kHandsFreeDb = 10.4;
 }
 
 bool Tps65950AudioDownlink::ShouldRegister() {
-    return emu_.Get<BoardContext>().GetBoardId() == BoardId::Omap3530Evm;
+    return emu_.Get<BoardContext>().GetBoardFamilyId() == BoardFamilyId::TiOmap35xEvm;
 }
 
 void Tps65950AudioDownlink::OnReady() {

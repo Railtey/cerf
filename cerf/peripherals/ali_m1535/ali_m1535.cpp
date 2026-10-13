@@ -3,7 +3,7 @@
 #include "../../core/cerf_emulator.h"
 #include "../../core/log.h"
 #include "../../boards/board_context.h"
-#include "../../boards/nec_rockhopper/nec_rockhopper_id.h"
+#include "../../boards/nec_sg2_vr5500/nec_sg2_vr5500_family_id.h"
 #include "../peripheral_dispatcher.h"
 #include "../intel_i8042/i8042_controller.h"
 #include "../../socs/vrc5477/vrc5477_intc.h"
@@ -124,7 +124,7 @@ public:
 
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
-        return bd && bd->GetBoardId() == BoardId::NecRockhopper;
+        return bd && bd->GetBoardFamilyId() == BoardFamilyId::NecSg2Vr5500;
     }
     void OnReady() override {
         emu_.Get<PeripheralDispatcher>().Register(this);

@@ -2,14 +2,14 @@
 
 #include "../../core/cerf_emulator.h"
 #include "../../boards/board_context.h"
-#include "../../boards/jornada720/jornada_720_id.h"
+#include "../../boards/hp_jornada_700/hp_jornada_700_family_id.h"
 #include "../../state/state_stream.h"
 #include "sa1111_reset_line.h"
 #include "sa1111_system_controller.h"
 
 bool Sa1111Sbi::ShouldRegister() {
     auto* bd = emu_.TryGet<BoardContext>();
-    return bd && bd->GetBoardId() == BoardId::Jornada720;
+    return bd && bd->GetBoardFamilyId() == BoardFamilyId::HpJornada700;
 }
 
 /* SA-1111 Developer's Manual §2.3: "Unless indicated otherwise, all register bits are set

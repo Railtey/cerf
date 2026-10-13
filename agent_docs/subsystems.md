@@ -63,8 +63,7 @@ implemented thing selects the tree.
 
 ### `cerf/socs/<chip>/` - on-die silicon
 
-One directory per SoC family (S3C2410 today. PXA27x, OMAP3530, SA-1110,
-Poseidon, … arrive with their boards). It contains:
+Each SoC family has one directory. The directory contains:
 
 - per-peripheral `<chip>_*.cpp` - UART, INTC, GPIO, RTC, timer, watchdog,
   clock/power, memory controller, LCD controller, NAND controller, IIS,
@@ -74,52 +73,47 @@ The `ShouldRegister` of a concrete returns
 `emu_.Get<BoardContext>().GetSocId() == SocId::X`. Chip-layer code
 never knows its board. It knows only its chip.
 
-The VA→PA placement map (`PageTableBuilder`) is **not** here. The core
+The VA→PA placement map (`PageTableBuilder`) does not live here. The core
 CPU strategies (`ArmProcessorConfig`, `CoprocEmitter`) split on a different
 axis. VA→PA placement is a BSP/board choice, because the OEMAddressTable
-differs per board. Its concretes live under `cerf/boards/<board>/`, and
-`GetBoardId()` selects them. The core strategies are a CPU-arch property
-identical across every board on that core. Their concretes live under
-`cerf/cpu/<core>/`, and `GetSocId()` selects them. A core strategy gated on
-`GetBoardId()` leaves every additional board on that SoC with no winner. A
-second SA-1110 board that re-states the MIDR of the die is the smell.
+differs per board. Its concretes live under `cerf/boards/<family>/`, and
+`GetBoardFamilyId()` selects them.
 
-### `cerf/boards/<board>/` - one specific OEM board / BSP
+A core strategy is a CPU-arch property that
+is identical across every board on that core. Its concretes live under
+`cerf/cpu/<core>/`, and `GetSocId()` selects them. A core strategy that a board
+family gates leaves every other family on that SoC with no winner.
 
-One directory per supported board. It contains:
+### `cerf/boards/<family>/` - one board family
 
-- `<board>_context.cpp` - the concrete `BoardContext` impl. It returns the
-  board's id constant, and the base answers everything else from the
-  board's `bundled/db.json` row (`agent_docs/database.md`). It registers
-  when the configured `board_id` names it
-- `<board>_page_table_builder.cpp` - the `PageTableBuilder` impl of the
-  board: the BSP OEMAddressTable VA→PA map, the DRAM/flash backed regions,
+Each board family has one directory. The directory and its files carry the
+family name, never the name of one member. The directory contains:
+
+- `<family>_context.cpp` - the concrete `BoardContext` impl
+- `<family>_page_table_builder.cpp` - the `PageTableBuilder` impl of the
+  family: the BSP OEMAddressTable VA→PA map, the DRAM/flash backed regions,
   and the bootloader-handoff SP. ROM placement and pre-MMU boot use it
 - board-only virtual peripherals - host-emulator notification channels,
   virtual DMA transports, folder-sharing helpers. These peripherals exist
   only because the BSP of the board expects the emulator to provide them
-- BSP-specific configuration writers (for example `<board>_bsp_args.cpp`,
+- BSP-specific configuration writers (for example `<family>_bsp_args.cpp`,
   which fills a DRAM struct that the BSP reads on boot)
 
 The `ShouldRegister` of a concrete returns
-`emu_.Get<BoardContext>().GetBoardId() == BoardId::X`. The BoardContext of a
-board is the only thing that must know its board name. Everything else asks
-only "am I on board X".
+`emu_.Get<BoardContext>().GetBoardFamilyId() == BoardFamilyId::X`.
 
 ### `cerf/peripherals/<vendor>_<part>/` - off-chip silicon shared across boards
 
-One directory per off-chip IC family. Today: `cirrus_pd6710/` (PCMCIA
-controller), `amd_am29lv800bb/` (NOR flash). Future additions live in
-new sibling directories (for example `davicom_dm9000/` for the DM9000 NIC IC).
+Each off-chip IC family has one directory.
 
-The `ShouldRegister` of a concrete compares against a board list:
+The `ShouldRegister` of a concrete compares against a family list:
 
-    auto b = emu_.Get<BoardContext>().GetBoardId();
-    return b == BoardId::X || b == BoardId::Y;
+    auto f = emu_.Get<BoardContext>().GetBoardFamilyId();
+    return f == BoardFamilyId::X || f == BoardFamilyId::Y;
 
-The list grows when a new board adopts the same part. The part file is
-never duplicated. The part directory is the single source of truth
-for what the IC does.
+The list grows when a new family adopts the same part. Do not duplicate the
+part file. The part directory is the single source of truth for what the IC
+does.
 
 The `cerf/peripherals/` root (not under any vendor subdir) also holds
 the abstract `Peripheral` base (`peripheral_base.{h,cpp}`) and the
@@ -195,7 +189,7 @@ To wire a new board, write a socket controller in the proper tree
 implements `PcmciaSlotHost`, registers the slots with `HostWidgetRegistry`,
 and drives `SetPowered` from its power register. For examples, see
 `cirrus_pd6710/` (DevEmu), `intel_sa1111/sa1111_pcmcia.cpp` (Jornada),
-`ipaq_gen1_pcmcia_sleeve.cpp`, `falcon_pcmcia.cpp`.
+`compaq_ipaq_h3000_pcmcia_sleeve.cpp`, `askey_pc3xx_pcmcia.cpp`.
 
 - `cerf/peripherals/pcmcia/`
 
@@ -351,7 +345,7 @@ concretes (strategy pattern, selected by `BoardContext`).
     presence only (board, SoC or part). It never gates on guest additions.
     Concretes live with the hardware that produces the frame: per-SoC
     LCD/DSS/IPU renderers under `cerf/socs/<chip>/`, board renderers under
-    `cerf/boards/<board>/`, off-chip display parts under
+    `cerf/boards/<family>/`, off-chip display parts under
     `cerf/peripherals/<vendor>_<part>/`.
   - **`GuestAdditionsFrameRenderer`** - the guest-additions virtual
     framebuffer under `cerf/peripherals/cerf_virt/`. It wins only on a
@@ -412,7 +406,7 @@ concretes (strategy pattern, selected by `BoardContext`).
 - **`TouchInput`** (abstract) - `OnPenDown/Move/Up` + `OnCaptureLost` in
   guest-surface coordinates. The touch peripheral concrete of the board
   converts them into guest pen samples. Concretes live under
-  `cerf/boards/<board>/`.
+  `cerf/boards/<family>/`.
   - `cerf/host/touch_input.h`
 
 - **Off-screen bezel touch buttons are physical, never framebuffer-drawn.**
@@ -429,7 +423,7 @@ concretes (strategy pattern, selected by `BoardContext`).
 - **`KeyboardInput`** (abstract) - one keyboard source: `OnHostKey(vk, key_up)`
   plus `SourceName` / `SourcePriority` / `SourceReady`. Concretes self-register
   with `KeyboardRouter`. They are the keyboard of a board under
-  `cerf/boards/<board>/` and the guest-additions keyboard under
+  `cerf/boards/<family>/` and the guest-additions keyboard under
   `cerf/peripherals/cerf_virt/`.
   - `cerf/host/keyboard_input.h`
 

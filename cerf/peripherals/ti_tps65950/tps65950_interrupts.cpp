@@ -1,7 +1,7 @@
 #include "tps65950_interrupts.h"
 
 #include "../../boards/board_context.h"
-#include "../../boards/omap_evm_3530/omap_3530_evm_id.h"
+#include "../../boards/ti_omap35x_evm/ti_omap35x_evm_family_id.h"
 #include "../../core/cerf_emulator.h"
 #include "../../core/fatal.h"
 #include "../../socs/guest_cpu_reset.h"
@@ -27,7 +27,7 @@ constexpr uint8_t kPihPwr = 1u << 5;
 }
 
 bool Tps65950Interrupts::ShouldRegister() {
-    return emu_.Get<BoardContext>().GetBoardId() == BoardId::Omap3530Evm;
+    return emu_.Get<BoardContext>().GetBoardFamilyId() == BoardFamilyId::TiOmap35xEvm;
 }
 
 void Tps65950Interrupts::OnReady() {

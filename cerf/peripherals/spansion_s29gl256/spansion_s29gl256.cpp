@@ -1,7 +1,7 @@
 #include "../amd_command_set_flash.h"
 
 #include "../../boards/board_context.h"
-#include "../../boards/siemens_p177/siemens_p177_id.h"
+#include "../../boards/siemens_simatic_tp177b_4/siemens_simatic_tp177b_4_family_id.h"
 #include "../../core/cerf_emulator.h"
 
 #include <cstdint>
@@ -27,7 +27,7 @@ public:
 
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
-        return bd && bd->GetBoardId() == BoardId::SiemensP177;
+        return bd && bd->GetBoardFamilyId() == BoardFamilyId::SiemensSimaticTp177b4;
     }
 
     uint32_t MmioBase() const override { return kBase; }

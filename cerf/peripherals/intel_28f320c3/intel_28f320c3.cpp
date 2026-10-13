@@ -3,7 +3,7 @@
 #include "../../core/cerf_emulator.h"
 #include "../../core/log.h"
 #include "../../boards/board_context.h"
-#include "../../boards/ipaq_gen1/ipaq_gen1_id.h"
+#include "../../boards/compaq_ipaq_h3000/compaq_ipaq_h3000_family_id.h"
 #include "../../cpu/emulated_memory.h"
 #include "../peripheral_dispatcher.h"
 #include "../../state/state_stream.h"
@@ -22,8 +22,8 @@ public:
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
         if (!bd) return false;
-        const auto b = bd->GetBoardId();
-        return b == BoardId::IpaqGen1;
+        const auto b = bd->GetBoardFamilyId();
+        return b == BoardFamilyId::CompaqIpaqH3000;
     }
     void OnReady() override {
         emu_.Get<PeripheralDispatcher>().Register(this);

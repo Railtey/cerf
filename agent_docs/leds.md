@@ -29,15 +29,15 @@ The peripheral or board service that owns the LED registers also implements
 - **On-chip LED unit.** `cerf/socs/vr41xx/vr41xx_led_impl.h` - the VR41xx unit
   blinks in hardware, so the registers hold the on-time and the off-time.
   `PollDirty` converts those units into its own ticks.
-- **LED behind a companion MCU.** `cerf/boards/jornada720/jornada720_led.h` -
+- **LED behind a companion MCU.** `cerf/boards/hp_jornada_700/hp_jornada_700_led.h` -
   the LED has no MMIO of its own. The class is a plain `Service`, and the MCU
   command handler calls `SetState()` from the JIT thread.
 - **One block that drives more than an LED.**
-  `cerf/boards/smdk2410_devemu/devemu_nled.cpp` - two channels, where the
+  `cerf/boards/samsung_smdk2410/samsung_smdk2410_nled.cpp` - two channels, where the
   second one is a vibrator. One widget draws both: the dot for the LED, and
   chevrons beside it for the vibrator.
 - **A row of LEDs.**
-  `cerf/boards/odo_arm720/odo_arm720_hkeep_fpga.cpp` - one widget holds eight
+  `cerf/boards/odo/odo_hkeep_fpga.cpp` - one widget holds eight
   discrete debug LEDs, as a 4x2 grid of `Rectangle` cells. The tooltip carries
   the four-character alpha display of the same block. Combine the LEDs of one
   block into one widget.

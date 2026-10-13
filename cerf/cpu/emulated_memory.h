@@ -5,6 +5,7 @@
 #include <windows.h>
 
 #include <atomic>
+#include <bit>
 #include <cstdint>
 #include <mutex>
 
@@ -29,6 +30,14 @@ public:
                    uint32_t decode_span = 0);
 
     bool OverlapsRegion(uint32_t base, uint32_t size) const;
+
+    struct AddressDecode {
+        uint32_t pass_mask   = 0xFFFFFFFFu;
+        uint32_t gather_mask = 0;
+        uint32_t targets[32] = {};
+    };
+
+    void SetAddressDecode(uint32_t region_base, const AddressDecode* decode);
 
     uint8_t* Translate(uint32_t vaddr);
 
@@ -87,9 +96,25 @@ private:
         uint32_t              size         = 0;   /* backed bytes */
         uint32_t              span         = 0;
         uint32_t              wrap_mask    = 0xFFFFFFFFu;
+        std::atomic<const AddressDecode*> decode{nullptr};
         DWORD                 page_protect = 0;
         std::atomic<uint8_t*> host_ptr{nullptr};  /* lazy first-touch */
     };
+
+    static uint32_t BackedOffset(const Region& r, uint32_t offset) {
+        const uint32_t wrapped = offset & r.wrap_mask;
+        const AddressDecode* d = r.decode.load(std::memory_order_acquire);
+        if (!d) return wrapped;
+        uint32_t backed = wrapped & d->pass_mask;
+        for (uint32_t moved = wrapped & d->gather_mask; moved != 0u; moved &= moved - 1u)
+            backed |= d->targets[std::countr_zero(moved)];
+        return backed;
+    }
+    static uint64_t DecodeBlock(const Region& r) {
+        const AddressDecode* d = r.decode.load(std::memory_order_acquire);
+        const uint32_t moved = d ? (~d->pass_mask & (r.size - 1u)) : 0u;
+        return moved ? (moved & (0u - moved)) : (uint64_t{1} << 32);
+    }
 
     /* Lock-free read: load_acquire count_, linear scan regions_[0..n). */
     Region*  FindRegion(uint32_t vaddr);

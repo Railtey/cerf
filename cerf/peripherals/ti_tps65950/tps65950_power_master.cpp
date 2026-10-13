@@ -1,7 +1,7 @@
 #include "tps65950_power_master.h"
 
 #include "../../boards/board_context.h"
-#include "../../boards/omap_evm_3530/omap_3530_evm_id.h"
+#include "../../boards/ti_omap35x_evm/ti_omap35x_evm_family_id.h"
 #include "../../core/cerf_emulator.h"
 #include "../../core/fatal.h"
 #include "../../core/log.h"
@@ -100,7 +100,7 @@ constexpr Rail kRails[3] = {MakeRail(7u, 0x8Au, 0x8Du, 0x07u), MakeRail(15u, 0xB
 }
 
 bool Tps65950PowerMaster::ShouldRegister() {
-    return emu_.Get<BoardContext>().GetBoardId() == BoardId::Omap3530Evm;
+    return emu_.Get<BoardContext>().GetBoardFamilyId() == BoardFamilyId::TiOmap35xEvm;
 }
 
 /* TPS65950 datasheet SWCS032F Table 5-24 (page 60): BOOT0 1, BOOT1 0 = MC021, Master_C021_Generic. */

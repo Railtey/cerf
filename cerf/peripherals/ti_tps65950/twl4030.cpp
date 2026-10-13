@@ -1,7 +1,7 @@
 #include "twl4030.h"
 
 #include "../../boards/board_context.h"
-#include "../../boards/omap_evm_3530/omap_3530_evm_id.h"
+#include "../../boards/ti_omap35x_evm/ti_omap35x_evm_family_id.h"
 #include "../../core/cerf_emulator.h"
 #include "../../core/log.h"
 #include "../../socs/guest_cpu_reset.h"
@@ -61,7 +61,7 @@ uint8_t MsecureProtectedBits(uint8_t sub) {
 }
 
 bool Twl4030::ShouldRegister() {
-    return emu_.Get<BoardContext>().GetBoardId() == BoardId::Omap3530Evm;
+    return emu_.Get<BoardContext>().GetBoardFamilyId() == BoardFamilyId::TiOmap35xEvm;
 }
 
 void Twl4030::OnReady() {

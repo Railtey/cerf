@@ -6,7 +6,7 @@
 
 bool OpenBusWindow::ShouldRegister() {
     auto* bd = emu_.TryGet<BoardContext>();
-    return bd && bd->GetBoardId() == WindowBoardId();
+    return bd && bd->GetBoardFamilyId() == WindowBoardFamilyId();
 }
 
 void OpenBusWindow::OnReady() {

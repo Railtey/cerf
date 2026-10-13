@@ -7,6 +7,7 @@
 #include "../peripherals/peripheral_dispatcher.h"
 #include "../state/state_stream.h"
 
+#include <algorithm>
 #include <cstring>
 
 REGISTER_SERVICE(EmulatedMemory);
@@ -128,17 +129,39 @@ uint8_t* EmulatedMemory::EnsureBacked(Region* r) {
     return expected;
 }
 
+void EmulatedMemory::SetAddressDecode(uint32_t region_base, const AddressDecode* decode) {
+    Region* r = FindRegion(region_base);
+    if (!r || r->base != region_base || r->span != r->size ||
+        (r->size & (r->size - 1u)) != 0u)
+        emu_.Get<Fatal>().Die("EmulatedMemory::SetAddressDecode needs a power-of-two "
+                              "region at 0x%08X", region_base);
+    if (decode) {
+        const uint32_t backed_bits = r->size - 1u;
+        bool fits = (decode->pass_mask & (PAGE_SIZE - 1u)) == PAGE_SIZE - 1u;
+        for (uint32_t moved = decode->gather_mask; fits && moved != 0u; moved &= moved - 1u)
+            fits = (decode->targets[std::countr_zero(moved)] & ~backed_bits) == 0u;
+        if (!fits)
+            emu_.Get<Fatal>().Die("EmulatedMemory::SetAddressDecode region 0x%08X size 0x%X: "
+                                  "pass 0x%08X gather 0x%08X leaves the page or the region",
+                                  region_base, r->size, decode->pass_mask,
+                                  decode->gather_mask);
+    }
+    r->decode.store(decode, std::memory_order_release);
+    LOG(Mem, "SetAddressDecode region 0x%08X pass 0x%08X gather 0x%08X\n", region_base,
+        decode ? decode->pass_mask : 0xFFFFFFFFu, decode ? decode->gather_mask : 0u);
+}
+
 uint8_t* EmulatedMemory::Translate(uint32_t vaddr) {
     Region* r = FindRegion(vaddr);
     if (!r)
         emu_.Get<Fatal>().Die("EmulatedMemory::Translate unmapped 0x%08X", vaddr);
-    return EnsureBacked(r) + ((vaddr - r->base) & r->wrap_mask);
+    return EnsureBacked(r) + BackedOffset(*r, vaddr - r->base);
 }
 
 uint8_t* EmulatedMemory::TryTranslate(uint32_t paddr) {
     Region* r = FindRegion(paddr);
     if (!r) return nullptr;
-    return EnsureBacked(r) + ((paddr - r->base) & r->wrap_mask);
+    return EnsureBacked(r) + BackedOffset(*r, paddr - r->base);
 }
 
 uint8_t* EmulatedMemory::TryTranslateWrite(uint32_t paddr) {
@@ -155,7 +178,7 @@ uint8_t* EmulatedMemory::TryTranslateWrite(uint32_t paddr) {
         return nullptr;
     }
 
-    return EnsureBacked(r) + ((paddr - r->base) & r->wrap_mask);
+    return EnsureBacked(r) + BackedOffset(*r, paddr - r->base);
 }
 
 bool EmulatedMemory::IsFlash(const Region& r) {
@@ -183,8 +206,11 @@ uint8_t* EmulatedMemory::TryTranslateRange(uint64_t paddr, uint64_t size, bool w
     if (!r || (write && IsFlash(*r)))
         return nullptr;
     const uint64_t offset = paddr - r->base;
-    const uint64_t backed_offset = offset & r->wrap_mask;
+    const uint64_t backed_offset = BackedOffset(*r, static_cast<uint32_t>(offset));
     if (size > r->span - offset || size > r->size - backed_offset)
+        return nullptr;
+    const uint64_t block = DecodeBlock(*r);
+    if (offset / block != (offset + size - 1u) / block)
         return nullptr;
     return EnsureBacked(r) + static_cast<size_t>(backed_offset);
 }
@@ -195,6 +221,9 @@ bool EmulatedMemory::IsSlotRangeUniform(uint32_t span_bytes, uint32_t pa) {
     Region* r = FindRegion(base);
     if (!r) return true;
     if (r->wrap_mask != 0xFFFFFFFFu) return false;
+    const uint64_t block = DecodeBlock(*r);
+    const uint64_t offset = base - r->base;
+    if (offset / block != (offset + span_bytes - 1u) / block) return false;
     return base >= r->base &&
            static_cast<uint64_t>(base) + span_bytes <=
                static_cast<uint64_t>(r->base) + r->size;
@@ -257,13 +286,29 @@ EmulatedMemory::Region* EmulatedMemory::BulkRegionFor(uint32_t vaddr,
 void EmulatedMemory::CopyIn(uint32_t vaddr, const void* host_src, size_t size) {
     Region* r = BulkRegionFor(vaddr, size, "CopyIn");
     uint8_t* host = EnsureBacked(r);
-    std::memcpy(host + (vaddr - r->base), host_src, size);
+    const uint8_t* src = static_cast<const uint8_t*>(host_src);
+    const uint64_t block = DecodeBlock(*r);
+    for (size_t done = 0; done < size;) {
+        const uint32_t offset = vaddr - r->base + static_cast<uint32_t>(done);
+        const size_t chunk = static_cast<size_t>(
+            std::min<uint64_t>(size - done, block - offset % block));
+        std::memcpy(host + BackedOffset(*r, offset), src + done, chunk);
+        done += chunk;
+    }
 }
 
 void EmulatedMemory::CopyOut(uint32_t vaddr, void* host_dst, size_t size) {
     Region* r = BulkRegionFor(vaddr, size, "CopyOut");
-    uint8_t* host = EnsureBacked(r);
-    std::memcpy(host_dst, host + (vaddr - r->base), size);
+    const uint8_t* host = EnsureBacked(r);
+    uint8_t* dst = static_cast<uint8_t*>(host_dst);
+    const uint64_t block = DecodeBlock(*r);
+    for (size_t done = 0; done < size;) {
+        const uint32_t offset = vaddr - r->base + static_cast<uint32_t>(done);
+        const size_t chunk = static_cast<size_t>(
+            std::min<uint64_t>(size - done, block - offset % block));
+        std::memcpy(dst + done, host + BackedOffset(*r, offset), chunk);
+        done += chunk;
+    }
 }
 
 uint32_t EmulatedMemory::TryCopyOut(uint32_t paddr, uint8_t* host_dst, uint32_t size) {

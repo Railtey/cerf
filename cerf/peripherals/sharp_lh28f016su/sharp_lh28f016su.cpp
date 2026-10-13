@@ -2,7 +2,7 @@
 
 #include "../../boards/board_context.h"
 #include "../../boards/page_table_builder.h"
-#include "../../boards/philips_nino_300/philips_nino_300_id.h"
+#include "../../boards/philips_nino/philips_nino_family_id.h"
 #include "../../core/cerf_emulator.h"
 
 #include <cstdint>
@@ -24,7 +24,7 @@ public:
 
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
-        return bd && bd->GetBoardId() == BoardId::PhilipsNino300;
+        return bd && bd->GetBoardFamilyId() == BoardFamilyId::PhilipsNino;
     }
 
     void OnReady() override {

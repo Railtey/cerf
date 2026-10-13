@@ -1,7 +1,7 @@
 #include "wm9705_codec.h"
 
 #include "../../boards/board_context.h"
-#include "../../boards/falcon_pc3xx/falcon_4220_id.h"
+#include "../../boards/askey_pc3xx/askey_pc3xx_family_id.h"
 #include "../../core/cerf_emulator.h"
 #include "../../core/fatal.h"
 #include "../../state/state_stream.h"
@@ -77,7 +77,7 @@ constexpr uint16_t kRates[] = {8000u, 11025u, 16000u, 22050u, 32000u, 44100u, 48
 
 bool Wm9705Codec::ShouldRegister() {
     auto* bd = emu_.TryGet<BoardContext>();
-    return bd && bd->GetBoardId() == BoardId::Falcon4220;
+    return bd && bd->GetBoardFamilyId() == BoardFamilyId::AskeyPc3xx;
 }
 
 void Wm9705Codec::OnReady() {

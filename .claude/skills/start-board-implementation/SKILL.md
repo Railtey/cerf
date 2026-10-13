@@ -117,9 +117,18 @@ fact gets a source.
   actually addresses; then the OEM's model string if one appears in the blob. A
   byte match is evidence only once you have shown the bytes are the string and
   not arbitrary data.
-- **B3 - Board already in CERF?** Read the `devices` table in
-  `bundled/db.json`; list `cerf/boards/` + `bundled/devices/`. Match
-  the B2 identity → fully present / different-ROM-revision / absent.
+- **B3 - Board family, and is the board already in CERF?** Establish the family before you
+  write code. Search Linux, NetBSD
+  (`references/netbsd/sys/arch/hpc/hpc/platid_name.c` and the port code),
+  Rockbox, vendor pages, and Wikipedia in every language. Find the devices that
+  the vendor built on this platform: rebadges, regional models, revisions, and
+  panel and size variants. Save each page that you cite under
+  `references/board_families/<vendor>/`. Then read the `board_families` and
+  `boards` tables in `bundled/db.json`, and list `cerf/boards/` and
+  `bundled/devices/`. Match the B2 identity to one result: family present, board
+  present, or absent. A new family gets a row. Every known member gets a board
+  row with its `support_level` and its `internal__spec_divergences`. This
+  includes members that nobody dumped.
 - **B4 - SoC / CPU family.** From the identity + driver/OEM names, determine the
   SoC, its CPU architecture (`CpuArch::Arm` / `CpuArch::Mips` - which JIT engine
   the board runs), and the specific core with its ISA level (ARM720T, ARM920T,
@@ -218,11 +227,12 @@ Pick the entry point from the table, then run § The bring-up loop:
   `MipsProcessorConfig` + `MipsCp0Emitter`, from the CPU architecture reference
   manual + the core TRM (downloaded to `references/<soc>/` first), then the
   `PageTableBuilder` / memory map, then the peripheral loop.
-- **SoC supported (rows 6-7 ✅)** → start at the board's `bundled/db.json`
-  row and its `<board_id>_id.h` (see `agent_docs/database.md`), then the
-  `BoardContext` concrete returning that id, and set `board.id` +
-  `rom.primary` in the bundle's cerf.json + the `PageTableBuilder` (crack the
-  kernel's OEMAddressTable in IDA), then the peripheral loop.
+- **SoC supported (rows 6-7 ✅)** → start at the `bundled/db.json` rows of the
+  family and the board, and at the `<family_id>_family_id.h` of the family. Then
+  write the `BoardContext` concrete that returns that family id. Set `board.id`
+  and `rom.primary` in the cerf.json of the bundle. Then write the
+  `PageTableBuilder` (crack the OEMAddressTable of the kernel in IDA). Then run
+  the peripheral loop.
 
 ---
 

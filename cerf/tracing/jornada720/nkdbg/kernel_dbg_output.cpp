@@ -9,7 +9,7 @@ namespace {
 
 /* J720 kernel per-char debug writer sub_800762A0 (R0 = char) - the
    OEMWriteDebugString stream. Reassemble into lines. */
-class Jornada720KernelDbgOutput : public Service {
+class HpJornada700KernelDbgOutput : public Service {
 public:
     using Service::Service;
 
@@ -27,4 +27,4 @@ public:
 
 }  // namespace
 
-REGISTER_SERVICE(Jornada720KernelDbgOutput);
+REGISTER_SERVICE(HpJornada700KernelDbgOutput);

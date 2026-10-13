@@ -2,7 +2,7 @@
 
 #include "../../core/cerf_emulator.h"
 #include "../board_context.h"
-#include "philips_velo_1_id.h"
+#include "philips_velo_1_family_id.h"
 
 namespace {
 
@@ -11,7 +11,7 @@ public:
     using Pr31x00ClockCrystal::Pr31x00ClockCrystal;
 
     bool ShouldRegister() override {
-        return emu_.Get<BoardContext>().GetBoardId() == BoardId::PhilipsVelo1;
+        return emu_.Get<BoardContext>().GetBoardFamilyId() == BoardFamilyId::PhilipsVelo1;
     }
 
     uint64_t FinHz() const override { return 9216000u; }

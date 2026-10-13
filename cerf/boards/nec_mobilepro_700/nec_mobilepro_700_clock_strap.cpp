@@ -2,7 +2,7 @@
 
 #include "../../core/cerf_emulator.h"
 #include "../board_context.h"
-#include "nec_mobilepro_700_id.h"
+#include "nec_mobilepro_700_family_id.h"
 
 namespace {
 
@@ -11,7 +11,7 @@ public:
     using Vr41xxClockStrap::Vr41xxClockStrap;
 
     bool ShouldRegister() override {
-        return emu_.Get<BoardContext>().GetBoardId() == BoardId::NecMobilepro700;
+        return emu_.Get<BoardContext>().GetBoardFamilyId() == BoardFamilyId::NecMobilepro700;
     }
 
     uint32_t Clksel() const override { return 0x5u; }

@@ -8,7 +8,7 @@ namespace {
 /* SL4 nk.exe nulls OEMWriteDebugString (final emit is nullsub_3), so no serial
    debug text exists. 0x800835BC is the wide-string sink (R0 = formatted string)
    every debug print passes through before the dead emit. */
-class SimpadSl4OemDebugPrint : public Service {
+class SiemensSimpadOemDebugPrint : public Service {
 public:
     using Service::Service;
 
@@ -24,4 +24,4 @@ public:
 
 }  // namespace
 
-REGISTER_SERVICE(SimpadSl4OemDebugPrint);
+REGISTER_SERVICE(SiemensSimpadOemDebugPrint);

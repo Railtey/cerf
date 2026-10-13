@@ -1,8 +1,8 @@
 #include "ucb1x00_codec.h"
 
 #include "../../boards/board_context.h"
-#include "../../boards/jornada820/jornada_820_id.h"
-#include "../../boards/philips_nino_300/philips_nino_300_id.h"
+#include "../../boards/hp_jornada_820/hp_jornada_820_family_id.h"
+#include "../../boards/philips_nino/philips_nino_family_id.h"
 #include "../../core/cerf_emulator.h"
 
 #include <cstdint>
@@ -23,8 +23,8 @@ public:
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
         if (!bd) return false;
-        const std::string_view b = bd->GetBoardId();
-        return b == BoardId::Jornada820 || b == BoardId::PhilipsNino300;
+        const std::string_view b = bd->GetBoardFamilyId();
+        return b == BoardFamilyId::HpJornada820 || b == BoardFamilyId::PhilipsNino;
     }
 
 protected:

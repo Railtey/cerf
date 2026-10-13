@@ -1,30 +1,68 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
-from board_database import DEVICES, device, soc_family_of, soc_of, sort_text
+from board_database import BOARDS, board, family_of, soc_family_of, soc_of, sort_text
+
+SUPPORT_BOOTABLE_FULL = "bootable_full"
+SUPPORT_BOOTABLE_PARTIAL = "bootable_partial"
+SUPPORT_UNKNOWN_PARTIAL = "unknown_partial"
+SUPPORT_NO_SUPPORT = "no_support"
+
+RUNNING_LEVELS = (SUPPORT_BOOTABLE_FULL, SUPPORT_BOOTABLE_PARTIAL)
+
+SUPPORT_LABELS = {
+    SUPPORT_BOOTABLE_FULL: "Bootable; Full support",
+    SUPPORT_BOOTABLE_PARTIAL: "Bootable; Partial support",
+    SUPPORT_UNKNOWN_PARTIAL: "Unknown; Partial support",
+    SUPPORT_NO_SUPPORT: "Unbootable; No support",
+}
+
+WARN = "warn"
+DANGER = "danger"
+
+_WARNINGS = {
+    SUPPORT_BOOTABLE_PARTIAL: (WARN, "Supported, but CERF does not model this "
+                                     "board's differences."),
+    SUPPORT_UNKNOWN_PARTIAL: (WARN, "This board has never run in CERF."),
+    SUPPORT_NO_SUPPORT: (DANGER, "This board does not run in CERF."),
+}
+_UNKNOWN_WARNING = (DANGER, "CERF does not know this board.")
 
 
 def board_sort_key(board_name: object) -> tuple[int, str]:
-    board = sort_text(board_name)
-    if not board:
+    name = sort_text(board_name)
+    if not name:
         tier = 0
-    elif board == "device emulator":
+    elif name.startswith("device emulator"):
         tier = 2
     else:
         tier = 1
-    return (tier, board)
+    return (tier, name)
 
 
-def board_support_state(board_id: str) -> Optional[bool]:
-    entry = device(board_id)
+def board_support_level(board_id: str) -> Optional[str]:
+    entry = board(board_id)
     if entry is None:
         return None
-    return bool(entry.get("supported", False))
+    level = entry.get("support_level")
+    return level if isinstance(level, str) else None
+
+
+def board_runs(board_id: str) -> bool:
+    return board_support_level(board_id) in RUNNING_LEVELS
+
+
+def board_support_warning(board_id: str) -> Optional[Tuple[str, str]]:
+    if not board_id:
+        return None
+    if board(board_id) is None:
+        return _UNKNOWN_WARNING
+    return _WARNINGS.get(board_support_level(board_id) or "")
 
 
 def board_extra_notes(board_id: str) -> List[str]:
-    entry = device(board_id)
+    entry = board(board_id)
     if entry is None:
         return []
     notes = entry.get("notes")
@@ -42,11 +80,27 @@ def board_soc_cpu(board_id: str) -> Optional[str]:
 
 
 def board_display_name(board_id: str) -> str:
-    entry = device(board_id)
+    entry = board(board_id)
     if entry is None:
         return ""
     name = entry.get("name")
     return name if isinstance(name, str) else ""
+
+
+def board_family_name(board_id: str) -> str:
+    family = family_of(board_id)
+    if family is None:
+        return ""
+    name = family.get("name")
+    return name if isinstance(name, str) else ""
+
+
+def board_device_year(board_id: str) -> int:
+    entry = board(board_id)
+    year = entry.get("device_year") if entry else None
+    if isinstance(year, int) and not isinstance(year, bool) and year > 0:
+        return year
+    return 0
 
 
 def board_soc_label(board_id: str) -> str:
@@ -58,7 +112,7 @@ def board_soc_label(board_id: str) -> str:
 
 
 def board_configurable_screen(board_id: str) -> bool:
-    entry = device(board_id)
+    entry = board(board_id)
     return bool(entry.get("configurable_screen", False)) if entry else False
 
 
@@ -66,7 +120,7 @@ DEFAULT_GA_COLOR_DEPTH = 24
 
 
 def board_ga_color_depth(board_id: str) -> int:
-    entry = device(board_id)
+    entry = board(board_id)
     depth = entry.get("ga_color_depth") if entry else None
     if isinstance(depth, int) and not isinstance(depth, bool) and depth > 0:
         return depth
@@ -74,7 +128,7 @@ def board_ga_color_depth(board_id: str) -> int:
 
 
 def board_panel_size(board_id: str) -> Optional[tuple]:
-    entry = device(board_id)
+    entry = board(board_id)
     if entry is None:
         return None
     panel = entry.get("lcd_panel_size")
@@ -89,12 +143,16 @@ def board_panel_size(board_id: str) -> Optional[tuple]:
     return (width, height)
 
 
-def supported_boards() -> List[dict]:
-    return [e for e in DEVICES if e.get("supported") is True]
+def all_boards() -> List[dict]:
+    return list(BOARDS)
+
+
+def running_boards() -> List[dict]:
+    return [b for b in BOARDS if b.get("support_level") in RUNNING_LEVELS]
 
 
 def board_features(board_id: str) -> dict:
-    entry = device(board_id)
+    entry = board(board_id)
     if entry is None:
         return {}
     features = entry.get("device_features")

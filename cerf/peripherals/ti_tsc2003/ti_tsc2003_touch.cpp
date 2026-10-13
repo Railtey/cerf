@@ -1,7 +1,7 @@
 #include "ti_tsc2003_touch.h"
 
 #include "../../boards/board_context.h"
-#include "../../boards/ford_sync2/ford_sync_2_id.h"
+#include "../../boards/ford_sync_gen2/ford_sync_gen2_family_id.h"
 #include "../../core/cerf_emulator.h"
 #include "../../core/log.h"
 
@@ -11,7 +11,7 @@ REGISTER_SERVICE(Tsc2003Touch);
 
 bool Tsc2003Touch::ShouldRegister() {
     auto* bd = emu_.TryGet<BoardContext>();
-    return bd && bd->GetBoardId() == BoardId::FordSync2;
+    return bd && bd->GetBoardFamilyId() == BoardFamilyId::FordSyncGen2;
 }
 
 void Tsc2003Touch::SetState(uint16_t adc_x, uint16_t adc_y, bool pen_down) {

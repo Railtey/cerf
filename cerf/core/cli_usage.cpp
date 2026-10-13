@@ -49,9 +49,10 @@ void CliUsage::Print(const char* prog) {
     printf("\n");
     printf("Board ids (cerf.json board.id / --board-id):\n  ");
     bool first = true;
-    for (const auto& d : emu_.Get<BoardDatabase>().Devices()) {
-        if (!d.supported) continue;
-        printf("%s%s", first ? "" : ", ", d.id.c_str());
+    for (const auto& b : emu_.Get<BoardDatabase>().Boards()) {
+        if (b.support_level != SupportLevel::BootableFull &&
+            b.support_level != SupportLevel::BootablePartial) continue;
+        printf("%s%s", first ? "" : ", ", b.id.c_str());
         first = false;
     }
     printf("\n\n");

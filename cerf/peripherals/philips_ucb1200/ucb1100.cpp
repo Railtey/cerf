@@ -1,7 +1,7 @@
 #include "ucb1x00_codec.h"
 
 #include "../../boards/board_context.h"
-#include "../../boards/philips_velo_1/philips_velo_1_id.h"
+#include "../../boards/philips_velo_1/philips_velo_1_family_id.h"
 #include "../../core/cerf_emulator.h"
 
 #include <cstdint>
@@ -21,7 +21,7 @@ public:
 
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
-        return bd && bd->GetBoardId() == BoardId::PhilipsVelo1;
+        return bd && bd->GetBoardFamilyId() == BoardFamilyId::PhilipsVelo1;
     }
 
 protected:

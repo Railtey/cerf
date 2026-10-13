@@ -1,7 +1,7 @@
 #include "tps65950_rtc.h"
 
 #include "../../boards/board_context.h"
-#include "../../boards/omap_evm_3530/omap_3530_evm_id.h"
+#include "../../boards/ti_omap35x_evm/ti_omap35x_evm_family_id.h"
 #include "../../core/cerf_emulator.h"
 #include "../../core/fatal.h"
 #include "../../core/log.h"
@@ -57,7 +57,7 @@ uint8_t StepBoundary(Tps65950RtcCalendar& cal, bool round) { return round ? cal.
 }
 
 bool Tps65950Rtc::ShouldRegister() {
-    return emu_.Get<BoardContext>().GetBoardId() == BoardId::Omap3530Evm;
+    return emu_.Get<BoardContext>().GetBoardFamilyId() == BoardFamilyId::TiOmap35xEvm;
 }
 
 void Tps65950Rtc::OnReady() {

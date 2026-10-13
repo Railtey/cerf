@@ -4,7 +4,7 @@
 #include "../../core/cerf_emulator.h"
 #include "../../core/fatal.h"
 #include "../../boards/board_context.h"
-#include "../../boards/jornada720/jornada_720_id.h"
+#include "../../boards/hp_jornada_700/hp_jornada_700_family_id.h"
 #include "sa1111_intc.h"
 #include "sa1111_sac_dma.h"
 #include "sa1111_sac_frame_clock.h"
@@ -56,7 +56,7 @@ constexpr uint32_t kRxDmaFirst = 0x48u;
 
 bool Sa1111Sac::ShouldRegister() {
     auto* bd = emu_.TryGet<BoardContext>();
-    return bd && bd->GetBoardId() == BoardId::Jornada720;
+    return bd && bd->GetBoardFamilyId() == BoardFamilyId::HpJornada700;
 }
 
 void Sa1111Sac::OnUnitReady() {

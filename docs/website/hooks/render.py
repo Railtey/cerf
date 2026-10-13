@@ -47,7 +47,8 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
 import changelog
 import compile_readme
-from board_database import DEVICES, operating_systems_of, soc_family_of
+from board_database import soc_family_of
+from board_info import running_boards
 
 
 def _boards_table():
@@ -66,16 +67,15 @@ def _changelog_table():
 
 
 def _stats():
-    boards = [b for b in DEVICES if b.get('supported')]
-    socs   = {b['soc_id'] for b in boards}
-    cpus   = sorted({soc_family_of(b['id'])['arch'] for b in boards})
-    oses   = {os_['name'] for b in boards
-              for os_ in operating_systems_of(b['id'])}
+    boards    = running_boards()
+    platforms = {b['board_family_id'] for b in boards}
+    socs      = {b['soc_id'] for b in boards}
+    cpus      = sorted({soc_family_of(b['id'])['arch'] for b in boards})
 
     cells = [
-        (str(len(boards)), 'boards'),
-        (str(len(socs)),   'SoCs'),
-        (f'{len(oses)}+',  'guest OSes'),
+        (str(len(boards)),    'boards'),
+        (str(len(platforms)), 'platforms'),
+        (str(len(socs)),      'SoCs'),
         (' + '.join(cpus), 'guest CPUs'),
     ]
     out = ['<div class="cerf-stats">']
@@ -136,7 +136,7 @@ def _devices():
                    '</figcaption>')
         out.append('  </figure>')
 
-    boards = len([b for b in DEVICES if b.get('supported')])
+    boards = len(running_boards())
     out.append(f'  <a class="cerf-rail-all" href="{_card_url("devices.md")}">'
                '<span class="cerf-rail-all-mark">&rarr;</span>'
                '<b>All</b>'

@@ -3,7 +3,7 @@
 #include "ite_it8181.h"
 
 #include "../../boards/board_context.h"
-#include "../../boards/nec_mobilepro_700/nec_mobilepro_700_id.h"
+#include "../../boards/nec_mobilepro_700/nec_mobilepro_700_family_id.h"
 #include "../../core/cerf_emulator.h"
 #include "../../host/panel_frame_renderer.h"
 #include "../../lcd/panel_scanout.h"
@@ -16,7 +16,7 @@ public:
 
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
-        return bd && bd->GetBoardId() == BoardId::NecMobilepro700;
+        return bd && bd->GetBoardFamilyId() == BoardFamilyId::NecMobilepro700;
     }
 
     void PresentedSize(uint32_t& w, uint32_t& h) override {

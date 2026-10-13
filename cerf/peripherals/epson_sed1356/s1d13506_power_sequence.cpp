@@ -1,7 +1,7 @@
 #include "sed1356_power_sequence.h"
 
 #include "../../boards/board_context.h"
-#include "../../boards/jornada720/jornada_720_id.h"
+#include "../../boards/hp_jornada_700/hp_jornada_700_family_id.h"
 #include "../../core/cerf_emulator.h"
 
 namespace {
@@ -11,7 +11,7 @@ public:
     using Sed1356PowerSequence::Sed1356PowerSequence;
 
     bool ShouldRegister() override {
-        return emu_.Get<BoardContext>().GetBoardId() == BoardId::Jornada720;
+        return emu_.Get<BoardContext>().GetBoardFamilyId() == BoardFamilyId::HpJornada700;
     }
 
     /* SED1356 X25B-A-001-12 Table 7-20 p.78: t1 and t3 give maxima only. */

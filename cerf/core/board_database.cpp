@@ -29,13 +29,6 @@ std::string RequireString(const json& obj, const char* key, const std::string& p
     return obj[key].get<std::string>();
 }
 
-bool OptionalBool(const json& obj, const char* key, const std::string& path,
-                  const std::string& ctx) {
-    if (!obj.contains(key)) return false;
-    if (!obj[key].is_boolean()) CfgFatal(path, ctx + "." + key + " must be a boolean");
-    return obj[key].get<bool>();
-}
-
 uint32_t RequirePositiveInt(const json& obj, const char* key, const std::string& path,
                             const std::string& ctx) {
     if (!obj.contains(key) || !obj[key].is_number_integer() || obj[key].get<int>() < 1)
@@ -46,16 +39,45 @@ uint32_t RequirePositiveInt(const json& obj, const char* key, const std::string&
 CpuArch ParseArch(const std::string& v, const std::string& path, const std::string& ctx) {
     if (v == "ARM")  return CpuArch::Arm;
     if (v == "MIPS") return CpuArch::Mips;
-    CfgFatal(path, ctx + ".arch '" + v + "' must be ARM or MIPS");
+    CfgFatal(path, ctx + ".arch '" + v + "' is unknown");
 }
 
 RomPlacingMode ParseRomPlacingMode(const std::string& v, const std::string& path,
                                    const std::string& ctx) {
     if (v == "flat_container") return RomPlacingMode::FlatContainer;
     if (v == "imx51_nand")     return RomPlacingMode::Imx51Nand;
-    CfgFatal(path, ctx + ".rom_placing_mode '" + v +
-                   "' must be flat_container or imx51_nand");
+    CfgFatal(path, ctx + ".rom_placing_mode '" + v + "' is unknown");
 }
+
+SupportLevel ParseSupportLevel(const std::string& v, const std::string& path,
+                               const std::string& ctx) {
+    if (v == "bootable_full")    return SupportLevel::BootableFull;
+    if (v == "bootable_partial") return SupportLevel::BootablePartial;
+    if (v == "unknown_partial")  return SupportLevel::UnknownPartial;
+    if (v == "no_support")       return SupportLevel::NoSupport;
+    CfgFatal(path, ctx + ".support_level '" + v + "' is unknown");
+}
+
+const json& FindBoardFamily(const json& families, const std::string& id,
+                            const std::string& path, const std::string& ctx) {
+    for (const auto& f : families)
+        if (f.is_object() && f.contains("id") && f["id"] == id) return f;
+    CfgFatal(path, ctx + ".board_family_id '" + id + "' is not in board_families[]");
+}
+
+struct BoardValues {
+    const json&        board;
+    const json&        family;
+    const std::string& board_ctx;
+    const std::string& family_ctx;
+
+    const json& Owner(const char* key) const {
+        return board.contains(key) ? board : family;
+    }
+    const std::string& OwnerCtx(const char* key) const {
+        return board.contains(key) ? board_ctx : family_ctx;
+    }
+};
 
 }
 
@@ -78,7 +100,7 @@ void BoardDatabase::OnReady() {
         row.name = RequireString(f, "name", path, "soc_families[]");
         row.arch = ParseArch(RequireString(f, "arch", path, "soc_families[]"), path,
                              "soc_families[" + row.id + "]");
-        families_.push_back(std::move(row));
+        soc_families_.push_back(std::move(row));
     }
 
     for (const auto& s : RequireArray(root, "socs", path)) {
@@ -87,41 +109,51 @@ void BoardDatabase::OnReady() {
         row.id        = RequireString(s, "id", path, "socs[]");
         row.name      = RequireString(s, "name", path, "socs[]");
         row.family_id = RequireString(s, "family_id", path, "socs[" + row.id + "]");
-        Family(row.family_id);
+        SocFamily(row.family_id);
         socs_.push_back(std::move(row));
     }
 
-    for (const auto& d : RequireArray(root, "devices", path)) {
-        if (!d.is_object()) CfgFatal(path, "devices[] entries must be objects");
-        DbDevice row;
-        row.id = RequireString(d, "id", path, "devices[]");
-        const std::string ctx = "devices[" + row.id + "]";
-        row.name       = RequireString(d, "name", path, ctx);
-        row.short_name = d.contains("short_name")
-                             ? RequireString(d, "short_name", path, ctx)
+    const json& families = RequireArray(root, "board_families", path);
+    for (const auto& b : RequireArray(root, "boards", path)) {
+        if (!b.is_object()) CfgFatal(path, "boards[] entries must be objects");
+        DbBoard row;
+        row.id = RequireString(b, "id", path, "boards[]");
+        const std::string ctx = "boards[" + row.id + "]";
+        row.name       = RequireString(b, "name", path, ctx);
+        row.short_name = b.contains("short_name")
+                             ? RequireString(b, "short_name", path, ctx)
                              : row.name;
-        row.supported  = OptionalBool(d, "supported", path, ctx);
-        row.soc_id     = RequireString(d, "soc_id", path, ctx);
+        row.family_id  = RequireString(b, "board_family_id", path, ctx);
+        const std::string family_ctx = "board_families[" + row.family_id + "]";
+        const BoardValues v{ b, FindBoardFamily(families, row.family_id, path, ctx),
+                             ctx, family_ctx };
+        row.support_level = ParseSupportLevel(
+            RequireString(b, "support_level", path, ctx), path, ctx);
+        row.soc_id = RequireString(v.Owner("soc_id"), "soc_id", path, v.OwnerCtx("soc_id"));
         Soc(row.soc_id);
-        if (d.contains("lcd_panel_size")) {
-            const auto& p = d["lcd_panel_size"];
-            if (!p.is_object()) CfgFatal(path, ctx + ".lcd_panel_size must be an object");
+        if (v.Owner("lcd_panel_size").contains("lcd_panel_size")) {
+            const auto& p = v.Owner("lcd_panel_size")["lcd_panel_size"];
+            const std::string pctx = v.OwnerCtx("lcd_panel_size") + ".lcd_panel_size";
+            if (!p.is_object()) CfgFatal(path, pctx + " must be an object");
             row.lcd_panel_size = DbLcdPanelSize{
-                RequirePositiveInt(p, "width", path, ctx + ".lcd_panel_size"),
-                RequirePositiveInt(p, "height", path, ctx + ".lcd_panel_size") };
+                RequirePositiveInt(p, "width", path, pctx),
+                RequirePositiveInt(p, "height", path, pctx) };
         }
-        row.ga_color_depth   = d.contains("ga_color_depth")
-                                   ? RequirePositiveInt(d, "ga_color_depth", path, ctx)
-                                   : kDefaultGaColorDepth;
+        row.ga_color_depth = v.Owner("ga_color_depth").contains("ga_color_depth")
+            ? RequirePositiveInt(v.Owner("ga_color_depth"), "ga_color_depth", path,
+                                 v.OwnerCtx("ga_color_depth"))
+            : kDefaultGaColorDepth;
         row.rom_placing_mode = ParseRomPlacingMode(
-            RequireString(d, "rom_placing_mode", path, ctx), path, ctx);
-        devices_.push_back(std::move(row));
+            RequireString(v.Owner("rom_placing_mode"), "rom_placing_mode", path,
+                          v.OwnerCtx("rom_placing_mode")),
+            path, v.OwnerCtx("rom_placing_mode"));
+        boards_.push_back(std::move(row));
     }
 }
 
-const DbDevice* BoardDatabase::FindDevice(std::string_view id) const {
-    for (const auto& d : devices_)
-        if (d.id == id) return &d;
+const DbBoard* BoardDatabase::FindBoard(std::string_view id) const {
+    for (const auto& b : boards_)
+        if (b.id == id) return &b;
     return nullptr;
 }
 
@@ -131,8 +163,8 @@ const DbSoc& BoardDatabase::Soc(std::string_view id) const {
     CfgFatal(GetCerfDir() + "db.json", "soc '" + std::string(id) + "' is not in socs[]");
 }
 
-const DbSocFamily& BoardDatabase::Family(std::string_view id) const {
-    for (const auto& f : families_)
+const DbSocFamily& BoardDatabase::SocFamily(std::string_view id) const {
+    for (const auto& f : soc_families_)
         if (f.id == id) return f;
     CfgFatal(GetCerfDir() + "db.json",
              "soc family '" + std::string(id) + "' is not in soc_families[]");

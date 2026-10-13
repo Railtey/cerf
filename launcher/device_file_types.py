@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from board_database import ROM_TYPES, STORAGE_TYPES, BoardDatabaseError
+from board_database import (ROM_TYPES, STORAGE_TYPES, BoardDatabaseError,
+                            family_of)
 from cerf_user_json import (ROM_BLOCK, STORAGE_BLOCK, read_board_id,
                             read_device_files, resolve_device_file,
                             storage_default_file)
@@ -50,7 +51,18 @@ def _text(row: dict, key: str) -> str:
     return value if isinstance(value, str) else ""
 
 
+def _bound(row: dict) -> bool:
+    return bool(_strings(row, "board_ids") or _strings(row, "board_family_ids"))
+
+
+def _binds(row: dict, board_id: str, family_id: str) -> bool:
+    return (board_id in _strings(row, "board_ids")
+            or family_id in _strings(row, "board_family_ids"))
+
+
 def _rows_for_board(rows: List[dict], board_id: str) -> List[dict]:
+    family = family_of(board_id)
+    family_id = family["id"] if family is not None else ""
     ids: List[str] = []
     for row in rows:
         if row["id"] not in ids:
@@ -59,10 +71,9 @@ def _rows_for_board(rows: List[dict], board_id: str) -> List[dict]:
     for type_id in ids:
         candidates = [r for r in rows if r["id"] == type_id]
         match = next((r for r in candidates
-                      if board_id in _strings(r, "board_ids")), None)
+                      if _binds(r, board_id, family_id)), None)
         if match is None:
-            match = next((r for r in candidates
-                          if not _strings(r, "board_ids")), None)
+            match = next((r for r in candidates if not _bound(r)), None)
         if match is not None:
             picked.append(match)
     return picked

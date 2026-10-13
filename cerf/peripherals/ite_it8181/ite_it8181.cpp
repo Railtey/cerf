@@ -1,7 +1,7 @@
 #include "ite_it8181.h"
 
 #include "../../boards/board_context.h"
-#include "../../boards/nec_mobilepro_700/nec_mobilepro_700_id.h"
+#include "../../boards/nec_mobilepro_700/nec_mobilepro_700_family_id.h"
 #include "../../core/byte_order.h"
 #include "../../core/cerf_emulator.h"
 #include "../../core/fatal.h"
@@ -11,7 +11,7 @@
 
 bool IteIt8181::ShouldRegister() {
     auto* bd = emu_.TryGet<BoardContext>();
-    return bd && bd->GetBoardId() == BoardId::NecMobilepro700;
+    return bd && bd->GetBoardFamilyId() == BoardFamilyId::NecMobilepro700;
 }
 
 void IteIt8181::OnReady() {

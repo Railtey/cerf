@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace siemens_mp377 {
+namespace siemens_simatic_mp377 {
 
 template <typename T>
 void WriteSm501VectorState(StateWriter& writer, const char* count_name, const char* name,

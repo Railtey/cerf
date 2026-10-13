@@ -7,14 +7,19 @@
       Siemens MP377 support (by @RaulMerelli)
       Casio Toricomail: bezel touch buttons
       Casio Cassiopeia E-700 support
+      Philips Velo 1: Various DRAM Miniature Card profiles
+      iPAQ H3660/H3670 support
     fixed: |
-      Philips Velo 1: 16 MB DRAM Miniature Card permanently fitted - 20 MB total for the guest
       Device Emulator: keyboard no longer drops or repeats keys while typing
       Device Emulator: Windows Mobile 2003 SE no longer freezes
       Casio Toricomail: fixed rendering crashes
       Ford Sync 2: Massive rendering improvements, navigation maps and more (by @cavenderbi)
+      iPAQ H3100: fixed audio playback
+      iPAQ H3600: standard RAM size
+      Siemens SIMpad SL4: 64 MB RAM
   emulator:
     new: |
+      BREAKING: Device database has been updated, check your launcher and fix your entries before running on old values
       Configurable display colour depth for Guest Additions and Device Emulator
       Bundled CompactFlash cards can be auto-inserted at launch
       Thumb32 support. Windows Embedded Compact 2013 is now supported

@@ -7,7 +7,7 @@
 #include "../../socs/vr41xx/vr41xx_giu.h"
 #include "../../state/state_stream.h"
 #include "../board_context.h"
-#include "nec_mobilepro_700_id.h"
+#include "nec_mobilepro_700_family_id.h"
 
 #include <cstdint>
 #include <memory>
@@ -28,7 +28,7 @@ public:
 
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
-        return bd && bd->GetBoardId() == BoardId::NecMobilepro700;
+        return bd && bd->GetBoardFamilyId() == BoardFamilyId::NecMobilepro700;
     }
 
     uint32_t MmioBase() const override { return 0x17100000u; }

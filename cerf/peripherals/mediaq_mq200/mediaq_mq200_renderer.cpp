@@ -4,8 +4,8 @@
 
 #include "../mediaq_ge/mediaq_panel_renderer.h"
 #include "../../boards/board_context.h"
-#include "../../boards/simpad_sl4/simpad_sl4_id.h"
-#include "../../boards/smartbook_g138/smartbook_g138_id.h"
+#include "../../boards/siemens_simpad/siemens_simpad_family_id.h"
+#include "../../boards/pangolin/pangolin_family_id.h"
 
 namespace {
 
@@ -16,8 +16,8 @@ public:
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
         if (!bd) return false;
-        const std::string_view b = bd->GetBoardId();
-        return b == BoardId::SimpadSl4 || b == BoardId::SmartbookG138;
+        const std::string_view b = bd->GetBoardFamilyId();
+        return b == BoardFamilyId::SiemensSimpad || b == BoardFamilyId::Pangolin;
     }
 };
 

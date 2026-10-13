@@ -24,9 +24,14 @@ FUNDING_BADGES = [
 FUNDING_MESSAGE = 'support'
 
 sys.path.insert(0, os.path.join(ROOT, 'launcher'))
-from board_database import (DEVICES, FEATURE_SPECS, operating_systems_of,
-                            soc_family_of, soc_of)
-from board_info import board_sort_key
+from board_database import (FEATURE_SPECS, family_of, soc_family_of, soc_of,
+                            sort_text)
+from board_info import (SUPPORT_BOOTABLE_PARTIAL, board_sort_key,
+                        running_boards)
+
+UNMODELED_MARK = '*'
+UNMODELED_LEGEND = (f'{UNMODELED_MARK} Supported, but CERF does not model this '
+                    'board\'s differences.')
 
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
 import changelog
@@ -60,59 +65,76 @@ def features_cell(board):
     return ' '.join(icons) if icons else '&mdash;'
 
 
+def _rowspan(count):
+    return f' rowspan="{count}"' if count > 1 else ''
+
+
+def _by_name(groups):
+    return sorted(groups.values(), key=lambda group: sort_text(group[0]['name']))
+
+
+def _grouped_boards():
+    arches = {}
+    for board in running_boards():
+        soc = soc_of(board['id'])
+        family = family_of(board['id'])
+        socs = arches.setdefault(soc_family_of(board['id'])['arch'], {})
+        families = socs.setdefault(soc['id'], (soc, {}))[1]
+        families.setdefault(family['id'], (family, []))[1].append(board)
+    return [(arch, [(soc, [(family, sorted(boards,
+                                          key=lambda b: board_sort_key(b['name'])))
+                           for family, boards in _by_name(families)])
+                    for soc, families in _by_name(arches[arch])])
+            for arch in sorted(arches)]
+
+
+def _board_cell(board):
+    mark = (f' {UNMODELED_MARK}'
+            if board.get('support_level') == SUPPORT_BOOTABLE_PARTIAL else '')
+    return (f'{icon_img("board", "PDA", 16)} <b>{board["name"]}</b>{mark} '
+            f'<code>{board["id"]}</code>')
+
+
 def build_supported_devices():
-    boards = sorted((b for b in DEVICES if b.get('supported')),
-                    key=lambda b: board_sort_key(b['name']))
-
-    # All boards on the same SoC share one rowspan SoC cell. Grouping is by SoC
-    # globally (not just consecutive boards): the alphabetical board order can
-    # interleave SoCs (e.g. Jornada 820 / SA-1100 sorts between Jornada 720 and
-    # iPAQ / SA-1110), which would otherwise split one SoC across two cells. SoC
-    # groups appear in first-board order; boards stay in board order within each.
-    groups = []
-    soc_index = {}
-    for board in boards:
-        soc = board['soc_id']
-        if soc in soc_index:
-            soc_index[soc].append(board)
-        else:
-            members = [board]
-            soc_index[soc] = members
-            groups.append((soc, members))
-
     lines = [
         '<table>',
         '  <thead>',
         '    <tr>',
         '      <th>SoC</th>',
-        '      <th>Board / OS</th>',
+        '      <th>Family</th>',
+        '      <th>Board</th>',
         '      <th>Features</th>',
         '    </tr>',
         '  </thead>',
         '  <tbody>',
     ]
-    for _soc_id, group in groups:
-        for index, board in enumerate(group):
-            lines.append('    <tr>')
-            if index == 0:
-                soc = soc_of(board['id'])
-                family = soc_family_of(board['id'])
-                rowspan = f' rowspan="{len(group)}"' if len(group) > 1 else ''
-                lines.append(f'      <td{rowspan} align="center">'
-                             f'{badge_img(family["arch"])}'
-                             f'<br/><b>{soc["name"]}</b>'
-                             f'<br/><sub>{family["name"]}</sub></td>')
-            cell = [f'{icon_img("board", "PDA", 16)} <b>{board["name"]}</b> '
-                    f'<code>{board["id"]}</code>']
-            cell += [guest_os['name']
-                     for guest_os in operating_systems_of(board['id'])]
-            lines.append('      <td>')
-            lines.append('        ' + '<br/>\n        '.join(cell))
-            lines.append('      </td>')
-            lines.append(f'      <td>{features_cell(board)}</td>')
-            lines.append('    </tr>')
+    unmodeled = False
+    for arch, socs in _grouped_boards():
+        for soc, families in socs:
+            soc_rows = sum(len(boards) for _family, boards in families)
+            first_in_soc = True
+            for family, boards in families:
+                for index, board in enumerate(boards):
+                    lines.append('    <tr>')
+                    if first_in_soc:
+                        soc_family = soc_family_of(board['id'])
+                        lines.append(f'      <td{_rowspan(soc_rows)} align="center">'
+                                     f'{badge_img(arch)}'
+                                     f'<br/><b>{soc["name"]}</b>'
+                                     f'<br/><sub>{soc_family["name"]}</sub></td>')
+                        first_in_soc = False
+                    if index == 0:
+                        lines.append(f'      <td{_rowspan(len(boards))}>'
+                                     f'<b>{family["name"]}</b></td>')
+                    lines.append(f'      <td>{_board_cell(board)}</td>')
+                    lines.append(f'      <td>{features_cell(board)}</td>')
+                    lines.append('    </tr>')
+                    unmodeled |= board.get('support_level') == SUPPORT_BOOTABLE_PARTIAL
     lines.append('  </tbody>')
     lines.append('</table>')
+    if unmodeled:
+        lines.append('')
+        lines.append(UNMODELED_LEGEND)
     return '\n'.join(lines)
 
 

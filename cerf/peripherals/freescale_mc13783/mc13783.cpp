@@ -3,7 +3,7 @@
 #include "mc13783_adc.h"
 #include "mc13783_int_line.h"
 #include "../../boards/board_context.h"
-#include "../../boards/zune_keel/zune_30_id.h"
+#include "../../boards/toshiba_gigabeat_s/toshiba_gigabeat_s_family_id.h"
 #include "../../core/cerf_emulator.h"
 #include "../../core/log.h"
 #include "../../host/guest_deep_sleep.h"
@@ -122,7 +122,7 @@ constexpr uint32_t kWritable[64] = {
 
 bool Mc13783::ShouldRegister() {
     auto* bd = emu_.TryGet<BoardContext>();
-    return bd && bd->GetBoardId() == BoardId::Zune30;
+    return bd && bd->GetBoardFamilyId() == BoardFamilyId::ToshibaGigabeatS;
 }
 
 void Mc13783::OnReady() {

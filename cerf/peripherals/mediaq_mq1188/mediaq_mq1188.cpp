@@ -1,7 +1,7 @@
 #include "mediaq_mq1188.h"
 
 #include "../../boards/board_context.h"
-#include "../../boards/falcon_pc3xx/falcon_4220_id.h"
+#include "../../boards/askey_pc3xx/askey_pc3xx_family_id.h"
 #include "../../core/byte_order.h"
 #include "../../core/cerf_emulator.h"
 #include "../../core/log.h"
@@ -12,7 +12,7 @@
 
 bool MediaQMq1188::ShouldRegister() {
     auto* bd = emu_.TryGet<BoardContext>();
-    return bd && bd->GetBoardId() == BoardId::Falcon4220;
+    return bd && bd->GetBoardFamilyId() == BoardFamilyId::AskeyPc3xx;
 }
 
 void MediaQMq1188::OnReady() {

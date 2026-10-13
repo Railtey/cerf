@@ -3,7 +3,7 @@
 #include "pm8058_irq_line.h"
 
 #include "../../boards/board_context.h"
-#include "../../boards/nokia_lumia_800/nokia_lumia_800_id.h"
+#include "../../boards/nokia_sea_ray/nokia_sea_ray_family_id.h"
 #include "../../core/cerf_emulator.h"
 #include "../../core/fatal.h"
 #include "../../socs/guest_cpu_reset.h"
@@ -39,7 +39,7 @@ constexpr uint8_t kRootBitShift = 1u;
 
 bool Pm8058Irq::ShouldRegister() {
     auto* bd = emu_.TryGet<BoardContext>();
-    return bd && bd->GetBoardId() == BoardId::NokiaLumia800;
+    return bd && bd->GetBoardFamilyId() == BoardFamilyId::NokiaSeaRay;
 }
 
 void Pm8058Irq::OnReady() {

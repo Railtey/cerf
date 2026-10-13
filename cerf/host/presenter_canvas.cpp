@@ -5,6 +5,7 @@
 #include <mmsystem.h>
 
 #include "../core/log.h"
+#include "../lcd/lcd_pixel_expand.h"
 
 namespace {
 constexpr wchar_t kCanvasClass[] = L"CerfPresenterCanvas";
@@ -19,7 +20,7 @@ void DesaturateAndDim(uint32_t* px, int count) {
         const uint32_t r = (p >> 16) & 0xFFu;
         const uint32_t g = (p >> 8)  & 0xFFu;
         const uint32_t b =  p        & 0xFFu;
-        const uint32_t y = ((r * 77u + g * 150u + b * 29u) >> 8) * kPausedLumaQ10;
+        const uint32_t y = lcd_pixel::Luma8(p) * kPausedLumaQ10;
         px[i] = (p & 0xFF000000u) |
                 (((r * kPausedColorQ10 + y) >> 10) << 16) |
                 (((g * kPausedColorQ10 + y) >> 10) << 8) |

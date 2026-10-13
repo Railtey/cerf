@@ -1,7 +1,7 @@
 #include "wm9713_codec.h"
 
 #include "../../boards/board_context.h"
-#include "../../boards/symbol_mk500/symbol_mk500_id.h"
+#include "../../boards/symbol_hamptons/symbol_hamptons_family_id.h"
 #include "../../core/cerf_emulator.h"
 #include "../../core/fatal.h"
 #include "../../core/log.h"
@@ -108,7 +108,7 @@ constexpr uint16_t kAdco       = 1u << 4;
 
 bool Wm9713Codec::ShouldRegister() {
     auto* bd = emu_.TryGet<BoardContext>();
-    return bd && bd->GetBoardId() == BoardId::SymbolMk500;
+    return bd && bd->GetBoardFamilyId() == BoardFamilyId::SymbolHamptons;
 }
 
 void Wm9713Codec::OnReady() {

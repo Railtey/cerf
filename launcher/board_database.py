@@ -56,14 +56,38 @@ def _by_id(table: str) -> Dict[str, dict]:
     return {r["id"]: r for r in _rows(table)}
 
 
+def _list(row: dict, key: str) -> list:
+    value = row.get(key)
+    return value if isinstance(value, list) else []
+
+
+def _merged_features(family: dict, board: dict) -> List[dict]:
+    merged: Dict[str, dict] = {}
+    for row in (family, board):
+        for f in _list(row, "device_features"):
+            if isinstance(f, dict) and isinstance(f.get("feature_id"), str):
+                merged[f["feature_id"]] = f
+    return list(merged.values())
+
+
+def _effective_board(board: dict) -> dict:
+    family = BOARD_FAMILIES_BY_ID.get(board.get("board_family_id", ""), {})
+    out = {k: v for k, v in family.items() if k not in ("id", "name")}
+    out.update(board)
+    out["device_features"] = _merged_features(family, board)
+    out["notes"] = _list(family, "notes") + _list(board, "notes")
+    return out
+
+
 _DB = _load()
 
-OPERATING_SYSTEMS = _by_id("operating_systems")
 SOC_FAMILIES = _by_id("soc_families")
 SOCS = _by_id("socs")
 DEVICE_FEATURES = _rows("device_features")
-DEVICES = _rows("devices")
-DEVICES_BY_ID = _by_id("devices")
+BOARD_FAMILIES = _rows("board_families")
+BOARD_FAMILIES_BY_ID = _by_id("board_families")
+BOARDS = [_effective_board(b) for b in _rows("boards")]
+BOARDS_BY_ID = {b["id"]: b for b in BOARDS}
 ROM_TYPES = _rows("rom_types")
 STORAGE_TYPES = _rows("storage_types")
 
@@ -82,27 +106,22 @@ def sort_text(value: object) -> str:
     return " ".join(value.casefold().split())
 
 
-def device(board_id: object) -> Optional[dict]:
+def board(board_id: object) -> Optional[dict]:
     if not isinstance(board_id, str):
         return None
-    return DEVICES_BY_ID.get(board_id.strip())
+    return BOARDS_BY_ID.get(board_id.strip())
+
+
+def family_of(board_id: object) -> Optional[dict]:
+    entry = board(board_id)
+    return BOARD_FAMILIES_BY_ID.get(entry.get("board_family_id", "")) if entry else None
 
 
 def soc_of(board_id: object) -> Optional[dict]:
-    entry = device(board_id)
+    entry = board(board_id)
     return SOCS.get(entry.get("soc_id", "")) if entry else None
 
 
 def soc_family_of(board_id: object) -> Optional[dict]:
     soc = soc_of(board_id)
     return SOC_FAMILIES.get(soc.get("family_id", "")) if soc else None
-
-
-def operating_systems_of(board_id: object) -> List[dict]:
-    entry = device(board_id)
-    if entry is None:
-        return []
-    ids = entry.get("operating_system_ids")
-    if not isinstance(ids, list):
-        return []
-    return [OPERATING_SYSTEMS[i] for i in ids if i in OPERATING_SYSTEMS]

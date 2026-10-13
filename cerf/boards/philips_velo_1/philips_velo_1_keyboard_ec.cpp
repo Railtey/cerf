@@ -1,7 +1,7 @@
 #include "philips_velo_1_keyboard_ec.h"
 
 #include "../board_context.h"
-#include "philips_velo_1_id.h"
+#include "philips_velo_1_family_id.h"
 #include "../../core/cerf_emulator.h"
 #include "../../core/log.h"
 #include "../../host/guest_deep_sleep.h"
@@ -33,7 +33,7 @@ uint8_t ScanChecksum(uint8_t b) {
 
 bool PhilipsVelo1KeyboardEc::ShouldRegister() {
     auto* bd = emu_.TryGet<BoardContext>();
-    return bd && bd->GetBoardId() == BoardId::PhilipsVelo1;
+    return bd && bd->GetBoardFamilyId() == BoardFamilyId::PhilipsVelo1;
 }
 
 void PhilipsVelo1KeyboardEc::OnReady() {

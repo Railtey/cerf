@@ -5,7 +5,8 @@
 #include "../../core/fatal.h"
 #include "../../core/log.h"
 #include "../board_context.h"
-#include "philips_velo_1_id.h"
+#include "philips_velo_1_dram_card_profile.h"
+#include "philips_velo_1_family_id.h"
 
 #include <cstdint>
 #include <vector>
@@ -27,13 +28,11 @@ constexpr uint32_t kDramSize = 0x00400000u;
    aliases through the window, which is how sub_9F40EAE0 sizes it. */
 constexpr uint32_t kDramDecodeSpan = 0x02000000u;
 
-/* The 16 Mbyte DRAM Miniature Card fitted in slot 1. philips_velo_1_ce1 nk.exe
-   sub_9F42453C @0x9F42453C reports its base as 0x82000000 and the kernel takes it as a
-   second RAM region (sub_9F4155C0 @0x9F4155C0); PA 0x02000000 decodes DRAM BANK 1 over
-   32 MB while ENCS1DRAM is clear (TMPR3911 Table 4.2.1). */
+/* philips_velo_1_ce1 nk.exe sub_9F42453C @0x9F42453C reports the slot-1 card base as
+   0x82000000; PA 0x02000000 decodes 32 MB as DRAM BANK 1 while CS1 is not enabled
+   (TMPR3911 Table 4.2.1). */
 constexpr uint32_t kBank1VaBase     = 0x82000000u;
 constexpr uint32_t kBank1PaBase     = 0x02000000u;
-constexpr uint32_t kBank1Size       = 0x01000000u;
 constexpr uint32_t kBank1DecodeSpan = 0x02000000u;
 
 /* Internal Function Registers, 2 MB at PA 0x10C00000 (TMPR3911 Table 4.2.1). */
@@ -47,7 +46,7 @@ public:
 
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
-        return bd && bd->GetBoardId() == BoardId::PhilipsVelo1;
+        return bd && bd->GetBoardFamilyId() == BoardFamilyId::PhilipsVelo1;
     }
 
     void OnReady() override {
@@ -73,38 +72,44 @@ public:
 
         RequireRamEndWithin(*hdr, kDramVaBase, kDramSize);
 
+        card_ = FindPhilipsVelo1DramCard(emu_.Get<BoardContext>().GetBoardId());
+
         LOG(Boot, "PhilipsVelo1PageTableBuilder: ROM kva=0x%08X pa=0x%08X size=0x%X, "
-                  "DRAM pa=0x%08X size=0x%X span=0x%X (ulRAMEnd=0x%08X)\n",
+                  "DRAM pa=0x%08X size=0x%X span=0x%X (ulRAMEnd=0x%08X), "
+                  "DRAM card size=0x%X\n",
             rom_.va_base, rom_.pa_base, rom_.size, kDramPaBase, kDramSize,
-            kDramDecodeSpan, hdr->ulRAMEnd);
+            kDramDecodeSpan, hdr->ulRAMEnd, card_ ? card_->Bytes() : 0u);
     }
 
     std::vector<DramRegion> CachedDramRegions() const override {
-        return {
-            { kDramVaBase,  kDramPaBase,  kDramSize },
-            { kBank1VaBase, kBank1PaBase, kBank1Size },
-        };
+        std::vector<DramRegion> r = { { kDramVaBase, kDramPaBase, kDramSize } };
+        if (card_) r.push_back({ kBank1VaBase, kBank1PaBase, card_->Bytes() });
+        return r;
     }
 
     std::vector<BackedRegion> BackedMemoryRegions() const override {
-        return {
-            { kDramVaBase,  kDramPaBase,  kDramSize,  PAGE_READWRITE, kDramDecodeSpan },
-            { kBank1VaBase, kBank1PaBase, kBank1Size, PAGE_READWRITE, kBank1DecodeSpan },
-            { rom_.va_base, rom_.pa_base, rom_.size,  PAGE_EXECUTE_READ },
+        std::vector<BackedRegion> r = {
+            { kDramVaBase, kDramPaBase, kDramSize, PAGE_READWRITE, kDramDecodeSpan },
         };
+        if (card_) {
+            r.push_back({ kBank1VaBase, kBank1PaBase, card_->Bytes(), PAGE_READWRITE,
+                          kBank1DecodeSpan });
+        }
+        r.push_back({ rom_.va_base, rom_.pa_base, rom_.size, PAGE_EXECUTE_READ });
+        return r;
     }
 
     std::vector<DramRegion> MappedVaSpans() const override {
-        return {
-            { kDramVaBase,  kDramPaBase,  kDramDecodeSpan },
-            { kBank1VaBase, kBank1PaBase, kBank1DecodeSpan },
-            rom_,
-            { kRegsVaBase,  kRegsPaBase,  kRegsSize },
-        };
+        std::vector<DramRegion> r = { { kDramVaBase, kDramPaBase, kDramDecodeSpan } };
+        if (card_) r.push_back({ kBank1VaBase, kBank1PaBase, kBank1DecodeSpan });
+        r.push_back(rom_);
+        r.push_back({ kRegsVaBase, kRegsPaBase, kRegsSize });
+        return r;
     }
 
 private:
     DramRegion rom_{};
+    const PhilipsVelo1DramCardProfile* card_ = nullptr;
 };
 
 }  /* namespace */

@@ -2,7 +2,7 @@
 
 #include "../../core/cerf_emulator.h"
 #include "../../boards/board_context.h"
-#include "../../boards/jornada720/jornada_720_id.h"
+#include "../../boards/hp_jornada_700/hp_jornada_700_family_id.h"
 #include "../../host/audio_activity_widget.h"
 #include "../../jit/guest_cycle_clock.h"
 
@@ -19,7 +19,7 @@ constexpr size_t   kMicFifoBytes  = 65536u;
 
 bool Sa1111SacHostInput::ShouldRegister() {
     auto* bd = emu_.TryGet<BoardContext>();
-    return bd && bd->GetBoardId() == BoardId::Jornada720;
+    return bd && bd->GetBoardFamilyId() == BoardFamilyId::HpJornada700;
 }
 
 void Sa1111SacHostInput::OnReady() {

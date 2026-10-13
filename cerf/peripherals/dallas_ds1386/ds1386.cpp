@@ -1,7 +1,7 @@
 #include "../peripheral_base.h"
 
 #include "../../boards/board_context.h"
-#include "../../boards/nec_rockhopper/nec_rockhopper_id.h"
+#include "../../boards/nec_sg2_vr5500/nec_sg2_vr5500_family_id.h"
 #include "../../core/cerf_emulator.h"
 #include "../../core/log.h"
 #include "../../host/guest_deep_sleep.h"
@@ -53,7 +53,7 @@ public:
     using Peripheral::Peripheral;
 
     bool ShouldRegister() override {
-        return emu_.Get<BoardContext>().GetBoardId() == BoardId::NecRockhopper;
+        return emu_.Get<BoardContext>().GetBoardFamilyId() == BoardFamilyId::NecSg2Vr5500;
     }
 
     void OnReady() override {

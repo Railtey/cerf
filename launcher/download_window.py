@@ -9,11 +9,13 @@ from device_model import (GROUP_IID_PREFIX, _device_group_key,
                           _device_group_name, _device_sort_key,
                           _device_search_haystack, _table_device_label,
                           _table_os_label)
-from board_info import board_soc_label, board_support_state
+from board_info import board_runs, board_soc_label
 from bundle_repositories import read_repositories
 from copyright_removal_dialog import (BUTTON_LABEL as COPYRIGHT_BUTTON_LABEL,
                                       ContactsFn, show_copyright_removal)
 from dialog_buttons import pack_actions
+from filter_tree import (GROUP_TAG, grouped_tree, pack_search, pack_toggle,
+                         search_query)
 from screen_geometry import fit_geometry
 from sources_dialog import SourcesDialog
 from ui_dialogs import BUNDLE_REPOSITORIES_URL, link_label
@@ -60,10 +62,9 @@ class DownloadWindow:
         filt = ttk.Frame(body)
         filt.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
         self.var_hide_unsupported = tk.BooleanVar(value=True)
-        ttk.Checkbutton(filt, text="Hide unsupported",
-                        variable=self.var_hide_unsupported,
-                        command=self._refill).pack(side="left")
-        ttk.Label(filt, text="Sort:").pack(side="left", padx=(12, 4))
+        pack_toggle(filt, "Hide unsupported", self.var_hide_unsupported,
+                    self._refill)
+        ttk.Label(filt, text="Sort:").pack(side="left", padx=(0, 4))
         self.var_sort = tk.StringVar(
             value=_SORT_DOWNLOADS if self._places is not None else _SORT_REGULAR)
         self.sort_combo = ttk.Combobox(
@@ -76,24 +77,13 @@ class DownloadWindow:
                                       command=self._open_sources)
         self.btn_sources.pack(side="right", padx=(8, 0))
         self.var_search = tk.StringVar(value="")
-        ttk.Entry(filt, textvariable=self.var_search, width=24).pack(side="right")
-        ttk.Label(filt, text="Search:").pack(side="right", padx=(0, 4))
-        self.var_search.trace_add("write", lambda *_: self._refill())
+        pack_search(filt, self.var_search, self._refill)
 
-        columns = ("soc", "size")
-        tree = ttk.Treeview(body, columns=columns, show="tree headings",
-                            selectmode="none")
-        tree.heading("#0", text="☐  Device / OS")
-        tree.heading("soc", text="SoC")
-        tree.heading("size", text="Size")
-        tree.column("#0", width=640, minwidth=320, anchor="w", stretch=True)
-        tree.column("soc", width=150, minwidth=100, anchor="w", stretch=True)
-        tree.column("size", width=90, minwidth=70, anchor="e", stretch=False)
-        tree.grid(row=1, column=0, sticky="nsew")
-        vsb = ttk.Scrollbar(body, orient="vertical", command=tree.yview)
-        vsb.grid(row=1, column=1, sticky="ns")
-        tree.configure(yscrollcommand=vsb.set)
-        tree.tag_configure("group", background=theme.GROUP_BG, foreground=theme.FG)
+        tree, vsb = grouped_tree(
+            body, ("#0", "☐  Device / OS", 640, 320, "w", True),
+            [("soc", "SoC", 150, 100, "w", True),
+             ("size", "Size", 90, 70, "e", False)],
+            selectmode="none", row=1)
         tree.tag_configure("osnote", foreground=theme.FG_DIM)
         tree.bind("<Button-1>", self._on_click)
         self.tree = tree
@@ -192,10 +182,9 @@ class DownloadWindow:
 
     def _visible_candidates(self) -> List[DeviceBundle]:
         hide_unsupported = self.var_hide_unsupported.get()
-        query = self.var_search.get().strip().lower()
+        query = search_query(self.var_search)
         return [d for d in self._candidates
-                if not (hide_unsupported and
-                        board_support_state(d.meta.board_id) is not True)
+                if not (hide_unsupported and not board_runs(d.meta.board_id))
                 and (not query or query in _device_search_haystack(d))]
 
     def _check_glyph(self, name: str) -> str:
@@ -241,7 +230,7 @@ class DownloadWindow:
             if gid is None:
                 gid = GROUP_IID_PREFIX + name
                 tree.insert("", "end", iid=gid, text="", open=True,
-                            tags=("group",))
+                            tags=(GROUP_TAG,))
                 groups[name] = gid
                 self._group_members[gid] = []
                 self._group_labels[gid] = _table_device_label(d)

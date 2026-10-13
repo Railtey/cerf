@@ -4,7 +4,7 @@
 #include "imx51_ipu_srm.h"
 
 #include "../../boards/board_context.h"
-#include "../../boards/ford_sync2/ford_sync_2_id.h"
+#include "../../boards/ford_sync_gen2/ford_sync_gen2_family_id.h"
 #include "../../core/byte_order.h"
 #include "../../core/cerf_emulator.h"
 #include "../../core/log.h"
@@ -47,7 +47,7 @@ public:
 
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
-        return bd && bd->GetBoardId() == BoardId::FordSync2;
+        return bd && bd->GetBoardFamilyId() == BoardFamilyId::FordSyncGen2;
     }
 
     void PresentedSize(uint32_t& w, uint32_t& h) override {

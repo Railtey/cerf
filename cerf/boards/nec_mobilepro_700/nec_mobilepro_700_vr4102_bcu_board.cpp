@@ -2,7 +2,7 @@
 
 #include "../../core/cerf_emulator.h"
 #include "../board_context.h"
-#include "nec_mobilepro_700_id.h"
+#include "nec_mobilepro_700_family_id.h"
 
 #include <cstdint>
 
@@ -14,7 +14,7 @@ public:
 
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
-        return bd && bd->GetBoardId() == BoardId::NecMobilepro700;
+        return bd && bd->GetBoardFamilyId() == BoardFamilyId::NecMobilepro700;
     }
 
     /* nec_mobilepro_700_ce2 nk.bin reset code 0xBFC00018..0xBFC00058 (file 0xC00018), the last

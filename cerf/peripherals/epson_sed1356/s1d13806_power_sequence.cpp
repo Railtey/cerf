@@ -1,7 +1,7 @@
 #include "sed1356_power_sequence.h"
 
 #include "../../boards/board_context.h"
-#include "../../boards/nec_mobilepro_900/nec_mobilepro_900_id.h"
+#include "../../boards/nec_mobilepro_900_series/nec_mobilepro_900_series_family_id.h"
 #include "../../core/cerf_emulator.h"
 #include "../../core/fatal.h"
 
@@ -12,7 +12,7 @@ public:
     using Sed1356PowerSequence::Sed1356PowerSequence;
 
     bool ShouldRegister() override {
-        return emu_.Get<BoardContext>().GetBoardId() == BoardId::NecMobilepro900;
+        return emu_.Get<BoardContext>().GetBoardFamilyId() == BoardFamilyId::NecMobilepro900Series;
     }
 
     /* S1D13806 X28B-A-001-13 Table 6-15 p.62 t2: LCD Enable high to panel active,

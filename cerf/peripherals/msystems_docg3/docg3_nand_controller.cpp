@@ -4,7 +4,7 @@
 #include "../../core/cerf_emulator.h"
 #include "../../core/log.h"
 #include "../../boards/board_context.h"
-#include "../../boards/falcon_pc3xx/falcon_4220_id.h"
+#include "../../boards/askey_pc3xx/askey_pc3xx_family_id.h"
 #include "../peripheral_dispatcher.h"
 #include "../../state/state_stream.h"
 #include "msystems_docg3_base.h"
@@ -81,7 +81,7 @@ public:
         /* Off-chip part: register on each board that wires it. The matching
            board supplies its base via MsystemsDocG3Base. */
         auto* bd = emu_.TryGet<BoardContext>();
-        return bd && bd->GetBoardId() == BoardId::Falcon4220;
+        return bd && bd->GetBoardFamilyId() == BoardFamilyId::AskeyPc3xx;
     }
 
     void OnReady() override {

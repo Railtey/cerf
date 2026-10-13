@@ -1,87 +1,5 @@
 {
   "ga_shared_folder_mount_point": "CERF Storage",
-  "operating_systems": [
-    {
-      "id": "windows_ce_1",
-      "name": "Windows CE 1.0"
-    },
-    {
-      "id": "windows_ce_2",
-      "name": "Windows CE 2.0"
-    },
-    {
-      "id": "windows_ce_2_11",
-      "name": "Windows CE 2.11"
-    },
-    {
-      "id": "windows_ce_2_12",
-      "name": "Windows CE 2.12"
-    },
-    {
-      "id": "palm_size_pc",
-      "name": "Palm-size PC"
-    },
-    {
-      "id": "handheld_pc_pro",
-      "name": "Handheld PC 3.0 Professional"
-    },
-    {
-      "id": "handheld_pc_2000",
-      "name": "Handheld PC 2000"
-    },
-    {
-      "id": "pocket_pc_2000",
-      "name": "Pocket PC 2000"
-    },
-    {
-      "id": "pocket_pc_2002",
-      "name": "Pocket PC 2002"
-    },
-    {
-      "id": "windows_ce_3",
-      "name": "Windows CE 3"
-    },
-    {
-      "id": "windows_ce_net",
-      "name": "Windows CE .NET"
-    },
-    {
-      "id": "windows_mobile_2003se",
-      "name": "Windows Mobile 2003 SE"
-    },
-    {
-      "id": "windows_ce_5",
-      "name": "Windows CE 5"
-    },
-    {
-      "id": "windows_mobile_5",
-      "name": "Windows Mobile 5"
-    },
-    {
-      "id": "windows_ce_6",
-      "name": "Windows Embedded CE 6"
-    },
-    {
-      "id": "windows_mobile_6",
-      "name": "Windows Mobile 6"
-    },
-    {
-      "id": "windows_ce_7",
-      "name": "Windows Embedded Compact 7"
-    },
-    {
-      "id": "windows_ce_8",
-      "name": "Windows Embedded Compact 2013"
-    },
-    {
-      "id": "linux",
-      "name": "Linux Distributions"
-    },
-    {
-      "id": "wp7",
-      "name": "Windows Phone 7"
-    }
-  ],
   "soc_families": [
     {
       "id": "strongarm",
@@ -161,8 +79,8 @@
       "family_id": "xscale"
     },
     {
-      "id": "poseidon",
-      "name": "Microsoft Poseidon",
+      "id": "arm720t",
+      "name": "ARM ARM720T",
       "family_id": "arm720t"
     },
     {
@@ -283,20 +201,11 @@
       "icon": "serial_com"
     }
   ],
-  "devices": [
+  "board_families": [
     {
-      "id": "devemu",
-      "name": "Device Emulator",
-      "short_name": "Device Emulator",
-      "supported": true,
+      "id": "samsung_smdk2410",
+      "name": "Samsung SMDK2410",
       "soc_id": "s3c2410",
-      "operating_system_ids": [
-        "windows_ce_6",
-        "windows_mobile_5",
-        "windows_mobile_6",
-        "windows_mobile_2003se",
-        "windows_ce_5"
-      ],
       "device_features": [
         {
           "feature_id": "sound",
@@ -344,14 +253,9 @@
       "rom_placing_mode": "flat_container"
     },
     {
-      "id": "falcon_4220",
-      "name": "Falcon 4220",
-      "short_name": "Falcon 4220",
-      "supported": true,
+      "id": "askey_pc3xx",
+      "name": "Askey PC3xx",
       "soc_id": "pxa255",
-      "operating_system_ids": [
-        "windows_ce_net"
-      ],
       "device_features": [
         {
           "feature_id": "sound",
@@ -397,15 +301,10 @@
       "rom_placing_mode": "flat_container"
     },
     {
-      "id": "ipaq_gen1",
-      "name": "iPAQ H3100/H3600/H3700",
-      "short_name": "iPAQ",
-      "supported": true,
+      "id": "compaq_ipaq_h3000",
+      "name": "Compaq iPAQ H3000",
       "soc_id": "sa1110",
-      "operating_system_ids": [
-        "pocket_pc_2000",
-        "pocket_pc_2002"
-      ],
+      "device_year": 2000,
       "device_features": [
         {
           "feature_id": "sound",
@@ -453,14 +352,10 @@
       "rom_placing_mode": "flat_container"
     },
     {
-      "id": "jornada_820",
+      "id": "hp_jornada_820",
       "name": "HP Jornada 820",
-      "short_name": "Jornada 820",
-      "supported": true,
       "soc_id": "sa1100",
-      "operating_system_ids": [
-        "handheld_pc_pro"
-      ],
+      "device_year": 1998,
       "device_features": [
         {
           "feature_id": "sound",
@@ -512,15 +407,10 @@
       "rom_placing_mode": "flat_container"
     },
     {
-      "id": "jornada_720",
-      "name": "HP Jornada 720",
-      "short_name": "Jornada 720",
-      "supported": true,
+      "id": "hp_jornada_700",
+      "name": "HP Jornada 700 series",
       "soc_id": "sa1110",
-      "operating_system_ids": [
-        "handheld_pc_2000",
-        "linux"
-      ],
+      "device_year": 2000,
       "device_features": [
         {
           "feature_id": "sound",
@@ -573,15 +463,8 @@
     },
     {
       "id": "odo",
-      "name": "Microsoft Windows CE Hardware Reference Platform",
-      "short_name": "Reference Platform",
-      "supported": true,
-      "soc_id": "poseidon",
-      "operating_system_ids": [
-        "windows_ce_2_11",
-        "windows_ce_2_12",
-        "windows_ce_3"
-      ],
+      "name": "Microsoft Hardware Reference Platform",
+      "soc_id": "arm720t",
       "device_features": [
         {
           "feature_id": "sound",
@@ -604,24 +487,18 @@
           "supported": true
         }
       ],
+      "notes": [],
       "lcd_panel_size": {
         "width": 480,
         "height": 240
       },
-      "notes": [],
       "ga_color_depth": 24,
       "rom_placing_mode": "flat_container"
     },
     {
-      "id": "omap_3530_evm",
-      "name": "OMAP 3530 EVM",
-      "short_name": "OMAP3530 EVM",
-      "supported": true,
+      "id": "ti_omap35x_evm",
+      "name": "TI OMAP35x EVM",
       "soc_id": "omap3530",
-      "operating_system_ids": [
-        "windows_ce_7",
-        "windows_ce_8"
-      ],
       "device_features": [
         {
           "feature_id": "sound",
@@ -648,14 +525,10 @@
       "rom_placing_mode": "flat_container"
     },
     {
-      "id": "zune_30",
-      "name": "Zune 30",
-      "short_name": "Zune 30",
-      "supported": true,
+      "id": "toshiba_gigabeat_s",
+      "name": "Toshiba Gigabeat S",
       "soc_id": "imx31",
-      "operating_system_ids": [
-        "windows_ce_5"
-      ],
+      "device_year": 2006,
       "device_features": [
         {
           "feature_id": "sound",
@@ -683,15 +556,10 @@
       "rom_placing_mode": "flat_container"
     },
     {
-      "id": "simpad_sl4",
-      "name": "Siemens SIMpad SL4",
-      "short_name": "SIMpad SL4",
-      "supported": true,
+      "id": "siemens_simpad",
+      "name": "Siemens SIMpad",
       "soc_id": "sa1110",
-      "operating_system_ids": [
-        "handheld_pc_2000",
-        "windows_ce_net"
-      ],
+      "device_year": 2001,
       "device_features": [
         {
           "feature_id": "sound",
@@ -731,15 +599,10 @@
       "rom_placing_mode": "flat_container"
     },
     {
-      "id": "nec_mobilepro_900",
-      "name": "NEC MobilePro 900",
-      "short_name": "MobilePro 900",
-      "supported": true,
+      "id": "nec_mobilepro_900_series",
+      "name": "NEC MobilePro 900 Series",
       "soc_id": "pxa255",
-      "operating_system_ids": [
-        "handheld_pc_2000",
-        "windows_ce_net"
-      ],
+      "device_year": 2003,
       "device_features": [
         {
           "feature_id": "sound",
@@ -789,12 +652,8 @@
     {
       "id": "nec_mobilepro_700",
       "name": "NEC MobilePro 700",
-      "short_name": "MobilePro 700",
-      "supported": true,
       "soc_id": "vr4102",
-      "operating_system_ids": [
-        "windows_ce_2"
-      ],
+      "device_year": 1997,
       "device_features": [
         {
           "feature_id": "touch",
@@ -842,14 +701,10 @@
       "rom_placing_mode": "flat_container"
     },
     {
-      "id": "nec_mobilepro_790",
-      "name": "NEC MobilePro 790",
-      "short_name": "MobilePro 790",
-      "supported": false,
+      "id": "nec_cronos3e",
+      "name": "NEC CRONOS3E",
       "soc_id": "vr4121",
-      "operating_system_ids": [
-        "handheld_pc_2000"
-      ],
+      "device_year": 2001,
       "device_features": [],
       "notes": [],
       "lcd_panel_size": {
@@ -859,14 +714,10 @@
       "rom_placing_mode": "flat_container"
     },
     {
-      "id": "casio_cassiopeia_e55",
-      "name": "Casio Cassiopeia E-55",
-      "short_name": "E-55",
-      "supported": true,
+      "id": "casio_tomcat",
+      "name": "Casio Tomcat",
       "soc_id": "vr4111",
-      "operating_system_ids": [
-        "palm_size_pc"
-      ],
+      "device_year": 1998,
       "device_features": [
         {
           "feature_id": "touch",
@@ -914,14 +765,10 @@
       "rom_placing_mode": "flat_container"
     },
     {
-      "id": "casio_cassiopeia_em500",
-      "name": "Casio Cassiopeia EM-500/E-700",
-      "short_name": "EM-500",
-      "supported": true,
+      "id": "casio_jx670",
+      "name": "Casio JX670",
       "soc_id": "vr4122",
-      "operating_system_ids": [
-        "pocket_pc_2000"
-      ],
+      "device_year": 2000,
       "device_features": [
         {
           "feature_id": "touch",
@@ -969,14 +816,10 @@
       "rom_placing_mode": "flat_container"
     },
     {
-      "id": "casio_toricomail",
-      "name": "Casio Toricomail / Message-Cam / Pocket PostPet",
-      "short_name": "Toricomail",
-      "supported": true,
+      "id": "casio_pocketpostpet",
+      "name": "Casio PocketPostPet",
       "soc_id": "vr4121",
-      "operating_system_ids": [
-        "windows_ce_2_12"
-      ],
+      "device_year": 2000,
       "device_features": [
         {
           "feature_id": "touch",
@@ -1019,14 +862,9 @@
       "rom_placing_mode": "flat_container"
     },
     {
-      "id": "nec_rockhopper",
-      "name": "NEC Rockhopper SG2_VR5500",
-      "short_name": "Rockhopper",
-      "supported": true,
+      "id": "nec_sg2_vr5500",
+      "name": "NEC Solution Gear 2-Vr5500",
       "soc_id": "vr5500",
-      "operating_system_ids": [
-        "windows_ce_6"
-      ],
       "device_features": [
         {
           "feature_id": "mouse",
@@ -1068,14 +906,10 @@
       "rom_placing_mode": "flat_container"
     },
     {
-      "id": "philips_nino_300",
-      "name": "Philips Nino 300",
-      "short_name": "Nino 300",
-      "supported": true,
+      "id": "philips_nino",
+      "name": "Philips Nino",
       "soc_id": "pr31700",
-      "operating_system_ids": [
-        "palm_size_pc"
-      ],
+      "device_year": 1998,
       "device_features": [
         {
           "feature_id": "touch",
@@ -1121,13 +955,8 @@
     {
       "id": "philips_velo_1",
       "name": "Philips Velo 1",
-      "short_name": "Velo 1",
-      "supported": true,
       "soc_id": "pr31500",
-      "operating_system_ids": [
-        "windows_ce_1",
-        "windows_ce_2"
-      ],
+      "device_year": 1997,
       "device_features": [
         {
           "feature_id": "touch",
@@ -1175,14 +1004,10 @@
       "rom_placing_mode": "flat_container"
     },
     {
-      "id": "sharp_mobilon_hc4100",
-      "name": "Sharp Mobilon HC-4100",
-      "short_name": "Mobilon HC-4100",
-      "supported": true,
+      "id": "sharp_mobilon_hc",
+      "name": "Sharp Mobilon HC",
       "soc_id": "pr31700",
-      "operating_system_ids": [
-        "windows_ce_2"
-      ],
+      "device_year": 1997,
       "device_features": [
         {
           "feature_id": "touch",
@@ -1230,14 +1055,10 @@
       "rom_placing_mode": "flat_container"
     },
     {
-      "id": "siemens_mp377",
+      "id": "siemens_simatic_mp377",
       "name": "Siemens SIMATIC MP 377",
-      "short_name": "SIMATIC MP 377",
-      "supported": true,
       "soc_id": "iop13xx",
-      "operating_system_ids": [
-        "windows_ce_5"
-      ],
+      "device_year": 2007,
       "device_features": [
         {
           "feature_id": "touch",
@@ -1269,14 +1090,9 @@
       "rom_placing_mode": "flat_container"
     },
     {
-      "id": "siemens_p177",
-      "name": "Siemens SIMATIC TP177B",
-      "short_name": "SIMATIC TP177B",
-      "supported": true,
+      "id": "siemens_simatic_tp177b_4",
+      "name": "Siemens SIMATIC TP 177B 4\"",
       "soc_id": "s3c2410",
-      "operating_system_ids": [
-        "windows_ce_5"
-      ],
       "device_features": [
         {
           "feature_id": "touch",
@@ -1300,14 +1116,10 @@
       "rom_placing_mode": "flat_container"
     },
     {
-      "id": "smartbook_g138",
-      "name": "SmartBook G138",
-      "short_name": "SmartBook G138",
-      "supported": true,
+      "id": "pangolin",
+      "name": "Pangolin",
       "soc_id": "sa1110",
-      "operating_system_ids": [
-        "windows_ce_net"
-      ],
+      "device_year": 2003,
       "device_features": [
         {
           "feature_id": "touch",
@@ -1351,14 +1163,10 @@
       "rom_placing_mode": "flat_container"
     },
     {
-      "id": "ford_sync_2",
-      "name": "Ford SYNC 2",
-      "short_name": "Ford SYNC 2",
-      "supported": true,
+      "id": "ford_sync_gen2",
+      "name": "Ford SYNC Gen 2",
       "soc_id": "imx51",
-      "operating_system_ids": [
-        "windows_ce_6"
-      ],
+      "device_year": 2010,
       "device_features": [
         {
           "feature_id": "touch",
@@ -1386,14 +1194,10 @@
       "rom_placing_mode": "imx51_nand"
     },
     {
-      "id": "symbol_mk500",
-      "name": "Symbol MK500",
-      "short_name": "MK500",
-      "supported": true,
+      "id": "symbol_hamptons",
+      "name": "Symbol Hamptons",
       "soc_id": "pxa270",
-      "operating_system_ids": [
-        "windows_ce_5"
-      ],
+      "device_year": 2009,
       "device_features": [
         {
           "feature_id": "touch",
@@ -1425,14 +1229,10 @@
       "rom_placing_mode": "flat_container"
     },
     {
-      "id": "nokia_lumia_800",
-      "name": "Nokia Lumia 800",
-      "short_name": "Lumia 800",
-      "supported": false,
+      "id": "nokia_sea_ray",
+      "name": "Nokia Sea Ray",
       "soc_id": "msm8255",
-      "operating_system_ids": [
-        "wp7"
-      ],
+      "device_year": 2011,
       "device_features": [],
       "notes": [],
       "lcd_panel_size": {
@@ -1441,6 +1241,705 @@
       },
       "ga_color_depth": 24,
       "rom_placing_mode": "flat_container"
+    }
+  ],
+  "boards": [
+    {
+      "id": "devemu",
+      "name": "Device Emulator (QVGA)",
+      "short_name": "Device Emulator",
+      "board_family_id": "samsung_smdk2410",
+      "support_level": "bootable_full"
+    },
+    {
+      "id": "devemu_vga",
+      "name": "Device Emulator (VGA)",
+      "short_name": "Device Emulator",
+      "board_family_id": "samsung_smdk2410",
+      "support_level": "bootable_full",
+      "internal__spec_divergences": "480x640 panel",
+      "lcd_panel_size": {
+        "width": 480,
+        "height": 640
+      }
+    },
+    {
+      "id": "devemu_wqvga",
+      "name": "Device Emulator (WQVGA)",
+      "short_name": "Device Emulator",
+      "board_family_id": "samsung_smdk2410",
+      "support_level": "bootable_full",
+      "internal__spec_divergences": "240x400 panel",
+      "lcd_panel_size": {
+        "width": 240,
+        "height": 400
+      }
+    },
+    {
+      "id": "devemu_wvga",
+      "name": "Device Emulator (WVGA)",
+      "short_name": "Device Emulator",
+      "board_family_id": "samsung_smdk2410",
+      "support_level": "bootable_full",
+      "internal__spec_divergences": "480x800 panel",
+      "lcd_panel_size": {
+        "width": 480,
+        "height": 800
+      }
+    },
+    {
+      "id": "samsung_smdk2410",
+      "name": "Samsung SMDK2410",
+      "short_name": "SMDK2410",
+      "board_family_id": "samsung_smdk2410",
+      "support_level": "unknown_partial",
+      "internal__spec_divergences": "physical board, no Device Emulator virtual devices"
+    },
+    {
+      "id": "falcon_4220",
+      "name": "PSC/Datalogic Falcon 4220",
+      "short_name": "Falcon 4220",
+      "board_family_id": "askey_pc3xx",
+      "support_level": "bootable_full"
+    },
+    {
+      "id": "ipaq_h36xx",
+      "name": "iPAQ H36xx",
+      "short_name": "iPAQ H36xx",
+      "board_family_id": "compaq_ipaq_h3000",
+      "support_level": "bootable_full"
+    },
+    {
+      "id": "ipaq_h31xx",
+      "name": "iPAQ H31xx",
+      "short_name": "iPAQ H31xx",
+      "board_family_id": "compaq_ipaq_h3000",
+      "support_level": "bootable_full",
+      "internal__spec_divergences": "16 MB RAM, 15-level grayscale STN panel",
+      "device_year": 2001
+    },
+    {
+      "id": "ipaq_h3660_h3670",
+      "name": "iPAQ H3660/H3670",
+      "short_name": "iPAQ H3660/H3670",
+      "board_family_id": "compaq_ipaq_h3000",
+      "support_level": "bootable_full",
+      "internal__spec_divergences": "64 MB RAM",
+      "device_year": 2001
+    },
+    {
+      "id": "ipaq_h37xx",
+      "name": "iPAQ H37xx",
+      "short_name": "iPAQ H37xx",
+      "board_family_id": "compaq_ipaq_h3000",
+      "support_level": "unknown_partial",
+      "internal__spec_divergences": "64 MB RAM, 32 MB flash",
+      "device_year": 2001
+    },
+    {
+      "id": "jornada_820",
+      "name": "HP Jornada 820",
+      "short_name": "Jornada 820",
+      "board_family_id": "hp_jornada_820",
+      "support_level": "bootable_full"
+    },
+    {
+      "id": "jornada_820e",
+      "name": "HP Jornada 820e",
+      "short_name": "Jornada 820e",
+      "board_family_id": "hp_jornada_820",
+      "support_level": "unknown_partial",
+      "internal__spec_divergences": "no modem connector"
+    },
+    {
+      "id": "jornada_720",
+      "name": "HP Jornada 720",
+      "short_name": "Jornada 720",
+      "board_family_id": "hp_jornada_700",
+      "support_level": "bootable_full"
+    },
+    {
+      "id": "jornada_710",
+      "name": "HP Jornada 710",
+      "short_name": "Jornada 710",
+      "board_family_id": "hp_jornada_700",
+      "support_level": "unknown_partial",
+      "internal__spec_divergences": "no modem",
+      "device_year": 2001
+    },
+    {
+      "id": "jornada_728",
+      "name": "HP Jornada 728",
+      "short_name": "Jornada 728",
+      "board_family_id": "hp_jornada_700",
+      "support_level": "unknown_partial",
+      "internal__spec_divergences": "64 MB RAM",
+      "device_year": 2002
+    },
+    {
+      "id": "odo",
+      "name": "Microsoft Hardware Reference Platform",
+      "short_name": "Reference Platform",
+      "board_family_id": "odo",
+      "support_level": "bootable_full"
+    },
+    {
+      "id": "omap_3530_evm",
+      "name": "TI OMAP35x EVM (Gen1 main board)",
+      "short_name": "OMAP35x EVM",
+      "board_family_id": "ti_omap35x_evm",
+      "support_level": "bootable_full"
+    },
+    {
+      "id": "omap_3530_evm_gen2",
+      "name": "TI OMAP35x EVM (Gen2 main board)",
+      "short_name": "OMAP35x EVM",
+      "board_family_id": "ti_omap35x_evm",
+      "support_level": "bootable_partial",
+      "internal__spec_divergences": "LAN9220 Ethernet"
+    },
+    {
+      "id": "omap_3530_evm_onenand",
+      "name": "TI OMAP35x EVM (OneNAND module)",
+      "short_name": "OMAP35x EVM",
+      "board_family_id": "ti_omap35x_evm",
+      "support_level": "no_support",
+      "internal__spec_divergences": "128 MB RAM, 128 MB OneNAND"
+    },
+    {
+      "id": "zune_30",
+      "name": "Microsoft Zune 30",
+      "short_name": "Zune 30",
+      "board_family_id": "toshiba_gigabeat_s",
+      "support_level": "bootable_full"
+    },
+    {
+      "id": "toshiba_gigabeat_s30",
+      "name": "Toshiba Gigabeat S30",
+      "short_name": "Gigabeat S30",
+      "board_family_id": "toshiba_gigabeat_s",
+      "support_level": "no_support",
+      "internal__spec_divergences": "2.4\" panel, matrix keypad, no WiFi, Si4700 FM tuner"
+    },
+    {
+      "id": "toshiba_gigabeat_s60v",
+      "name": "Toshiba Gigabeat S60V",
+      "short_name": "Gigabeat S60V",
+      "board_family_id": "toshiba_gigabeat_s",
+      "support_level": "no_support",
+      "internal__spec_divergences": "2.4\" panel, matrix keypad, no WiFi, Si4700 FM tuner, 60 GB HDD"
+    },
+    {
+      "id": "toshiba_gigabeat_v30t",
+      "name": "Toshiba Gigabeat V30T",
+      "short_name": "Gigabeat V30T",
+      "board_family_id": "toshiba_gigabeat_s",
+      "support_level": "no_support",
+      "internal__spec_divergences": "3.5\" 320x240 panel, 1seg TV tuner"
+    },
+    {
+      "id": "simpad_sl4",
+      "name": "Siemens SIMpad SL4",
+      "short_name": "SIMpad SL4",
+      "board_family_id": "siemens_simpad",
+      "support_level": "bootable_full"
+    },
+    {
+      "id": "simpad_slc",
+      "name": "Siemens SIMpad SLC",
+      "short_name": "SIMpad SLC",
+      "board_family_id": "siemens_simpad",
+      "support_level": "unknown_partial",
+      "internal__spec_divergences": "MD34 DECT module"
+    },
+    {
+      "id": "simpad_cl4",
+      "name": "Siemens SIMpad CL4",
+      "short_name": "SIMpad CL4",
+      "board_family_id": "siemens_simpad",
+      "support_level": "unknown_partial",
+      "internal__spec_divergences": "32 MB RAM, 16 MB flash, MD34 DECT module, no PC Card slot, no microphone",
+      "device_features": [
+        {
+          "feature_id": "pcmcia",
+          "supported": false
+        }
+      ]
+    },
+    {
+      "id": "t_sinus_pad",
+      "name": "T-Sinus Pad",
+      "short_name": "T-Sinus Pad",
+      "board_family_id": "siemens_simpad",
+      "support_level": "unknown_partial",
+      "internal__spec_divergences": "32 MB RAM, 16 MB flash, MD34 DECT module"
+    },
+    {
+      "id": "swisscom_wp50",
+      "name": "Swisscom WP50",
+      "short_name": "WP50",
+      "board_family_id": "siemens_simpad",
+      "support_level": "unknown_partial",
+      "internal__spec_divergences": "32 MB RAM, 16 MB flash, MD34 DECT module, no PC Card slot",
+      "device_features": [
+        {
+          "feature_id": "pcmcia",
+          "supported": false
+        }
+      ]
+    },
+    {
+      "id": "nec_mobilepro_900",
+      "name": "NEC MobilePro 900(c)",
+      "short_name": "MobilePro 900(c)",
+      "board_family_id": "nec_mobilepro_900_series",
+      "support_level": "bootable_full"
+    },
+    {
+      "id": "nec_mobilepro_700",
+      "name": "NEC MobilePro 700",
+      "short_name": "MobilePro 700",
+      "board_family_id": "nec_mobilepro_700",
+      "support_level": "bootable_full"
+    },
+    {
+      "id": "nec_mobilepro_790",
+      "name": "NEC MobilePro 790",
+      "short_name": "MobilePro 790",
+      "board_family_id": "nec_cronos3e",
+      "support_level": "no_support"
+    },
+    {
+      "id": "nec_mobilegear2_r550",
+      "name": "NEC MobileGear II MC/R550",
+      "short_name": "MobileGear II R550",
+      "board_family_id": "nec_cronos3e",
+      "support_level": "no_support",
+      "internal__spec_divergences": "Japanese keyboard, phone interface (PDC, cdmaOne, PHS), earphone-mic jack",
+      "device_year": 2000
+    },
+    {
+      "id": "nec_mobilegear2_r450",
+      "name": "NEC MobileGear II MC/R450",
+      "short_name": "MobileGear II R450",
+      "board_family_id": "nec_cronos3e",
+      "support_level": "no_support",
+      "internal__spec_divergences": "Japanese keyboard, phone interface (PDC, cdmaOne, PHS), earphone-mic jack",
+      "device_year": 2000
+    },
+    {
+      "id": "nec_mobilepro_780",
+      "name": "NEC MobilePro 780",
+      "short_name": "MobilePro 780",
+      "board_family_id": "nec_cronos3e",
+      "support_level": "no_support",
+      "internal__spec_divergences": "no flash",
+      "device_year": 2000
+    },
+    {
+      "id": "nec_mobilegear2_r530",
+      "name": "NEC MobileGear II MC/R530",
+      "short_name": "MobileGear II R530",
+      "board_family_id": "nec_cronos3e",
+      "support_level": "no_support",
+      "internal__spec_divergences": "no flash, Japanese keyboard",
+      "device_year": 1999
+    },
+    {
+      "id": "nec_mobilegear2_r430",
+      "name": "NEC MobileGear II MC/R430",
+      "short_name": "MobileGear II R430",
+      "board_family_id": "nec_cronos3e",
+      "support_level": "no_support",
+      "internal__spec_divergences": "no flash, Japanese keyboard, no modem, no VGA out, no scroll dial",
+      "device_year": 1999
+    },
+    {
+      "id": "casio_cassiopeia_e55",
+      "name": "Casio Cassiopeia E-55",
+      "short_name": "E-55",
+      "board_family_id": "casio_tomcat",
+      "support_level": "bootable_full"
+    },
+    {
+      "id": "casio_cassiopeia_e10",
+      "name": "Casio Cassiopeia E-10",
+      "short_name": "E-10",
+      "board_family_id": "casio_tomcat",
+      "support_level": "unknown_partial",
+      "internal__spec_divergences": "4 MB RAM, 8 MB ROM"
+    },
+    {
+      "id": "casio_cassiopeia_e11",
+      "name": "Casio Cassiopeia E-11",
+      "short_name": "E-11",
+      "board_family_id": "casio_tomcat",
+      "support_level": "unknown_partial",
+      "internal__spec_divergences": "8 MB RAM, 8 MB ROM"
+    },
+    {
+      "id": "casio_cassiopeia_e65",
+      "name": "Casio Cassiopeia E-65",
+      "short_name": "E-65",
+      "board_family_id": "casio_tomcat",
+      "support_level": "unknown_partial",
+      "internal__spec_divergences": "identical hardware",
+      "device_year": 1999
+    },
+    {
+      "id": "casio_cassiopeia_e15",
+      "name": "Casio Cassiopeia E-15",
+      "short_name": "E-15",
+      "board_family_id": "casio_tomcat",
+      "support_level": "unknown_partial",
+      "internal__spec_divergences": "16 MB ROM",
+      "device_year": 1999
+    },
+    {
+      "id": "casio_cassiopeia_for_docomo",
+      "name": "Casio CASSIOPEIA for DoCoMo",
+      "short_name": "CASSIOPEIA for DoCoMo",
+      "board_family_id": "casio_tomcat",
+      "support_level": "unknown_partial",
+      "internal__spec_divergences": "8 MB RAM"
+    },
+    {
+      "id": "casio_cassiopeia_em500",
+      "name": "Casio Cassiopeia EM-500",
+      "short_name": "EM-500",
+      "board_family_id": "casio_jx670",
+      "support_level": "bootable_full"
+    },
+    {
+      "id": "casio_cassiopeia_e700",
+      "name": "Casio Cassiopeia E-700",
+      "short_name": "E-700",
+      "board_family_id": "casio_jx670",
+      "support_level": "bootable_full",
+      "internal__spec_divergences": "32 MB RAM, 32 MB ROM"
+    },
+    {
+      "id": "casio_cassiopeia_em505",
+      "name": "Casio Cassiopeia EM-505",
+      "short_name": "EM-505",
+      "board_family_id": "casio_jx670",
+      "support_level": "unknown_partial",
+      "internal__spec_divergences": "32 MB RAM"
+    },
+    {
+      "id": "casio_cassiopeia_e707",
+      "name": "Casio Cassiopeia E-707",
+      "short_name": "E-707",
+      "board_family_id": "casio_jx670",
+      "support_level": "unknown_partial",
+      "internal__spec_divergences": "CF slot, DoPa module"
+    },
+    {
+      "id": "casio_cassiopeia_e800",
+      "name": "Casio Cassiopeia E-800",
+      "short_name": "E-800",
+      "board_family_id": "casio_jx670",
+      "support_level": "unknown_partial",
+      "internal__spec_divergences": "CF slot instead of SD"
+    },
+    {
+      "id": "casio_gfort",
+      "name": "Casio GFORT",
+      "short_name": "GFORT",
+      "board_family_id": "casio_jx670",
+      "support_level": "unknown_partial",
+      "internal__spec_divergences": "CF slot instead of SD, Li-polymer battery"
+    },
+    {
+      "id": "casio_toricomail",
+      "name": "Casio Toricomail",
+      "short_name": "Toricomail",
+      "board_family_id": "casio_pocketpostpet",
+      "support_level": "bootable_full"
+    },
+    {
+      "id": "casio_message_cam",
+      "name": "Casio Message-Cam",
+      "short_name": "Message-Cam",
+      "board_family_id": "casio_pocketpostpet",
+      "support_level": "bootable_full",
+      "internal__spec_divergences": "GSM phone interface",
+      "device_year": 2001
+    },
+    {
+      "id": "casio_pocketpostpet",
+      "name": "Casio PocketPostPet",
+      "short_name": "PocketPostPet",
+      "board_family_id": "casio_pocketpostpet",
+      "support_level": "bootable_full",
+      "internal__spec_divergences": "no camera, keyboard, IrDA, 4096-colour panel, PDC phone interface"
+    },
+    {
+      "id": "nec_rockhopper",
+      "name": "NEC Rockhopper SG2_VR5500",
+      "short_name": "Rockhopper",
+      "board_family_id": "nec_sg2_vr5500",
+      "support_level": "bootable_full"
+    },
+    {
+      "id": "nec_rockhopper_i",
+      "name": "NEC Rockhopper I",
+      "short_name": "Rockhopper I",
+      "board_family_id": "nec_sg2_vr5500",
+      "support_level": "no_support",
+      "internal__spec_divergences": "no ALi M1535 south bridge, EPLD on LCS2, second flash on LCS1"
+    },
+    {
+      "id": "philips_nino_300",
+      "name": "Philips Nino 300",
+      "short_name": "Nino 300",
+      "board_family_id": "philips_nino",
+      "support_level": "bootable_full"
+    },
+    {
+      "id": "philips_nino_312",
+      "name": "Philips Nino 312",
+      "short_name": "Nino 312",
+      "board_family_id": "philips_nino",
+      "support_level": "unknown_partial",
+      "internal__spec_divergences": "8 MB RAM"
+    },
+    {
+      "id": "philips_nino_200",
+      "name": "Philips Nino 200",
+      "short_name": "Nino 200",
+      "board_family_id": "philips_nino",
+      "support_level": "unknown_partial",
+      "internal__spec_divergences": "8 MB RAM",
+      "device_year": 1999
+    },
+    {
+      "id": "philips_nino_500",
+      "name": "Philips Nino 500",
+      "short_name": "Nino 500",
+      "board_family_id": "philips_nino",
+      "support_level": "no_support",
+      "internal__spec_divergences": "16 MB RAM, 16 MB ROM, 256-colour DSTN panel",
+      "device_year": 1999
+    },
+    {
+      "id": "philips_velo_1",
+      "name": "Philips Velo 1",
+      "short_name": "Velo 1",
+      "board_family_id": "philips_velo_1",
+      "support_level": "bootable_full"
+    },
+    {
+      "id": "philips_velo_1_dram_1mb",
+      "name": "Philips Velo 1 (1 MB DRAM Miniature Card)",
+      "short_name": "Velo 1",
+      "board_family_id": "philips_velo_1",
+      "support_level": "bootable_full",
+      "internal__spec_divergences": "1 MB DRAM Miniature Card in slot 1"
+    },
+    {
+      "id": "philips_velo_1_dram_2mb",
+      "name": "Philips Velo 1 (2 MB DRAM Miniature Card)",
+      "short_name": "Velo 1",
+      "board_family_id": "philips_velo_1",
+      "support_level": "bootable_full",
+      "internal__spec_divergences": "2 MB DRAM Miniature Card in slot 1"
+    },
+    {
+      "id": "philips_velo_1_dram_4mb",
+      "name": "Philips Velo 1 (4 MB DRAM Miniature Card)",
+      "short_name": "Velo 1",
+      "board_family_id": "philips_velo_1",
+      "support_level": "bootable_full",
+      "internal__spec_divergences": "4 MB DRAM Miniature Card in slot 1"
+    },
+    {
+      "id": "philips_velo_1_dram_8mb",
+      "name": "Philips Velo 1 (8 MB DRAM Miniature Card)",
+      "short_name": "Velo 1",
+      "board_family_id": "philips_velo_1",
+      "support_level": "bootable_full",
+      "internal__spec_divergences": "8 MB DRAM Miniature Card in slot 1"
+    },
+    {
+      "id": "philips_velo_1_dram_16mb",
+      "name": "Philips Velo 1 (16 MB DRAM Miniature Card)",
+      "short_name": "Velo 1",
+      "board_family_id": "philips_velo_1",
+      "support_level": "bootable_full",
+      "internal__spec_divergences": "16 MB DRAM Miniature Card in slot 1"
+    },
+    {
+      "id": "sharp_mobilon_hc4100",
+      "name": "Sharp Mobilon HC-4100",
+      "short_name": "Mobilon HC-4100",
+      "board_family_id": "sharp_mobilon_hc",
+      "support_level": "bootable_full"
+    },
+    {
+      "id": "sharp_mobilon_hc4000",
+      "name": "Sharp Mobilon HC-4000",
+      "short_name": "Mobilon HC-4000",
+      "board_family_id": "sharp_mobilon_hc",
+      "support_level": "unknown_partial",
+      "internal__spec_divergences": "4 MB RAM"
+    },
+    {
+      "id": "sharp_mobilon_hc4500",
+      "name": "Sharp Mobilon HC-4500",
+      "short_name": "Mobilon HC-4500",
+      "board_family_id": "sharp_mobilon_hc",
+      "support_level": "no_support",
+      "internal__spec_divergences": "256-colour STN panel, NiMH battery"
+    },
+    {
+      "id": "sharp_mobilon_hc4600",
+      "name": "Sharp Mobilon HC-4600",
+      "short_name": "Mobilon HC-4600",
+      "board_family_id": "sharp_mobilon_hc",
+      "support_level": "no_support",
+      "internal__spec_divergences": "256-colour panel, 16 MB RAM",
+      "device_year": 1998
+    },
+    {
+      "id": "siemens_mp377",
+      "name": "Siemens SIMATIC MP 377 12\" Touch",
+      "short_name": "SIMATIC MP 377",
+      "board_family_id": "siemens_simatic_mp377",
+      "support_level": "bootable_full"
+    },
+    {
+      "id": "siemens_mp377_12_key",
+      "name": "Siemens SIMATIC MP 377 12\" Key",
+      "short_name": "SIMATIC MP 377",
+      "board_family_id": "siemens_simatic_mp377",
+      "support_level": "bootable_partial",
+      "internal__spec_divergences": "membrane keypad"
+    },
+    {
+      "id": "siemens_mp377_15_touch",
+      "name": "Siemens SIMATIC MP 377 15\" Touch",
+      "short_name": "SIMATIC MP 377",
+      "board_family_id": "siemens_simatic_mp377",
+      "support_level": "bootable_full",
+      "internal__spec_divergences": "15\" 1024x768 panel"
+    },
+    {
+      "id": "siemens_mp377_19_touch",
+      "name": "Siemens SIMATIC MP 377 19\" Touch",
+      "short_name": "SIMATIC MP 377",
+      "board_family_id": "siemens_simatic_mp377",
+      "support_level": "bootable_full",
+      "internal__spec_divergences": "19\" 1280x1024 panel"
+    },
+    {
+      "id": "siemens_mp377_15_daylight",
+      "name": "Siemens SIMATIC MP 377 15\" Touch daylight readable",
+      "short_name": "SIMATIC MP 377",
+      "board_family_id": "siemens_simatic_mp377",
+      "support_level": "no_support",
+      "internal__spec_divergences": "15\" 1024x768 panel, projected-capacitive touch, LED backlight",
+      "device_year": 2009
+    },
+    {
+      "id": "siemens_mp377_15_inox",
+      "name": "Siemens SIMATIC MP 377 15\" INOX",
+      "short_name": "SIMATIC MP 377",
+      "board_family_id": "siemens_simatic_mp377",
+      "support_level": "unknown_partial",
+      "internal__spec_divergences": "15\" 1024x768 panel, LED backlight",
+      "device_year": 2009
+    },
+    {
+      "id": "siemens_p177",
+      "name": "Siemens SIMATIC TP 177B 4\" color PN/DP",
+      "short_name": "SIMATIC TP 177B",
+      "board_family_id": "siemens_simatic_tp177b_4",
+      "support_level": "bootable_full"
+    },
+    {
+      "id": "siemens_siplus_tp177b_4",
+      "name": "Siemens SIPLUS HMI TP 177B 4\"",
+      "short_name": "SIPLUS TP 177B",
+      "board_family_id": "siemens_simatic_tp177b_4",
+      "support_level": "unknown_partial",
+      "internal__spec_divergences": "conformal coating"
+    },
+    {
+      "id": "smartbook_g138",
+      "name": "SmartBook G138",
+      "short_name": "SmartBook G138",
+      "board_family_id": "pangolin",
+      "support_level": "bootable_full"
+    },
+    {
+      "id": "coxion_webbook",
+      "name": "Coxion WebBook",
+      "short_name": "WebBook",
+      "board_family_id": "pangolin",
+      "support_level": "unknown_partial",
+      "internal__spec_divergences": "identical hardware"
+    },
+    {
+      "id": "ford_sync_2",
+      "name": "Ford MyFord Touch",
+      "short_name": "MyFord Touch",
+      "board_family_id": "ford_sync_gen2",
+      "support_level": "bootable_full"
+    },
+    {
+      "id": "lincoln_mylincoln_touch",
+      "name": "Lincoln MyLincoln Touch",
+      "short_name": "MyLincoln Touch",
+      "board_family_id": "ford_sync_gen2",
+      "support_level": "unknown_partial",
+      "internal__spec_divergences": "identical hardware"
+    },
+    {
+      "id": "ford_sync_2_intl",
+      "name": "Ford SYNC 2 (Europe, Asia-Pacific)",
+      "short_name": "SYNC 2",
+      "board_family_id": "ford_sync_gen2",
+      "support_level": "unknown_partial",
+      "internal__spec_divergences": "unknown"
+    },
+    {
+      "id": "symbol_mk500",
+      "name": "Symbol MK500 (T35QM7117 panel)",
+      "short_name": "MK500",
+      "board_family_id": "symbol_hamptons",
+      "support_level": "bootable_full"
+    },
+    {
+      "id": "symbol_mk500_a035qn02",
+      "name": "Symbol MK500 (A035QN02 panel)",
+      "short_name": "MK500",
+      "board_family_id": "symbol_hamptons",
+      "support_level": "bootable_full",
+      "internal__spec_divergences": "A035QN02 panel"
+    },
+    {
+      "id": "symbol_mk590",
+      "name": "Symbol MK590",
+      "short_name": "MK590",
+      "board_family_id": "symbol_hamptons",
+      "support_level": "bootable_partial",
+      "internal__spec_divergences": "802.11a/b/g radio"
+    },
+    {
+      "id": "nokia_lumia_800",
+      "name": "Nokia Lumia 800 (RM-801)",
+      "short_name": "Lumia 800",
+      "board_family_id": "nokia_sea_ray",
+      "support_level": "no_support"
+    },
+    {
+      "id": "nokia_lumia_800_rm819",
+      "name": "Nokia Lumia 800 (RM-819)",
+      "short_name": "Lumia 800",
+      "board_family_id": "nokia_sea_ray",
+      "support_level": "no_support",
+      "internal__spec_divergences": "HSDPA 850/900/1900/2100"
     }
   ],
   "rom_types": [
@@ -1455,8 +1954,8 @@
     {
       "id": "primary",
       "name": "SmartBook Upgrade Package",
-      "board_ids": [
-        "smartbook_g138"
+      "board_family_ids": [
+        "pangolin"
       ],
       "formats": [
         "fim"
@@ -1465,8 +1964,8 @@
     {
       "id": "primary",
       "name": "SYNC 2 Upgrade Package",
-      "board_ids": [
-        "ford_sync_2"
+      "board_family_ids": [
+        "ford_sync_gen2"
       ],
       "formats": [
         "sec"
@@ -1479,8 +1978,8 @@
     {
       "id": "primary",
       "name": "Mk500 Flash Dump",
-      "board_ids": [
-        "symbol_mk500"
+      "board_family_ids": [
+        "symbol_hamptons"
       ],
       "formats": [
         "bin"
@@ -1489,15 +1988,15 @@
     {
       "id": "primary",
       "name": "Simpad Upgrade Package",
-      "board_ids": [
-        "simpad_sl4"
+      "board_family_ids": [
+        "siemens_simpad"
       ]
     },
     {
       "id": "primary",
       "name": "Lumia 800 Upgrade ROM",
-      "board_ids": [
-        "nokia_lumia_800"
+      "board_family_ids": [
+        "nokia_sea_ray"
       ],
       "formats": [
         "esco"
@@ -1506,8 +2005,8 @@
     {
       "id": "lumia800_user_area_erase",
       "name": "User Area Erase Image",
-      "board_ids": [
-        "nokia_lumia_800"
+      "board_family_ids": [
+        "nokia_sea_ray"
       ],
       "formats": [
         "esco"
@@ -1517,8 +2016,8 @@
       "id": "eeprom",
       "name": "EEPROM",
       "optional": true,
-      "board_ids": [
-        "jornada_720"
+      "board_family_ids": [
+        "hp_jornada_700"
       ],
       "formats": [
         "bin",
@@ -1528,8 +2027,8 @@
     {
       "id": "primary",
       "name": "iPAQ Upgrade Package",
-      "board_ids": [
-        "ipaq_gen1"
+      "board_family_ids": [
+        "compaq_ipaq_h3000"
       ],
       "formats": [
         "nbf"
@@ -1539,9 +2038,9 @@
       "id": "ce_dictionary",
       "name": "Dictionary Dump",
       "optional": true,
-      "board_ids": [
-        "casio_cassiopeia_e55",
-        "casio_cassiopeia_em500"
+      "board_family_ids": [
+        "casio_tomcat",
+        "casio_jx670"
       ],
       "formats": [
         "bin"
@@ -1553,8 +2052,8 @@
       "id": "nand",
       "name": "NAND",
       "picker_type": "existing_or_point",
-      "board_ids": [
-        "ford_sync_2"
+      "board_family_ids": [
+        "ford_sync_gen2"
       ],
       "formats": [
         "img"
@@ -1564,8 +2063,8 @@
       "id": "hdd",
       "name": "HDD",
       "picker_type": "existing_or_point",
-      "board_ids": [
-        "zune_30"
+      "board_family_ids": [
+        "toshiba_gigabeat_s"
       ],
       "formats": [
         "img"
@@ -1576,8 +2075,8 @@
       "id": "emmc",
       "name": "eMMC",
       "picker_type": "existing_or_point",
-      "board_ids": [
-        "nokia_lumia_800"
+      "board_family_ids": [
+        "nokia_sea_ray"
       ],
       "formats": [
         "img"

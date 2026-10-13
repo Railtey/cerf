@@ -3,8 +3,8 @@
 #include "s3c2410_lcd.h"
 
 #include "../../boards/board_context.h"
-#include "../../boards/smdk2410_devemu/devemu_id.h"
-#include "../../boards/siemens_p177/siemens_p177_id.h"
+#include "../../boards/samsung_smdk2410/samsung_smdk2410_family_id.h"
+#include "../../boards/siemens_simatic_tp177b_4/siemens_simatic_tp177b_4_family_id.h"
 #include "../../core/byte_order.h"
 #include "../../core/cerf_emulator.h"
 #include "../../cpu/emulated_memory.h"
@@ -26,8 +26,8 @@ public:
            bootloader presets it pre-kernel. */
         auto* bd = emu_.TryGet<BoardContext>();
         if (!bd) return false;
-        const std::string_view b = bd->GetBoardId();
-        return b == BoardId::Devemu || b == BoardId::SiemensP177;
+        const std::string_view b = bd->GetBoardFamilyId();
+        return b == BoardFamilyId::SamsungSmdk2410 || b == BoardFamilyId::SiemensSimaticTp177b4;
     }
 
     void PresentedSize(uint32_t& w, uint32_t& h) override {

@@ -2,7 +2,7 @@
 #include "../../trace_manager.h"
 #include "../../../core/cerf_emulator.h"
 #include "../../../boards/board_context.h"
-#include "../../../boards/ford_sync2/ford_sync_2_id.h"
+#include "../../../boards/ford_sync_gen2/ford_sync_gen2_family_id.h"
 
 #include <string>
 
@@ -12,13 +12,13 @@ namespace {
    Board-gated, NOT CRC-gated like the other nkdbg files: the Ford SYNC2 `.sec`
    loads no RomParser partitions, so the bundle CRC32 is 0 and a RegisterForBundle
    hook would silently never fire. */
-class FordSync2OemDebugOutput : public Service {
+class FordSyncGen2OemDebugOutput : public Service {
 public:
     using Service::Service;
 
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
-        return bd && bd->GetBoardId() == BoardId::FordSync2;
+        return bd && bd->GetBoardFamilyId() == BoardFamilyId::FordSyncGen2;
     }
 
     void OnReady() override {
@@ -32,4 +32,4 @@ public:
 
 }  // namespace
 
-REGISTER_SERVICE(FordSync2OemDebugOutput);
+REGISTER_SERVICE(FordSyncGen2OemDebugOutput);

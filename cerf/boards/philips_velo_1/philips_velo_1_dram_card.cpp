@@ -5,7 +5,8 @@
 #include "../../socs/pr31x00/pr31x00_io.h"
 #include "../../state/state_stream.h"
 #include "../board_context.h"
-#include "philips_velo_1_id.h"
+#include "philips_velo_1_dram_card_profile.h"
+#include "philips_velo_1_family_id.h"
 
 #include <array>
 #include <cstdint>
@@ -31,24 +32,12 @@ constexpr uint8_t kSignature     = 0x99u;
 constexpr uint8_t kTupleCount    = 1u;
 constexpr uint8_t kTupleType     = 2u;
 
-/* [67] size, unit <7:6>=00 -> ((n & 0x3F) + 1) Mbyte, published to MEMORY[0x80009F88]
-   and returned as the DRAM BANK1 extent (philips_velo_1_ce1 nk.exe sub_9F42453C). */
-constexpr uint8_t kSizeByte      = 0x0Fu;
-
-/* [96] row and [97] column address bits, matched as a pair against asc_9F40A904
-   @0x9F40A904 by philips_velo_1_ce1 nk.exe sub_9F42448C @0x9F42448C for the MEMCONFIG0
-   ROWSEL1 value; (12, 11) is the largest of its 9 entries. A pair absent from that
-   table makes sub_9F42453C return 0 and the bank is never mapped. */
-constexpr uint8_t kRowBits       = 12u;
-constexpr uint8_t kColumnBits    = 11u;
-
 /* [98] <0> device present; <1> would select ENBANK1HDRAM, MEM_CONFIG4<31> (TMPR3911
    §4.7.5), which this DRAM part is not. */
 constexpr uint8_t kDevicePresent = 0x01u;
 
 /* [101] refresh: philips_velo_1_ce1 nk.exe sub_9F42436C @0x9F42436C programs RFSHVAL1,
-   MEM_CONFIG4<13:8>, with (1000*[101] + 1000) / (1 << [96]) / 31 - 1; 127 yields 0,
-   which TMPR3911 §4.7.5 defines as 15.26 us - 4096 rows in 62.5 ms. */
+   MEM_CONFIG4<13:8>, with (1000*[101] + 1000) / (1 << [96]) / 31 - 1. */
 constexpr uint8_t kRefreshByte   = 127u;
 
 enum class Phase : uint8_t { Idle, Control, WordAddr, WriteData, Transmit };
@@ -59,17 +48,22 @@ public:
 
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
-        return bd && bd->GetBoardId() == BoardId::PhilipsVelo1;
+        return bd && bd->GetBoardFamilyId() == BoardFamilyId::PhilipsVelo1 &&
+               FindPhilipsVelo1DramCard(bd->GetBoardId()) != nullptr;
     }
 
     void OnReady() override {
+        const PhilipsVelo1DramCardProfile& card =
+            *FindPhilipsVelo1DramCard(emu_.Get<BoardContext>().GetBoardId());
         id_rom_.fill(0);
         id_rom_[16]  = kSignature;
         id_rom_[59]  = kTupleCount;
         id_rom_[64]  = kTupleType;
-        id_rom_[67]  = kSizeByte;
-        id_rom_[96]  = kRowBits;
-        id_rom_[97]  = kColumnBits;
+        /* [67] size, unit <7:6>=00 -> ((n & 0x3F) + 1) Mbyte, the DRAM BANK1 extent
+           (philips_velo_1_ce1 nk.exe sub_9F42453C @0x9F42453C). */
+        id_rom_[67]  = static_cast<uint8_t>(card.megabytes - 1u);
+        id_rom_[96]  = card.row_bits;
+        id_rom_[97]  = card.column_bits;
         id_rom_[98]  = kDevicePresent;
         id_rom_[101] = kRefreshByte;
         DriveSda(true);

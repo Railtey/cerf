@@ -1,7 +1,7 @@
 #include "mc13783_adc.h"
 
 #include "../../boards/board_context.h"
-#include "../../boards/zune_keel/zune_30_id.h"
+#include "../../boards/toshiba_gigabeat_s/toshiba_gigabeat_s_family_id.h"
 #include "../../core/cerf_emulator.h"
 #include "../../state/state_stream.h"
 
@@ -34,7 +34,7 @@ constexpr uint32_t kAdcselTwoRequests = 1u, kAdcselNoAccess = 2u;
 
 bool Mc13783Adc::ShouldRegister() {
     auto* bd = emu_.TryGet<BoardContext>();
-    return bd && bd->GetBoardId() == BoardId::Zune30;
+    return bd && bd->GetBoardFamilyId() == BoardFamilyId::ToshibaGigabeatS;
 }
 
 void Mc13783Adc::OnReady() { Reset(); }

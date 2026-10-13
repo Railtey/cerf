@@ -4,7 +4,7 @@
 #include "../../host/host_widget_registry.h"
 #include "../../peripherals/nec_vrc4172/vrc4172_gpio.h"
 #include "../board_context.h"
-#include "nec_mobilepro_700_id.h"
+#include "nec_mobilepro_700_family_id.h"
 
 namespace {
 
@@ -16,7 +16,7 @@ constexpr int kOffAcPin = 5;
 
 bool NecMobilePro700Battery::ShouldRegister() {
     auto* bd = emu_.TryGet<BoardContext>();
-    return bd && bd->GetBoardId() == BoardId::NecMobilepro700;
+    return bd && bd->GetBoardFamilyId() == BoardFamilyId::NecMobilepro700;
 }
 
 void NecMobilePro700Battery::OnReady() {

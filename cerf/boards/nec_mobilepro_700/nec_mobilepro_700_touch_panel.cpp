@@ -4,7 +4,7 @@
 #include "../../core/log.h"
 #include "../board_context.h"
 #include "nec_mobilepro_700_battery.h"
-#include "nec_mobilepro_700_id.h"
+#include "nec_mobilepro_700_family_id.h"
 
 #include <cstdint>
 #include <iterator>
@@ -42,7 +42,7 @@ public:
 
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
-        return bd && bd->GetBoardId() == BoardId::NecMobilepro700;
+        return bd && bd->GetBoardFamilyId() == BoardFamilyId::NecMobilepro700;
     }
 
     std::optional<uint16_t> ConvertCommandPort(uint16_t adcmd, uint16_t, uint16_t) override {

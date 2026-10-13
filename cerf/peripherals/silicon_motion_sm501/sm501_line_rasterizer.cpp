@@ -1,10 +1,10 @@
 #include "sm501_line_rasterizer.h"
-#include "siemens_mp377_sm501_rop.h"
+#include "siemens_simatic_mp377_sm501_rop.h"
 
 #include <algorithm>
 #include <limits>
 
-namespace siemens_mp377 {
+namespace siemens_simatic_mp377 {
 
 Sm501LineDirtyRange RasterizeSm501Line(const Sm501LineState& state) {
     /* SM501 Databook v1.02 section 4; siemens_mp377_v1040

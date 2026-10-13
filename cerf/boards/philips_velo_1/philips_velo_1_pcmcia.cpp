@@ -4,7 +4,7 @@
 #include "../../peripherals/pcmcia/pcmcia_auto_insert.h"
 #include "../../socs/pr31x00/pr31x00_ir.h"
 #include "../board_context.h"
-#include "philips_velo_1_id.h"
+#include "philips_velo_1_family_id.h"
 
 namespace {
 
@@ -18,7 +18,7 @@ public:
 
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
-        return bd && bd->GetBoardId() == BoardId::PhilipsVelo1;
+        return bd && bd->GetBoardFamilyId() == BoardFamilyId::PhilipsVelo1;
     }
 
     void OnReady() override {

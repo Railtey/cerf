@@ -10,7 +10,7 @@ namespace {
 /* nk.exe sub_90205054 is the OEM debug char-sink (OEMWriteDebugString level),
    nulled by the NEC OAL (= nullsub_3), so all kernel/device.exe/gwes debug
    output is discarded. Hook it (R0 = char) and reassemble lines. */
-class NecMobilePro900KernelDbgOutput : public Service {
+class NecMobilepro900SeriesKernelDbgOutput : public Service {
 public:
     using Service::Service;
 
@@ -28,4 +28,4 @@ public:
 
 }  // namespace
 
-REGISTER_SERVICE(NecMobilePro900KernelDbgOutput);
+REGISTER_SERVICE(NecMobilepro900SeriesKernelDbgOutput);

@@ -22,8 +22,8 @@ std::wstring WindowTitle::Compose() const {
         parts.push_back(Utf8ToWide(meta.name.c_str()));
     else if (!meta.device_name.empty())
         parts.push_back(Utf8ToWide(meta.device_name.c_str()));
-    else if (const DbDevice* board =
-                 emu_.Get<BoardDatabase>().FindDevice(cfg.board_id))
+    else if (const DbBoard* board =
+                 emu_.Get<BoardDatabase>().FindBoard(cfg.board_id))
         parts.push_back(Utf8ToWide(board->name.c_str()));
     const std::string os = OsDisplayLabel(meta);
     if (!os.empty())

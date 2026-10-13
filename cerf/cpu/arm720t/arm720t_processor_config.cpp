@@ -2,7 +2,7 @@
 
 #include "../../core/cerf_emulator.h"
 #include "../../boards/board_context.h"
-#include "poseidon_id.h"
+#include "arm720t_id.h"
 
 namespace {
 
@@ -12,7 +12,7 @@ public:
 
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
-        return bd && bd->GetSocId() == SocId::Poseidon;
+        return bd && bd->GetSocId() == SocId::Arm720t;
     }
 
     /* ARM7TDMI Data Sheet (ARM DDI 0029E) STM, Block Data Transfer:
@@ -27,7 +27,6 @@ public:
     bool     HasDsp()                     const override { return false; }
     bool     HasLoadStoreDouble()         const override { return false; }
 
-    /* ARM720T core in Microsoft Poseidon NDA board: 70 MHz typical. */
     uint32_t CpuClockHz()                 const override { return 70000000u; }
 };
 

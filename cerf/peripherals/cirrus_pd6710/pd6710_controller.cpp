@@ -4,7 +4,7 @@
 #include "pd6710_management_irq_line.h"
 
 #include "../../boards/board_context.h"
-#include "../../boards/smdk2410_devemu/devemu_id.h"
+#include "../../boards/samsung_smdk2410/samsung_smdk2410_family_id.h"
 #include "../../core/cerf_emulator.h"
 #include "../../core/log.h"
 #include "../../host/host_widget_registry.h"
@@ -33,7 +33,7 @@ Pd6710Controller::Pd6710Controller(CerfEmulator& emu)
 
 bool Pd6710Controller::ShouldRegister() {
     auto* bd = emu_.TryGet<BoardContext>();
-    return bd && bd->GetBoardId() == BoardId::Devemu;
+    return bd && bd->GetBoardFamilyId() == BoardFamilyId::SamsungSmdk2410;
 }
 
 void Pd6710Controller::OnReady() {

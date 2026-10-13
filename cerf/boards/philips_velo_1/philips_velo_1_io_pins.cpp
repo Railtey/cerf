@@ -1,7 +1,8 @@
 #include "../../core/cerf_emulator.h"
 #include "../../socs/pr31x00/pr31x00_io_pins.h"
 #include "../board_context.h"
-#include "philips_velo_1_id.h"
+#include "philips_velo_1_dram_card_profile.h"
+#include "philips_velo_1_family_id.h"
 
 #include <cstdint>
 #include <optional>
@@ -15,10 +16,12 @@ namespace {
 constexpr uint32_t kMModuleAttached = 1u << 0;
 
 /* IO[6] Miniature Card detect for slot 2, active low, empty (philips_velo_1_ce1
-   nk.1.exe sub_9FB1A0C4, sub_9FB0F424 "No Mini Card in Slot N"). Slot 1's IO[5] is
-   absent: philips_velo_1_ce1 nk.exe sub_9F42453C abandons the DRAM card when it reads
-   IODIN & 0x20 set. */
+   nk.1.exe sub_9FB1A0C4, sub_9FB0F424 "No Mini Card in Slot N"). */
 constexpr uint32_t kMiniCardSlot2 = 1u << 6;
+
+/* IO[5] slot 1 card detect: philips_velo_1_ce1 nk.exe sub_9F42453C @0x9F42453C
+   abandons the DRAM card when IODIN & 0x20 is set. */
+constexpr uint32_t kMiniCardSlot1 = 1u << 5;
 
 /* IO[1] carries an M-Module socket status line (philips_velo_1_ce1 nk.1.exe
    sub_9FB2BC6C) that only the absent M-Module drives; IO[2] has no reader in the ROM.
@@ -34,17 +37,23 @@ public:
 
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
-        return bd && bd->GetBoardId() == BoardId::PhilipsVelo1;
+        return bd && bd->GetBoardFamilyId() == BoardFamilyId::PhilipsVelo1;
     }
 
-    uint32_t IoDin() const override {
-        return kMModuleAttached | kMiniCardSlot2;
+    void OnReady() override {
+        const bool card = FindPhilipsVelo1DramCard(emu_.Get<BoardContext>().GetBoardId());
+        io_din_ = kMModuleAttached | kMiniCardSlot2 | (card ? 0u : kMiniCardSlot1);
     }
+
+    uint32_t IoDin() const override { return io_din_; }
 
     /* The board itself holds no MFIO input high. The only pin the ROM reads is serial
        CTS on MFIODIN<30> (philips_velo_1_ce1 serial.dll sub_1EB1F04, sub_1EB1DE0), and
        the UART wiring drives its level through Pr31x00Io, not here. */
     std::optional<uint32_t> MfioDin() const override { return 0u; }
+
+private:
+    uint32_t io_din_ = 0;
 };
 
 }  /* namespace */

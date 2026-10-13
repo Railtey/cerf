@@ -89,7 +89,8 @@ CARD_HOVER  = _PALETTE["CARD_HOVER"]
 
 CARD_STYLE_PREFIX = "SideCard."
 HOVER_STYLE_PREFIX = "SideCardHover."
-CARD_STYLE_BASES = ("TFrame", "TLabel", "Hint.TLabel")
+CARD_STYLE_BASES = ("TFrame", "TLabel", "Hint.TLabel", "Danger.TLabel",
+                    "Warn.TLabel")
 
 
 def _build_state_tint() -> dict:
@@ -250,6 +251,8 @@ def apply_theme(root: tk.Tk) -> None:
 
     style.configure("Hint.TLabel", foreground=FG_DIM)
     style.configure("Danger.TLabel", foreground=DANGER_FG)
+    style.configure("Warn.TLabel", foreground=WARN_FG)
+    style.configure(sv_elements.PICKER_STYLE, anchor="w")
 
     style.configure("Help.TButton", padding=(4, 1))
 

@@ -4,9 +4,10 @@ import tkinter as tk
 import tkinter.font as tkfont
 from pathlib import PureWindowsPath
 from tkinter import ttk
-from typing import Callable, Dict, List, Set, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from board_info import board_display_name, board_ga_color_depth
+from board_support_label import apply_support_warning
 from color_schemes import color_scheme_label
 from device_file_types import device_file_types
 from launch_options_bpp import bpp_label, model_bpp
@@ -25,6 +26,8 @@ from side_block import SideBlock, chevron_reserve
 
 Rows = List[Tuple[str, str]]
 WIDTH_DEFAULT = 220
+WARNING_ROW = 1000
+WARNING_GAP = 6
 
 
 def _on_off(value: bool) -> str:
@@ -53,6 +56,7 @@ class ConfigPreviewPanel:
         self._rows: Dict[SideBlock, KeyValueRows] = {
             b: KeyValueRows(b.body) for b in self._blocks}
         self._shown: Set[SideBlock] = set()
+        self._board_warning: Optional[ttk.Label] = None
         self.clear()
 
     def set_wraplength(self, wrap: int) -> None:
@@ -78,6 +82,8 @@ class ConfigPreviewPanel:
         stacked = not all(r.fits(self._font, self._width) for r in shown)
         for rows in shown:
             rows.arrange(self._width, stacked)
+        if self._board_warning is not None:
+            self._board_warning.config(wraplength=self._width)
 
     def show(self, model: PropertiesModel) -> None:
         subject = model.subject
@@ -93,6 +99,7 @@ class ConfigPreviewPanel:
             board_rows.append((ftype.name,
                                PureWindowsPath(value).name if value else "-"))
         self._fill(self.board, board_rows)
+        self._show_board_warning(board_id)
 
         if subject.guest_additions_available(board_id):
             self._fill(self.ga, self._ga_rows(values, auto_size,
@@ -116,6 +123,19 @@ class ConfigPreviewPanel:
              else "Detached"),
             ("Verbose logs", _on_off(values.get("verbose_logs", False)))])
         self._arrange()
+
+    def _show_board_warning(self, board_id: str) -> None:
+        label = ttk.Label(self.board.body, justify="left",
+                          wraplength=self._width)
+        if not apply_support_warning(label, board_id):
+            label.destroy()
+            self._board_warning = None
+            return
+        label.grid(row=WARNING_ROW, column=0, columnspan=2, sticky="w",
+                   pady=(WARNING_GAP, 0))
+        self._board_warning = label
+        self.board.adopt_children()
+        self._bind_wheel(self.board.body)
 
     def _ga_rows(self, values: dict, auto_size: Tuple[int, int],
                  auto_depth: int) -> Rows:

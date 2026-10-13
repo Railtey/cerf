@@ -4,7 +4,7 @@
 #include "../../core/fatal.h"
 #include "../../core/log.h"
 #include "../../boards/board_context.h"
-#include "../../boards/jornada720/jornada_720_id.h"
+#include "../../boards/hp_jornada_700/hp_jornada_700_family_id.h"
 #include "../../state/state_stream.h"
 #include "sa1111_sac_frame_clock.h"
 
@@ -12,7 +12,7 @@
 
 bool Sa1111SacTxStream::ShouldRegister() {
     auto* bd = emu_.TryGet<BoardContext>();
-    return bd && bd->GetBoardId() == BoardId::Jornada720;
+    return bd && bd->GetBoardFamilyId() == BoardFamilyId::HpJornada700;
 }
 
 void Sa1111SacTxStream::OnReady() {

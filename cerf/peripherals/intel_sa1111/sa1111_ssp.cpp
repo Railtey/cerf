@@ -2,7 +2,7 @@
 
 #include "../../core/cerf_emulator.h"
 #include "../../boards/board_context.h"
-#include "../../boards/jornada720/jornada_720_id.h"
+#include "../../boards/hp_jornada_700/hp_jornada_700_family_id.h"
 #include "../../state/state_stream.h"
 #include "sa1111_intc.h"
 #include "sa1111_ssp_device.h"
@@ -84,7 +84,7 @@ public:
 
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
-        return bd && bd->GetBoardId() == BoardId::Jornada720;
+        return bd && bd->GetBoardFamilyId() == BoardFamilyId::HpJornada700;
     }
 
     uint32_t MmioBase() const override { return 0x40000800u; }

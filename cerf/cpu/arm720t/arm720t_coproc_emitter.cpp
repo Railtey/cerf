@@ -3,7 +3,7 @@
 #include "../../core/cerf_emulator.h"
 #include "../../jit/arm/place_fns.h"
 #include "../../boards/board_context.h"
-#include "poseidon_id.h"
+#include "arm720t_id.h"
 
 namespace {
 
@@ -13,7 +13,7 @@ public:
 
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
-        return bd && bd->GetSocId() == SocId::Poseidon;
+        return bd && bd->GetSocId() == SocId::Arm720t;
     }
 
     uint8_t* EmitRegisterTransfer(uint8_t*      cursor,

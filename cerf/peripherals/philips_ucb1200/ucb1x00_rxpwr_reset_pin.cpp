@@ -1,8 +1,8 @@
 #include "ucb1x00_codec.h"
 
 #include "../../boards/board_context.h"
-#include "../../boards/philips_velo_1/philips_velo_1_id.h"
-#include "../../boards/sharp_mobilon_hc4100/sharp_mobilon_hc4100_id.h"
+#include "../../boards/philips_velo_1/philips_velo_1_family_id.h"
+#include "../../boards/sharp_mobilon_hc/sharp_mobilon_hc_family_id.h"
 #include "../../core/cerf_emulator.h"
 #include "../../socs/pr31x00/pr31x00_ir.h"
 
@@ -17,8 +17,8 @@ public:
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
         if (!bd) return false;
-        const std::string_view b = bd->GetBoardId();
-        return b == BoardId::PhilipsVelo1 || b == BoardId::SharpMobilonHc4100;
+        const std::string_view b = bd->GetBoardFamilyId();
+        return b == BoardFamilyId::PhilipsVelo1 || b == BoardFamilyId::SharpMobilonHc;
     }
 
     void OnReady() override {

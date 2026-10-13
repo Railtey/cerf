@@ -2,7 +2,7 @@
 
 #include "../../core/cerf_emulator.h"
 #include "../../boards/board_context.h"
-#include "../../boards/jornada720/jornada_720_id.h"
+#include "../../boards/hp_jornada_700/hp_jornada_700_family_id.h"
 #include "../../socs/sa11xx/sa11xx_test_unit.h"
 #include "../../state/state_stream.h"
 #include "sa1111_sbi.h"
@@ -51,7 +51,7 @@ PllSetting DecodeSkcdr(uint32_t skcdr) {
 
 bool Sa1111SystemController::ShouldRegister() {
     auto* bd = emu_.TryGet<BoardContext>();
-    return bd && bd->GetBoardId() == BoardId::Jornada720;
+    return bd && bd->GetBoardFamilyId() == BoardFamilyId::HpJornada700;
 }
 
 void Sa1111SystemController::OnUnitReady() {

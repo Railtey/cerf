@@ -19,7 +19,6 @@ struct DeviceMeta {
     std::string os_name;
     int         os_ver_major = 0;
     int         os_ver_minor = 0;
-    int         device_year  = 0;
 };
 
 /* One entry of cerf.json "additional_packages.compact_flash_cards": a CF

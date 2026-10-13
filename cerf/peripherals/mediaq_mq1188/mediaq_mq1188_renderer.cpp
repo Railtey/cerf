@@ -4,7 +4,7 @@
 
 #include "../mediaq_ge/mediaq_panel_renderer.h"
 #include "../../boards/board_context.h"
-#include "../../boards/falcon_pc3xx/falcon_4220_id.h"
+#include "../../boards/askey_pc3xx/askey_pc3xx_family_id.h"
 
 namespace {
 
@@ -14,7 +14,7 @@ public:
 
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
-        return bd && bd->GetBoardId() == BoardId::Falcon4220;
+        return bd && bd->GetBoardFamilyId() == BoardFamilyId::AskeyPc3xx;
     }
 };
 

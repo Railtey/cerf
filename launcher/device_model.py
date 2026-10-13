@@ -9,7 +9,8 @@ from typing import List, Optional
 
 from device_state import DeviceBundle, PackageStatus
 from board_database import sort_text
-from board_info import board_display_name, board_soc_label, board_sort_key
+from board_info import (board_device_year, board_display_name, board_soc_label,
+                        board_sort_key)
 
 
 # Board-group row iids contain ':' which is invalid in Windows directory
@@ -61,7 +62,7 @@ def _device_sort_key(d: DeviceBundle) -> tuple:
         _sort_optional_text(meta.os_name),
         _sort_optional_int(meta.os_ver_major, missing_when_zero=version_missing),
         _sort_optional_int(meta.os_ver_minor, missing_when_zero=version_missing),
-        _sort_optional_int(meta.device_year),
+        _sort_optional_int(_device_year(d)),
         sort_text(d.name),
     )
 
@@ -114,10 +115,15 @@ def _table_os_label(d: DeviceBundle) -> str:
     return f"{base} ({', '.join(paren)})" if paren else base
 
 
+def _device_year(d: DeviceBundle) -> int:
+    return board_device_year(d.meta.board_id)
+
+
 def _table_device_label(d: DeviceBundle) -> str:
     display = (d.meta.device_name or board_display_name(d.meta.board_id)
                or d.name)
-    return f"{display} ({d.meta.device_year})" if d.meta.device_year else display
+    year = _device_year(d)
+    return f"{display} ({year})" if year else display
 
 
 def _device_search_haystack(d: DeviceBundle) -> str:

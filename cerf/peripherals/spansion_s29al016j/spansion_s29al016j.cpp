@@ -4,7 +4,7 @@
 #include "../../core/cerf_emulator.h"
 #include "../../core/log.h"
 #include "../../boards/board_context.h"
-#include "../../boards/zune_keel/zune_30_id.h"
+#include "../../boards/toshiba_gigabeat_s/toshiba_gigabeat_s_family_id.h"
 #include "../../peripherals/peripheral_dispatcher.h"
 #include "../../state/state_stream.h"
 
@@ -139,7 +139,7 @@ public:
 
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
-        return bd && bd->GetBoardId() == BoardId::Zune30;
+        return bd && bd->GetBoardFamilyId() == BoardFamilyId::ToshibaGigabeatS;
     }
 
     void OnReady() override {

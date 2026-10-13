@@ -4,7 +4,7 @@
 
 #include "../../core/cerf_emulator.h"
 #include "../../boards/board_context.h"
-#include "../../boards/jornada720/jornada_720_id.h"
+#include "../../boards/hp_jornada_700/hp_jornada_700_family_id.h"
 #include "../../cpu/emulated_memory.h"
 #include "../../state/state_stream.h"
 #include "sa1111_sac_frame_clock.h"
@@ -28,7 +28,7 @@ Sa1111SacRxDma::Sa1111SacRxDma(CerfEmulator& emu) : Sa1111SacDmaChannel(emu, kRx
 
 bool Sa1111SacRxDma::ShouldRegister() {
     auto* bd = emu_.TryGet<BoardContext>();
-    return bd && bd->GetBoardId() == BoardId::Jornada720;
+    return bd && bd->GetBoardFamilyId() == BoardFamilyId::HpJornada700;
 }
 
 void Sa1111SacRxDma::OnChannelReady() {

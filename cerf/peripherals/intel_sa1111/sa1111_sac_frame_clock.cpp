@@ -2,12 +2,12 @@
 
 #include "../../core/cerf_emulator.h"
 #include "../../boards/board_context.h"
-#include "../../boards/jornada720/jornada_720_id.h"
+#include "../../boards/hp_jornada_700/hp_jornada_700_family_id.h"
 #include "../../state/state_stream.h"
 
 bool Sa1111SacFrameClock::ShouldRegister() {
     auto* bd = emu_.TryGet<BoardContext>();
-    return bd && bd->GetBoardId() == BoardId::Jornada720;
+    return bd && bd->GetBoardFamilyId() == BoardFamilyId::HpJornada700;
 }
 
 bool Sa1111SacFrameClock::Rescale(uint64_t now, uint64_t cpu_hz, GuestCycleClock::Rate fs) {

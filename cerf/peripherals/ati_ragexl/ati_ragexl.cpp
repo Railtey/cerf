@@ -6,7 +6,7 @@
 #include "../../core/cerf_emulator.h"
 #include "../../core/log.h"
 #include "../../boards/board_context.h"
-#include "../../boards/nec_rockhopper/nec_rockhopper_id.h"
+#include "../../boards/nec_sg2_vr5500/nec_sg2_vr5500_family_id.h"
 #include "../../host/host_window.h"
 #include "../../state/state_stream.h"
 
@@ -85,7 +85,7 @@ public:
 
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
-        return bd && bd->GetBoardId() == BoardId::NecRockhopper;
+        return bd && bd->GetBoardFamilyId() == BoardFamilyId::NecSg2Vr5500;
     }
     void OnReady() override {
         fb_.assign(kFbSize, 0);

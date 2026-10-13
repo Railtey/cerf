@@ -3,7 +3,7 @@
 #include "../../core/cerf_emulator.h"
 #include "../../core/log.h"
 #include "../../boards/board_context.h"
-#include "../../boards/nec_rockhopper/nec_rockhopper_id.h"
+#include "../../boards/nec_sg2_vr5500/nec_sg2_vr5500_family_id.h"
 #include "../../state/state_stream.h"
 
 #include <cstddef>
@@ -32,7 +32,7 @@ I8042Controller::I8042Controller(CerfEmulator& emu)
 
 bool I8042Controller::ShouldRegister() {
     auto* bd = emu_.TryGet<BoardContext>();
-    return bd && bd->GetBoardId() == BoardId::NecRockhopper;
+    return bd && bd->GetBoardFamilyId() == BoardFamilyId::NecSg2Vr5500;
 }
 
 int I8042Controller::LoadOutputLocked() {

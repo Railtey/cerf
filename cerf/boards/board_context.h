@@ -13,8 +13,9 @@ public:
     bool ShouldRegister() override;
     void OnReady() override;
 
-    virtual std::string_view GetBoardId() const = 0;
+    virtual std::string_view GetBoardFamilyId() const = 0;
 
+    std::string_view GetBoardId()        const;
     std::string_view GetSocId()          const;
     CpuArch          GetCpuArch()        const;
     RomPlacingMode   GetRomPlacingMode() const;
@@ -29,7 +30,7 @@ public:
     virtual uint32_t GuestAdditionsWindowSize() const;
 
 private:
-    const DbDevice*    device_ = nullptr;
-    const DbSoc*       soc_    = nullptr;
-    const DbSocFamily* family_ = nullptr;
+    const DbBoard*     board_      = nullptr;
+    const DbSoc*       soc_        = nullptr;
+    const DbSocFamily* soc_family_ = nullptr;
 };

@@ -10,7 +10,7 @@ public:
 
     bool ShouldRegister() override { return true; }
 
-    std::string_view GetBoardId() const override { return {}; }
+    std::string_view GetBoardFamilyId() const override { return {}; }
 };
 
 }

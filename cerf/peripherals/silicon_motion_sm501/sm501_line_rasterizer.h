@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace siemens_mp377 {
+namespace siemens_simatic_mp377 {
 
 struct Sm501LineState {
     uint8_t* vram;

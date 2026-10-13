@@ -9,7 +9,7 @@ namespace {
 
 /* CE 2.11 kernel per-char debug writer sub_8005B57C (R0 = char) - the byte sink
    of OEMWriteDebugString (sub_8005B768). Reassemble into lines. */
-class Jornada820KernelDbgOutput : public Service {
+class HpJornada820KernelDbgOutput : public Service {
 public:
     using Service::Service;
 
@@ -27,4 +27,4 @@ public:
 
 }  // namespace
 
-REGISTER_SERVICE(Jornada820KernelDbgOutput);
+REGISTER_SERVICE(HpJornada820KernelDbgOutput);

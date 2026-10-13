@@ -5,17 +5,23 @@ from pathlib import Path
 from tkinter import filedialog, ttk
 from typing import Callable, Dict, List, Optional
 
-from board_info import board_display_name, supported_boards
+from board_info import board_display_name, running_boards
+from board_picker import BoardPicker
+from board_support_label import apply_support_warning
 from branded_dialog import scaled
 from cerf_user_json import resolve_device_file
 from device_file_types import (DeviceFileType, FileKey, device_file_types,
                                file_problem)
+import glyph_images
 from rich_text import plain
-from settings_card import SettingsColumn, path_width, wrapping_label
+from settings_card import (CONTROL_GAP_DIP, SettingsColumn, path_width,
+                           wrapping_label)
+from sv_elements import PICKER_STYLE
+import ui_theme as theme
 
 _GAP_DIP = 6
 _FILE_ROW_GAP_DIP = 10
-_BOARD_LIST_ROWS = 12
+_CHEVRON_DIP = 16
 
 BindWheel = Callable[[tk.Misc], None]
 
@@ -57,7 +63,7 @@ class BoardRomForm:
         self._base_dir = base_dir
         self._bind_wheel = bind_wheel
         self._prefilled_name: Optional[str] = None
-        self._boards: List[dict] = list(supported_boards())
+        self._board_id = ""
         self._types: List[DeviceFileType] = []
         self._vars: Dict[FileKey, tk.StringVar] = {}
         self._inputs: List[tk.Widget] = []
@@ -76,40 +82,38 @@ class BoardRomForm:
         row.control(self.name_entry)
 
         row = ident.row("Board", [plain("The type of device to emulate.")])
-        self.var_board = tk.StringVar()
-        self.board_combo = ttk.Combobox(row.frame, textvariable=self.var_board,
-                                        state="readonly", width=1,
-                                        height=_BOARD_LIST_ROWS)
-        row.control(self.board_combo)
-        self.board_combo.bind("<<ComboboxSelected>>", self._on_board_changed)
+        self.board_button = ttk.Button(
+            row.frame, style=PICKER_STYLE, compound="text", width=1,
+            image=glyph_images.chevron(row.frame, scaled(row.frame, _CHEVRON_DIP),
+                                       theme.FG_DIM),
+            command=self._open_picker)
+        row.control(self.board_button)
+        self.board_warning = wrapping_label(row.frame, "")
+        self.board_warning.grid(row=1, column=1, sticky="ew",
+                                padx=(scaled(row.frame, CONTROL_GAP_DIP), 0),
+                                pady=(scaled(row.frame, _GAP_DIP), 0))
 
         self._rom = _FileCard(column, "ROM")
         self._storage = _FileCard(column, "Storage")
-        self._fill_combo()
+        self._show_board()
 
     def select_first_board(self) -> None:
-        if self._boards:
-            self.board_combo.current(0)
+        boards = running_boards()
+        if boards:
+            self._board_id = boards[0]["id"]
         self._on_board_changed()
 
     def set_values(self, board_id: str, name: str,
                    files: Dict[FileKey, str]) -> None:
-        if board_id and all(b["id"] != board_id for b in self._boards):
-            self._boards.insert(0, {"id": board_id,
-                                    "name": board_display_name(board_id)
-                                    or board_id})
-            self._fill_combo()
-        for i, b in enumerate(self._boards):
-            if b["id"] == board_id:
-                self.board_combo.current(i)
+        self._board_id = board_id
+        self._show_board()
         self.var_name.set(name)
         for key, value in files.items():
             self._var(key, "").set(value)
         self._rebuild_files()
 
     def board_id(self) -> str:
-        board = self._selected_board()
-        return board["id"] if board is not None else ""
+        return self._board_id
 
     def name(self) -> str:
         return self.var_name.get().strip()
@@ -133,20 +137,26 @@ class BoardRomForm:
     def set_enabled(self, enabled: bool) -> None:
         self._enabled = enabled
         state = "normal" if enabled else "disabled"
-        self.board_combo.config(state="readonly" if enabled else "disabled")
+        self.board_button.config(state=state)
         self.name_entry.config(state=state)
         for w in self._inputs:
             w.config(state=state)
 
-    def _fill_combo(self) -> None:
-        self.board_combo.config(values=[b["name"] for b in self._boards])
+    def _show_board(self) -> None:
+        self.board_button.config(
+            text=board_display_name(self._board_id) or self._board_id
+            or "Pick a board")
+        if apply_support_warning(self.board_warning, self._board_id):
+            self.board_warning.grid()
+        else:
+            self.board_warning.grid_remove()
 
-    def _selected_board(self) -> Optional[dict]:
-        name = self.var_board.get()
-        for b in self._boards:
-            if b["name"] == name:
-                return b
-        return None
+    def _open_picker(self) -> None:
+        BoardPicker(self._window, self._board_id, self._on_picked)
+
+    def _on_picked(self, board_id: str) -> None:
+        self._board_id = board_id
+        self._on_board_changed()
 
     def _var(self, key: FileKey, default: str) -> tk.StringVar:
         var = self._vars.get(key)
@@ -199,15 +209,16 @@ class BoardRomForm:
             row += 1
         card.rows = row
 
-    def _on_board_changed(self, _event: object = None) -> None:
-        board = self._selected_board()
-        if board is None:
+    def _on_board_changed(self) -> None:
+        self._show_board()
+        name = board_display_name(self._board_id)
+        if not name:
             return
         if self._name_follows_board:
             current = self.var_name.get()
             if not current.strip() or current == self._prefilled_name:
-                self.var_name.set(board["name"])
-            self._prefilled_name = board["name"]
+                self.var_name.set(name)
+            self._prefilled_name = name
         self._rebuild_files()
         self._on_change()
 

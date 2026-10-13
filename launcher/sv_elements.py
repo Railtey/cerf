@@ -20,6 +20,7 @@ _ACCENT_STATES: Sequence[Tuple[Tuple[str, ...], str]] = (
 
 SPLIT_MAIN_STYLE = "SplitMain.Accent.TButton"
 SPLIT_DROP_STYLE = "SplitDrop.Accent.TButton"
+PICKER_STYLE = "Picker.TButton"
 PAGE_SCROLLBAR_STYLE = "Page.Vertical.TScrollbar"
 THIN_SCROLLBAR_STYLE = "Thin.Vertical.TScrollbar"
 TROUGH_BORDER = 6
@@ -44,6 +45,14 @@ def _button_layout(element: str) -> list:
     return [(element, {"sticky": "nswe", "children": [
         ("Button.padding", {"sticky": "nswe", "children": [
             ("Button.label", {"sticky": "nswe"})]})]})]
+
+
+def _picker_layout() -> list:
+    return [("Button.button", {"sticky": "nswe", "children": [
+        ("Button.padding", {"sticky": "nswe", "children": [
+            ("Button.image", {"side": "right", "sticky": ""}),
+            ("Button.label", {"side": "left", "expand": "1",
+                              "sticky": "nswe"})]})]})]
 
 
 def _create_toolbar(root: tk.Misc, style: ttk.Style,
@@ -150,3 +159,4 @@ def create(root: tk.Misc, style: ttk.Style, page_bg: str) -> None:
     _create_split_half(root, style, keep, "SplitDrop.button", left=False)
     style.layout(SPLIT_MAIN_STYLE, _button_layout("SplitMain.button"))
     style.layout(SPLIT_DROP_STYLE, _button_layout("SplitDrop.button"))
+    style.layout(PICKER_STYLE, _picker_layout())

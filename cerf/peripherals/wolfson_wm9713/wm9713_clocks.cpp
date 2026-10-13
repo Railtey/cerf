@@ -1,7 +1,7 @@
 #include "wm9713_clocks.h"
 
 #include "../../boards/board_context.h"
-#include "../../boards/symbol_mk500/symbol_mk500_id.h"
+#include "../../boards/symbol_hamptons/symbol_hamptons_family_id.h"
 #include "../../core/cerf_emulator.h"
 #include "../../state/state_stream.h"
 #include "wm9713_master_clocks.h"
@@ -24,7 +24,7 @@ constexpr uint32_t kKMask       = 0x003FFFFFu;
 
 bool Wm9713Clocks::ShouldRegister() {
     auto* bd = emu_.TryGet<BoardContext>();
-    return bd && bd->GetBoardId() == BoardId::SymbolMk500;
+    return bd && bd->GetBoardFamilyId() == BoardFamilyId::SymbolHamptons;
 }
 
 void Wm9713Clocks::OnReady() { inputs_ = &emu_.Get<Wm9713MasterClocks>(); }

@@ -41,7 +41,6 @@ void LoadMeta(const json& root, DeviceMeta& meta, const std::string& path) {
 
     SetNonEmptyString(meta.name,        m, "name",        path, "meta");
     SetNonEmptyString(meta.device_name, m, "device_name", path, "meta");
-    SetMetaInt   (meta.device_year, m, "device_year", path, "meta");
 
     if (m.contains("os")) {
         const auto& o = m["os"];
@@ -473,10 +472,10 @@ void ConfigLoader::LoadInto(DeviceConfig& config) {
 
 void ConfigLoader::ApplyBoardPanelDefault(DeviceConfig& config) {
     if (config.board_configurable_screen_explicit) return;
-    const DbDevice* dev = emu_.Get<BoardDatabase>().FindDevice(config.board_id);
-    if (!dev || !dev->lcd_panel_size) return;
-    config.board_configurable_screen_width  = dev->lcd_panel_size->width;
-    config.board_configurable_screen_height = dev->lcd_panel_size->height;
+    const DbBoard* board = emu_.Get<BoardDatabase>().FindBoard(config.board_id);
+    if (!board || !board->lcd_panel_size) return;
+    config.board_configurable_screen_width  = board->lcd_panel_size->width;
+    config.board_configurable_screen_height = board->lcd_panel_size->height;
 }
 
 void ConfigLoader::SaveLastSaveStateMode(bool save_state) {
