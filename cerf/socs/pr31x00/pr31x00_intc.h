@@ -9,6 +9,18 @@
 
 class MipsJit;
 
+class Pr31x00IntcTimedSource {
+public:
+    virtual void Settle()                = 0;
+    virtual bool EdgeSinceClear() const  = 0;
+    virtual void OnLatched()             = 0;
+    virtual void OnStatusCleared()       = 0;
+    virtual void OnPathChanged(bool open) = 0;
+
+protected:
+    ~Pr31x00IntcTimedSource() = default;
+};
+
 /* Philips PR31x00 Interrupt Module, TMPR3911/3912 ch.8. */
 class Pr31x00Intc : public Peripheral {
 public:
@@ -52,6 +64,8 @@ public:
        non-recursive INTC mutex if fired under it. */
     void RegisterEnableListener(uint32_t set, uint32_t bits, std::function<void()> cb);
 
+    void RegisterTimedSource(uint32_t set, uint32_t bit, Pr31x00IntcTimedSource& src);
+
     void SaveState(StateWriter& w) override;
     void RestoreState(StateReader& r) override;
     void PostRestore() override;
@@ -67,10 +81,20 @@ private:
     struct EnableListener { uint32_t set; uint32_t bits; std::function<void()> cb; };
     std::vector<EnableListener> enable_listeners_;
 
+    static constexpr size_t kMaxTimedSources = 2;
+
+    struct TimedSource { uint32_t set; uint32_t bit; Pr31x00IntcTimedSource* src; bool open; };
+    std::vector<TimedSource> timed_sources_;
+
     MipsJit* jit_ = nullptr;
 
     bool     IrqLowFor(const uint32_t* status) const;
     bool     IrqHighFor(const uint32_t* status) const;
     uint32_t HighPriorityLevelFor(const uint32_t* status) const;
+    bool     PathOpenLocked(uint32_t set, uint32_t bit) const;
+    void     SettleTimedSources();
+    void     LatchTimedLocked();
+    void     ClearTimedLocked(uint32_t set, uint32_t bits);
+    void     UpdateTimedPathsLocked(bool force);
     void RecomputeLocked();
 };

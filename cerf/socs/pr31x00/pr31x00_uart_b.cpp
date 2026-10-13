@@ -15,6 +15,7 @@ public:
 protected:
     const char* TxSource() const override { return "UARTB"; }
     uint32_t RxIntBit() const override { return 1u << 21; }
+    uint32_t RxOverrunIntBit() const override { return 1u << 20; }
     uint32_t TxEmptyIntBit() const override { return 1u << 14; }
     uint32_t TxAvailIntBit() const override { return 1u << 16; }
     uint32_t DmaFullIntBit() const override { return 1u << 13; }

@@ -58,6 +58,8 @@ public:
     bool HasVr41xxPowerModes() const override { return false; }
     /* No MIPS16 on the R3900 core (TMPR39xx-um documents none). */
     bool HasMips16() const override { return false; }
+    /* "Multiply/accumulator Instruction" (PR31500.PDF p.2). */
+    bool HasTx39MultiplyAdd() const override { return true; }
 };
 
 }  // namespace

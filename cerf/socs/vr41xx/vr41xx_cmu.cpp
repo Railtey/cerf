@@ -11,18 +11,13 @@ void Vr41xxCmu::RequireTclock(uint16_t mask_bit, const char* operation) const {
     }
 }
 
-void Vr41xxCmu::RegisterClockUser(uint16_t mask_bit, const char* unit,
-                                  std::function<bool()> scanning) {
-    clock_users_.push_back(ClockUser{mask_bit, unit, std::move(scanning)});
+void Vr41xxCmu::RegisterClockListener(uint16_t mask_bit, std::function<void(bool)> fn) {
+    clock_listeners_.push_back(ClockListener{mask_bit, std::move(fn)});
 }
 
 void Vr41xxCmu::ClockMaskWriting(uint16_t next) const {
-    const uint16_t mask = ClockMask();
-    for (const ClockUser& user : clock_users_) {
-        if ((mask & user.mask_bit) != 0u && (next & user.mask_bit) == 0u && user.scanning()) {
-            emu_.Get<Fatal>().Die("Vr41xxCmu: CMUCLKMSK 0x%04X -> 0x%04X masks the %s TClock "
-                                  "during a scan; the unit without TClock is not modeled", mask,
-                                  next, user.unit);
-        }
+    const uint16_t changed = static_cast<uint16_t>(ClockMask() ^ next);
+    for (const ClockListener& listener : clock_listeners_) {
+        if ((changed & listener.mask_bit) != 0u) listener.fn((next & listener.mask_bit) != 0u);
     }
 }

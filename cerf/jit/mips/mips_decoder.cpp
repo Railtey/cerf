@@ -142,6 +142,12 @@ bool MipsDecoder::Decode(uint32_t word, uint32_t pc, MipsDecodedInsn* d) {
             d->is_likely = 1;
             return true;
 
+        /* MADD / MADDU: rs, rt, rd, bits 10..6 zero, funct 000000 / 000001 (TMPR39xx-um
+           p.155-156). */
+        case MipsOp::kSPECIAL2:
+            return has_tx39_multiply_add_ && d->sa == 0 &&
+                   (d->funct == MipsSpecial2::kMADD || d->funct == MipsSpecial2::kMADDU);
+
         /* CP1 (FPU) coprocessor: present iff the SoC has an FPU. On a no-FPU /
            soft-float build COP1 is a Reserved/Coprocessor-Unusable encoding. */
         case MipsOp::kCOP1:

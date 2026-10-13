@@ -96,6 +96,8 @@ uint8_t* PlaceMipsDdiv     (uint8_t* cursor, MipsDecodedInsn* d, MipsBlockContex
 uint8_t* PlaceMipsDdivu    (uint8_t* cursor, MipsDecodedInsn* d, MipsBlockContext* ctx);
 uint8_t* PlaceMipsDsra     (uint8_t* cursor, MipsDecodedInsn* d, MipsBlockContext* ctx);
 uint8_t* PlaceMipsMult     (uint8_t* cursor, MipsDecodedInsn* d, MipsBlockContext* ctx);
+uint8_t* PlaceMipsMadd     (uint8_t* cursor, MipsDecodedInsn* d, MipsBlockContext* ctx);
+uint8_t* PlaceMipsMaddu    (uint8_t* cursor, MipsDecodedInsn* d, MipsBlockContext* ctx);
 uint8_t* PlaceMipsMfhi     (uint8_t* cursor, MipsDecodedInsn* d, MipsBlockContext* ctx);
 uint8_t* PlaceMipsMflo     (uint8_t* cursor, MipsDecodedInsn* d, MipsBlockContext* ctx);
 uint8_t* PlaceMipsMthi     (uint8_t* cursor, MipsDecodedInsn* d, MipsBlockContext* ctx);

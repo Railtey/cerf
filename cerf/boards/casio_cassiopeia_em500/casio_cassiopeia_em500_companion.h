@@ -22,7 +22,6 @@ public:
 
     bool ShouldRegister() override;
     void OnReady() override;
-    void OnShutdown() override;
 
     uint32_t MmioBase() const override { return kBase; }
     uint32_t MmioSize() const override { return kWindowSize; }

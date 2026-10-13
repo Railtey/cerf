@@ -23,16 +23,6 @@ enum RegIndex : uint32_t {
     kCtl2  = 1,   /* $02C write-only */
     kCtl3  = 2,   /* $030 write-only */
     kCtl4  = 3,   /* $034 write-only */
-    kCtl5  = 4,   /* $038 write-only */
-    kCtl6  = 5,   /* $03C write-only */
-    kCtl7  = 6,   /* $040 write-only */
-    kCtl8  = 7,   /* $044 write-only */
-    kCtl9  = 8,   /* $048 write-only */
-    kCtl10 = 9,   /* $04C write-only */
-    kCtl11 = 10,  /* $050 write-only */
-    kCtl12 = 11,  /* $054 write-only */
-    kCtl13 = 12,  /* $058 write-only */
-    kCtl14 = 13,  /* $05C write-only */
 };
 
 /* Video Control 1 (§17.4.1): LINECNT[9:0]<31:22> R, LOADDLY<21>, BAUDVAL[4:0]<20:16>,
@@ -40,12 +30,11 @@ enum RegIndex : uint32_t {
    DFMODE<3>, INVVID<2>, DISPON<1>, ENVID<0>. */
 constexpr uint32_t kCtl1Writable = 0x003FFFFFu;
 constexpr uint32_t kLineCntShift = 22;
-constexpr uint32_t kEnFreezeFrame = 1u << 8;
 constexpr uint32_t kCtl1ResetKept = 0x001FFE00u;
 constexpr uint32_t kCtl1Timing    = 0x001F0000u;
-constexpr uint32_t kCtl2Timing    = 0xFFC003FFu;
 constexpr uint32_t kEnVid        = 1u << 0;
 constexpr uint32_t kInvVid       = 1u << 2;
+constexpr uint32_t kEnFreezeFrame = 1u << 8;
 constexpr uint32_t kDisp8        = 1u << 4;
 constexpr uint32_t kDispSplit    = 1u << 5;
 constexpr uint32_t kBitSelShift  = 6;
@@ -83,31 +72,10 @@ constexpr uint32_t kFbAddrMask = 0xFFFFFFF0u;
    toggle rate and only reaches the DF pin while DFMODE is set (§17.4.1). */
 constexpr uint32_t kCtl4FrameMaskVal = 0x00F00000u;
 
-/* REDSEL (§17.4.5) and GREENSEL (§17.4.6) expand 8-bit color's 3-bit red and green
-   channels; BITSEL 8-bit color is rejected above, so neither table reaches the panel. */
-
-/* PATn_m spread a shade's duty cycle over n frames (§17.4.8-§17.4.14), and
-   Pr31x00LcdRenderer draws the steady-state shade the RECOMMENDED PATTERN rows realize:
-   any other pattern renders at a gray the guest did not ask for. Line 0 is the high
-   nibble. */
-constexpr uint32_t kPat2_3Recommended = 0x000007DAu;   /* §17.4.8  CTL8  */
-constexpr uint32_t kPat3_4Pat2_4Recommended = 0x7DBEA5A5u; /* §17.4.9  CTL9  */
-constexpr uint32_t kPat4_5Recommended = 0x0007DFBEu;   /* §17.4.10 CTL10 */
-constexpr uint32_t kPat3_5Recommended = 0x0007A5ADu;   /* §17.4.11 CTL11 */
-constexpr uint32_t kPat6_7Recommended = 0x0FBFDFE7u;   /* §17.4.12 CTL12 */
-constexpr uint32_t kPat5_7Recommended = 0x07B5ADEFu;   /* §17.4.13 CTL13 */
-constexpr uint32_t kPat4_7Recommended = 0x0B9DC663u;   /* §17.4.14 CTL14 */
-
-/* Reserved bits: §17.4.2 CTL2 <21> and <11:10>; §17.4.3 CTL3 <3:0>; §17.4.4 CTL4 <3:0>;
-   §17.4.7 CTL7 <31:16>; §17.4.8 CTL8 <31:12>; §17.4.10 CTL10 and §17.4.11 CTL11 <31:20>;
-   §17.4.12 CTL12, §17.4.13 CTL13 and §17.4.14 CTL14 <31:28>. */
+/* Reserved bits: §17.4.2 CTL2 <21> and <11:10>; §17.4.3 CTL3 <3:0>; §17.4.4 CTL4 <3:0>. */
 constexpr uint32_t kCtl2Reserved  = 0x00200C00u;
 constexpr uint32_t kCtl3Reserved  = 0x0000000Fu;
 constexpr uint32_t kCtl4Reserved  = 0x0000000Fu;
-constexpr uint32_t kCtl7Reserved  = 0xFFFF0000u;
-constexpr uint32_t kCtl8Reserved  = 0xFFFFF000u;
-constexpr uint32_t kPat20Reserved = 0xFFF00000u;
-constexpr uint32_t kPat28Reserved = 0xF0000000u;
 
 }  /* namespace */
 
@@ -121,10 +89,13 @@ bool Pr31x00Lcd::ShouldRegister() {
 /* Video Control 1 RESET column: LINECNT, LOADDLY and ENFREEZEFRAME..ENVID 0, BAUDVAL and
    VIDDONEVAL X (§17.4.1 p17-19). */
 void Pr31x00Lcd::OnReady() {
-    intc_  = &emu_.Get<Pr31x00Intc>();
-    clock_ = &emu_.Get<Pr31x00Clock>();
+    intc_       = &emu_.Get<Pr31x00Intc>();
+    clock_      = &emu_.Get<Pr31x00Clock>();
+    cycles_     = &emu_.Get<GuestCycleClock>();
+    load_event_ = cycles_->Add([this] { OnLoadEvent(); });
     emu_.Get<PeripheralDispatcher>().Register(this);
     AttachScanClock();
+    cycles_->RegisterRateListener([this] { RearmLoad(); });
     clock_->RegisterVideoClockListener([this] {
         {
             std::lock_guard<std::mutex> lk(state_mtx_);
@@ -134,6 +105,7 @@ void Pr31x00Lcd::OnReady() {
         }
         ScanEdgesRan();
         OnScanSourceClockChange();
+        RearmLoad();
     });
     emu_.Get<GuestCpuReset>().RegisterResetListener([this](ResetLineKind) {
         std::lock_guard<std::mutex> lk(state_mtx_);
@@ -143,6 +115,9 @@ void Pr31x00Lcd::OnReady() {
         frame_edge_pending_  = false;
         enabled_edge_        = false;
         cp_rate_changed_     = false;
+        freeze_due_          = false;
+        freeze_stopped_      = false;
+        LoadTimingLocked();
     });
 }
 
@@ -151,8 +126,7 @@ void Pr31x00Lcd::OnReady() {
    frame" (§17.3.10 p17-18). One scan tick is one line. */
 RasterScanPeripheral::ScanShape Pr31x00Lcd::ScanShapeLocked() const {
     const uint64_t baudval = (reg_[kCtl1] >> kBaudValShift) & kBaudValMask;
-    const uint64_t vidrate = (reg_[kCtl2] >> kVidRateShift) & kVidRateMask;
-    const uint64_t line_vidclks = (baudval * 2u + 2u) * (vidrate + 1u);
+    const uint64_t line_vidclks = (baudval * 2u + 2u) * (uint64_t{vidrate_} + 1u);
     const GuestCycleClock::Rate vid = clock_->VideoClockRate();
     if (vid.num == 0u || vid.den > UINT64_MAX / line_vidclks) {
         emu_.Get<Fatal>().Die("Pr31x00Lcd: a %llu-VIDCLK line at %llu/%llu Hz cannot be scheduled",
@@ -164,10 +138,9 @@ RasterScanPeripheral::ScanShape Pr31x00Lcd::ScanShapeLocked() const {
 }
 
 RasterScanClock::Frame Pr31x00Lcd::ScanFrameLocked() const {
-    const uint64_t lineval = reg_[kCtl2] & kLineValMask;
     RasterScanClock::Frame f;
-    f.ticks   = lineval + 1u;
-    f.edge[0] = lineval + 1u;
+    f.ticks   = uint64_t{lineval_} + 1u;
+    f.edge[0] = uint64_t{lineval_} + 1u;
     f.edges   = 1u;
     return f;
 }
@@ -187,25 +160,118 @@ void Pr31x00Lcd::ScanEdgesRan() {
 /* ENVID "will enable the video logic" (§17.4.1 p17-20); ENVIDCLK gates VIDCLK (§6.3.1
    p6-6). */
 bool Pr31x00Lcd::ScanWantedLocked() const {
-    return (reg_[kCtl1] & kEnVid) != 0u && clock_->VideoClockRate().num != 0u;
+    return (reg_[kCtl1] & kEnVid) != 0u && clock_->VideoClockRate().num != 0u && !freeze_stopped_;
 }
 
 void Pr31x00Lcd::SyncScanLocked(uint64_t now) {
     const bool wanted = ScanWantedLocked();
     if (wanted == ScanLiveLocked()) return;
     if (wanted) {
+        LoadTimingLocked();
         StartScanLocked(now);
+        ScheduleFreezeLocked(now);
         return;
     }
     held_linecnt_ = LineCntLocked(now);
     StopScanLocked();
+    LoadTimingLocked();
+    freeze_due_ = false;
+}
+
+/* §17.3.2 (p17-9): ENFREEZEFRAME "causes the video baud clock to stop and the video to stop
+   shifting cleanly at the end of the current frame". */
+void Pr31x00Lcd::ScheduleFreezeLocked(uint64_t now) {
+    if ((reg_[kCtl1] & kEnFreezeFrame) == 0u || !ScanLiveLocked() || freeze_due_) return;
+    const uint64_t frame = uint64_t{lineval_} + 1u;
+    freeze_due_  = true;
+    freeze_tick_ = (ScanTicksLocked(now) / frame + 1u) * frame;
+    ArmLoadLocked();
 }
 
 /* "For each new frame, the Line Counter is preloaded with the LINEVAL(9:0) control register
    setting and counts each time a LOAD pulse is generated" (§17.3.4 p17-11). */
 uint32_t Pr31x00Lcd::LineCntLocked(uint64_t now) const {
     if (!ScanLiveLocked()) return held_linecnt_;
-    return (reg_[kCtl2] & kLineValMask) - static_cast<uint32_t>(ScanTickInFrameLocked(now));
+    return lineval_ - static_cast<uint32_t>(ScanTickInFrameLocked(now));
+}
+
+void Pr31x00Lcd::LoadTimingLocked() {
+    vidrate_     = (reg_[kCtl2] >> kVidRateShift) & kVidRateMask;
+    lineval_     = reg_[kCtl2] & kLineValMask;
+    lineval_due_ = false;
+    cycles_->Disarm(load_event_);
+}
+
+/* §17.3.2 (p17-9): the Video Rate Counter "is preloaded with the VIDRATE[9:0] control register
+   setting" and generates the LOAD pulse; §17.3.4 (p17-11): "For each new frame, the Line Counter
+   is preloaded with the LINEVAL(9:0)". */
+void Pr31x00Lcd::WriteTimingLocked(uint32_t value, uint64_t now) {
+    if (ScanLiveLocked() && ((value >> kVidRateShift) & kVidRateMask) != vidrate_) {
+        emu_.Get<Fatal>().Die("Pr31x00Lcd: VIDEO_CTL2 0x%08X changes VIDRATE of 0x%08X while the "
+                              "video logic scans", value, reg_[kCtl2]);
+    }
+    reg_[kCtl2] = value;
+    if (!ScanLiveLocked()) {
+        LoadTimingLocked();
+        return;
+    }
+    const uint64_t tick  = ScanTicksLocked(now);
+    const uint64_t frame = uint64_t{lineval_} + 1u;
+    if (!lineval_due_ && (value & kLineValMask) != lineval_) {
+        lineval_due_  = true;
+        lineval_tick_ = (tick / frame + 1u) * frame;
+    }
+    ArmLoadLocked();
+}
+
+void Pr31x00Lcd::ArmLoadLocked() {
+    if (!ScanLiveLocked() || (!lineval_due_ && !freeze_due_)) {
+        cycles_->Disarm(load_event_);
+        return;
+    }
+    uint64_t tick = UINT64_MAX;
+    if (lineval_due_) tick = lineval_tick_;
+    if (freeze_due_ && freeze_tick_ < tick) tick = freeze_tick_;
+    cycles_->Arm(load_event_, ScanCycleOfTickLocked(tick));
+}
+
+void Pr31x00Lcd::ApplyLoadsLocked(uint64_t now) {
+    if (lineval_due_ && (!freeze_due_ || lineval_tick_ < freeze_tick_)) {
+        const uint64_t at = ScanCycleOfTickLocked(lineval_tick_);
+        if (at <= now) {
+            CatchUpLocked(at);
+            LoadTimingLocked();
+            StartScanLocked(at);
+            if (freeze_due_) freeze_tick_ = uint64_t{lineval_} + 1u;
+        }
+    }
+    if (freeze_due_) {
+        const uint64_t at = ScanCycleOfTickLocked(freeze_tick_);
+        if (at <= now) {
+            CatchUpLocked(at);
+            held_linecnt_ = LineCntLocked(at);
+            StopScanLocked();
+            LoadTimingLocked();
+            freeze_due_     = false;
+            freeze_stopped_ = true;
+            return;
+        }
+    }
+    CatchUpLocked(now);
+    ArmLoadLocked();
+}
+
+void Pr31x00Lcd::OnLoadEvent() {
+    {
+        std::lock_guard<std::mutex> lk(state_mtx_);
+        ApplyLoadsLocked(ScanNow());
+    }
+    ScanEdgesRan();
+}
+
+void Pr31x00Lcd::RearmLoad() {
+    std::lock_guard<std::mutex> lk(state_mtx_);
+    ArmLoadLocked();
 }
 
 bool Pr31x00Lcd::IsEnabled() const { return (reg_[kCtl1] & kEnVid) != 0; }
@@ -222,24 +288,6 @@ uint32_t Pr31x00Lcd::GetGuestH() const { return (reg_[kCtl2] & kLineValMask) + 1
 
 uint32_t Pr31x00Lcd::GetBitsPerPixel() const {
     return 1u << ((reg_[kCtl1] >> kBitSelShift) & 3u);
-}
-
-uint32_t Pr31x00Lcd::ShadeFor(uint32_t raw) const {
-    const uint32_t bpp = GetBitsPerPixel();
-    uint32_t vdat;
-    if (bpp == 2u) {
-        vdat = (reg_[kCtl7] >> (4u * raw)) & 0xFu;
-    } else if (bpp == 1u) {
-        vdat = raw ? 0xFu : 0u;
-    } else {
-        vdat = raw;
-    }
-    /* VDAT is the count of frames a pixel is turned ON, not its brightness, so a
-       driven pixel is dark (§17.3.7, PDF p.346); INVVID then inverts VDAT[3:0]
-       (§17.4.1, PDF p.352). Drop either flip and the panel renders inverted: the
-       OAL sets INVVID and BLUESEL $FB60 maps raw index 3 to VDAT $F, ddi.dll white. */
-    const uint32_t on_duty = IsInverted() ? (0xFu - vdat) : vdat;
-    return 0xFu - on_duty;
 }
 
 uint32_t Pr31x00Lcd::ReadWord(uint32_t addr) {
@@ -260,7 +308,7 @@ uint32_t Pr31x00Lcd::ReadWord(uint32_t addr) {
            read-modify-writes it (v0[13] &= 0xFF0FFFFF). */
         case kCtl4: return reg_[kCtl4];
         default:
-            /* Video Control 2,3,5-14 are write-only (§17.4.2-§17.4.14). */
+            /* Video Control 2 and 3 are write-only (§17.4.2, §17.4.3). */
             HaltUnsupportedAccess("PR31x00 LCD ReadWord", addr, 0);
     }
 }
@@ -279,7 +327,10 @@ void Pr31x00Lcd::WriteWord(uint32_t addr, uint32_t value) {
         cp_rate_changed_ = false;
     }
     ScanEdgesRan();
-    if (cp_rate_changed) OnScanSourceClockChange();
+    if (cp_rate_changed) {
+        OnScanSourceClockChange();
+        RearmLoad();
+    }
     if (enabled_edge) emu_.Get<HostWindow>().OnLcdEnabled();
 }
 
@@ -292,14 +343,16 @@ void Pr31x00Lcd::WriteRegLocked(uint32_t addr, uint32_t value, uint64_t now) {
             if (((value >> kBitSelShift) & 3u) == kBitSel8BitColor) {
                 HaltUnsupportedAccess("PR31x00 LCD BITSEL 8-bit color", addr, value);
             }
-            if (value & kEnFreezeFrame) {
-                HaltUnsupportedAccess("PR31x00 LCD ENFREEZEFRAME", addr, value);
-            }
             const bool was_live   = ScanLiveLocked();
             const bool cp_changed = ((reg_[kCtl1] ^ value) & kCtl1Timing) != 0u;
             const bool was_enabled = (reg_[kCtl1] & kEnVid) != 0u;
             reg_[kCtl1] = value & kCtl1Writable;
+            if ((value & kEnFreezeFrame) == 0u) {
+                freeze_due_     = false;
+                freeze_stopped_ = false;
+            }
             SyncScanLocked(now);
+            ScheduleFreezeLocked(now);
             if (was_live && ScanLiveLocked() && cp_changed) cp_rate_changed_ = true;
             /* Fire only on the ENVID 0->1 edge: the OAL programs VIDEO_CTL2's
                HORZVAL/LINEVAL before it sets ENVID (nk.exe sub_9F434078), so an
@@ -308,16 +361,13 @@ void Pr31x00Lcd::WriteRegLocked(uint32_t addr, uint32_t value, uint64_t now) {
             return;
         }
 
-        case kCtl2:
+        case kCtl2: {
             if (value & kCtl2Reserved) {
                 HaltUnsupportedAccess("PR31x00 LCD VIDEO_CTL2 reserved", addr, value);
             }
-            if (ScanLiveLocked() && ((reg_[kCtl2] ^ value) & kCtl2Timing) != 0u) {
-                emu_.Get<Fatal>().Die("Pr31x00Lcd: VIDEO_CTL2 0x%08X changes VIDRATE/LINEVAL of "
-                                      "0x%08X while the video logic scans", value, reg_[kCtl2]);
-            }
-            reg_[kCtl2] = value;
+            WriteTimingLocked(value, now);
             return;
+        }
 
         case kCtl3:
             if (value & kCtl3Reserved) {
@@ -336,73 +386,9 @@ void Pr31x00Lcd::WriteRegLocked(uint32_t addr, uint32_t value, uint64_t now) {
             reg_[kCtl4] = value;
             return;
 
-        case kCtl5: reg_[kCtl5] = value; return;
-        case kCtl6: reg_[kCtl6] = value; return;
-
-        case kCtl7:
-            if (value & kCtl7Reserved) {
-                HaltUnsupportedAccess("PR31x00 LCD VIDEO_CTL7 reserved", addr, value);
-            }
-            reg_[kCtl7] = value;
-            return;
-
-        case kCtl8:
-            if (value & kCtl8Reserved) {
-                HaltUnsupportedAccess("PR31x00 LCD VIDEO_CTL8 reserved", addr, value);
-            }
-            StorePattern(kCtl8, addr, value, kPat2_3Recommended, "PR31x00 LCD PAT2_3 dither pattern");
-            return;
-
-        case kCtl9:
-            StorePattern(kCtl9, addr, value, kPat3_4Pat2_4Recommended, "PR31x00 LCD PAT3_4/PAT2_4 dither pattern");
-            return;
-
-        case kCtl10:
-            if (value & kPat20Reserved) {
-                HaltUnsupportedAccess("PR31x00 LCD VIDEO_CTL10 reserved", addr, value);
-            }
-            StorePattern(kCtl10, addr, value, kPat4_5Recommended, "PR31x00 LCD PAT4_5 dither pattern");
-            return;
-
-        case kCtl11:
-            if (value & kPat20Reserved) {
-                HaltUnsupportedAccess("PR31x00 LCD VIDEO_CTL11 reserved", addr, value);
-            }
-            StorePattern(kCtl11, addr, value, kPat3_5Recommended, "PR31x00 LCD PAT3_5 dither pattern");
-            return;
-
-        case kCtl12:
-            if (value & kPat28Reserved) {
-                HaltUnsupportedAccess("PR31x00 LCD VIDEO_CTL12 reserved", addr, value);
-            }
-            StorePattern(kCtl12, addr, value, kPat6_7Recommended, "PR31x00 LCD PAT6_7 dither pattern");
-            return;
-
-        case kCtl13:
-            if (value & kPat28Reserved) {
-                HaltUnsupportedAccess("PR31x00 LCD VIDEO_CTL13 reserved", addr, value);
-            }
-            StorePattern(kCtl13, addr, value, kPat5_7Recommended, "PR31x00 LCD PAT5_7 dither pattern");
-            return;
-
-        case kCtl14:
-            if (value & kPat28Reserved) {
-                HaltUnsupportedAccess("PR31x00 LCD VIDEO_CTL14 reserved", addr, value);
-            }
-            StorePattern(kCtl14, addr, value, kPat4_7Recommended, "PR31x00 LCD PAT4_7 dither pattern");
-            return;
-
         default:
             HaltUnsupportedAccess("PR31x00 LCD WriteWord", addr, value);
     }
-}
-
-void Pr31x00Lcd::StorePattern(uint32_t idx, uint32_t addr, uint32_t value,
-                              uint32_t recommended, const char* op) {
-    if (value != recommended) {
-        HaltUnsupportedAccess(op, addr, value);
-    }
-    reg_[idx] = value;
 }
 
 void Pr31x00Lcd::SaveState(StateWriter& w) {
@@ -410,6 +396,13 @@ void Pr31x00Lcd::SaveState(StateWriter& w) {
     for (uint32_t i = 0; i < kRegs; ++i) w.Write("reg", reg_[i]);
     w.Write("held_linecnt", held_linecnt_);
     SaveScanLocked(w);
+    w.Write("vidrate", vidrate_);
+    w.Write("lineval", lineval_);
+    w.Write<uint8_t>("lineval_due", lineval_due_ ? 1u : 0u);
+    w.Write("lineval_tick", lineval_tick_);
+    w.Write<uint8_t>("freeze_due", freeze_due_ ? 1u : 0u);
+    w.Write<uint8_t>("freeze_stopped", freeze_stopped_ ? 1u : 0u);
+    w.Write("freeze_tick", freeze_tick_);
 }
 
 void Pr31x00Lcd::RestoreState(StateReader& r) {
@@ -417,15 +410,29 @@ void Pr31x00Lcd::RestoreState(StateReader& r) {
     for (uint32_t i = 0; i < kRegs; ++i) r.Read("reg", reg_[i]);
     r.Read("held_linecnt", held_linecnt_);
     RestoreScanLocked(r);
+    uint8_t lineval_due = 0;
+    r.Read("vidrate", vidrate_);
+    r.Read("lineval", lineval_);
+    r.Read("lineval_due", lineval_due);
+    r.Read("lineval_tick", lineval_tick_);
+    uint8_t freeze_due = 0, freeze_stopped = 0;
+    r.Read("freeze_due", freeze_due);
+    r.Read("freeze_stopped", freeze_stopped);
+    r.Read("freeze_tick", freeze_tick_);
+    freeze_due_         = freeze_due != 0u;
+    freeze_stopped_     = freeze_stopped != 0u;
+    lineval_due_        = lineval_due != 0u;
     frame_edge_pending_ = false;
     enabled_edge_       = false;
     cp_rate_changed_    = false;
+    cycles_->Disarm(load_event_);
 }
 
 void Pr31x00Lcd::PostRestore() {
     {
         std::lock_guard<std::mutex> lk(state_mtx_);
         if (ScanWantedLocked()) ResumeScanLocked(ScanNow());
+        ArmLoadLocked();
     }
     ScanEdgesRan();
 }

@@ -59,12 +59,12 @@ constexpr uint64_t kPllMultiplier = 8u;
 void Pr31x00Clock::OnReady() {
     ctl_ = kCserSel;
     emu_.Get<PeripheralDispatcher>().Register(this);
-    auto& config = emu_.Get<Tx39ConfigRegister>();
-    config.RegisterReducedFrequencyListener([this, &config] {
-        ApplyCoreRate(config.ReducedFrequency());
+    config_ = &emu_.Get<Tx39ConfigRegister>();
+    config_->RegisterReducedFrequencyListener([this] {
+        ApplyCoreRate(config_->ReducedFrequency());
     });
-    emu_.Get<MipsCpu>().RegisterRestoreListener([this, &config] {
-        SetCoreRate(config.ReducedFrequency());
+    emu_.Get<MipsCpu>().RegisterRestoreListener([this] {
+        SetCoreRate(config_->ReducedFrequency());
     });
     auto& reset = emu_.Get<GuestCpuReset>();
     reset.RegisterResetListener([this](ResetLineKind) {
@@ -84,10 +84,12 @@ GuestCycleClock::Rate Pr31x00Clock::ResetCpuRate() const {
     return GuestCycleClock::Rate{PllHz(), Clk2xPerCpuClock()};
 }
 
-/* CORECLK is F, F/2, F/4, F/8 for RF 00-11 with SLOWBUS 0 (§6.2.1 p6-4). */
+/* CORECLK is F, F/2, F/4, F/8 for RF 00-11 with SLOWBUS 0 and F/2 to F/16 with SLOWBUS 1
+   (§6.2.1 p6-4). */
 void Pr31x00Clock::SetCoreRate(uint32_t rf) {
     const GuestCycleClock::Rate reset = ResetCpuRate();
-    emu_.Get<GuestCycleClock>().SetClockRate(GuestCycleClock::Rate{reset.num, reset.den << rf});
+    const uint32_t shift = rf + ((power_ & kPowerSlowBus) != 0u ? 1u : 0u);
+    emu_.Get<GuestCycleClock>().SetClockRate(GuestCycleClock::Rate{reset.num, reset.den << shift});
 }
 
 void Pr31x00Clock::ApplyCoreRate(uint32_t rf) {
@@ -120,15 +122,13 @@ void Pr31x00Clock::WriteWord(uint32_t addr, uint32_t value) {
 
 void Pr31x00Clock::SetPowerClockBits(uint32_t power_ctl) {
     const uint32_t bits = power_ctl & kPowerClockBits;
-    if (bits & kPowerSlowBus) {
-        emu_.Get<Fatal>().Die("Pr31x00Clock: Power Control 0x%08X sets SLOWBUS; the halved "
-                              "internal clocks are not modeled", power_ctl);
-    }
     const GuestCycleClock::Rate before = VideoClockRate();
     const uint32_t old    = power_;
     power_ = bits;
+    const bool slow_bus_changed = ((old ^ bits) & kPowerSlowBus) != 0u;
+    if (slow_bus_changed) SetCoreRate(config_->ReducedFrequency());
     NotifyVideoClock(before);
-    if (((old ^ bits) & kPowerDivMod) != 0u) NotifyModuleClocks();
+    if (slow_bus_changed || ((old ^ bits) & kPowerDivMod) != 0u) NotifyModuleClocks();
 }
 
 /* CLK2X at the CORECLK rate, CLK = CLK2X / 2, FREECLK = the PLL, XHFREE = FREECLK / 2 (TMPR3911
@@ -136,13 +136,12 @@ void Pr31x00Clock::SetPowerClockBits(uint32_t power_ctl) {
    (Figure 6.2.1 p6-3, Table 6.3.3 p6-11). */
 GuestCycleClock::Rate Pr31x00Clock::Clk2xRate() const {
     const GuestCycleClock::Rate cpu = emu_.Get<GuestCycleClock>().ClockRate();
-    return GuestCycleClock::Rate{cpu.num * Clk2xPerCpuClock(), cpu.den};
+    return cpu.Scaled(Clk2xPerCpuClock(), 1u);
 }
 
 GuestCycleClock::Rate Pr31x00Clock::UpperMuxRate() const {
     if ((power_ & kPowerDivMod) != 0u) return GuestCycleClock::Rate{PllHz(), 2u};
-    const GuestCycleClock::Rate clk2x = Clk2xRate();
-    return GuestCycleClock::Rate{clk2x.num, clk2x.den * 2u};
+    return Clk2xRate().Scaled(1u, 2u);
 }
 
 GuestCycleClock::Rate Pr31x00Clock::LowerMuxRate() const {
@@ -153,7 +152,7 @@ GuestCycleClock::Rate Pr31x00Clock::LowerMuxRate() const {
 GuestCycleClock::Rate Pr31x00Clock::TimerClockRate() const {
     if ((ctl_ & kEnTimerClk) == 0u) return GuestCycleClock::Rate{0u, 1u};
     const GuestCycleClock::Rate upper = UpperMuxRate();
-    return GuestCycleClock::Rate{upper.num, upper.den * kTimerClkDivider};
+    return upper.Scaled(1u, kTimerClkDivider);
 }
 
 /* SIBMCLKDIR 1 drives SIBMCLK out of the divider, 0 takes it from an external oscillator
@@ -169,23 +168,28 @@ GuestCycleClock::Rate Pr31x00Clock::SibMasterClockRate() const {
         emu_.Get<Fatal>().Die("Pr31x00Clock: Clock Control 0x%08X sets SIBMCLKDIV 111", ctl_);
     }
     const GuestCycleClock::Rate lower = LowerMuxRate();
-    return GuestCycleClock::Rate{lower.num, lower.den * (div + 2u)};
+    return lower.Scaled(1u, div + 2u);
 }
 
-/* CSERSEL 0 takes CSERCLK from SIBMCLK (§6.3.1 p6-8); CSERDIV 111 has no divide-modulus. */
+/* CSERSEL: "Clearing this bit to a logic "0" selects the external SIBMCLK source to be the
+   CSERCLK master clock" (§6.3.1 p6-8); CSERDIV 111 has no divide-modulus (Table 6.3.1 p6-9). */
 GuestCycleClock::Rate Pr31x00Clock::UartClockRate(uint32_t uart_clock_enable) const {
     if ((ctl_ & kEnCserClk) == 0u || (ctl_ & uart_clock_enable) == 0u) {
         return GuestCycleClock::Rate{0u, 1u};
-    }
-    if ((ctl_ & kCserSel) == 0u) {
-        emu_.Get<Fatal>().Die("Pr31x00Clock: Clock Control 0x%08X takes CSERCLK from SIBMCLK", ctl_);
     }
     const uint32_t div = (ctl_ >> kCserDivShift) & kDivFieldMask;
     if (div == kDivFieldUndefined) {
         emu_.Get<Fatal>().Die("Pr31x00Clock: Clock Control 0x%08X sets CSERDIV 111", ctl_);
     }
+    if ((ctl_ & kCserSel) == 0u) return SibMasterClockRate().Scaled(1u, div + 2u);
     const GuestCycleClock::Rate lower = LowerMuxRate();
-    return GuestCycleClock::Rate{lower.num, lower.den * kCserPrescaler * (div + 2u)};
+    return lower.Scaled(1u, static_cast<uint64_t>(kCserPrescaler) * (div + 2u));
+}
+
+void Pr31x00Clock::PresetSerialClock(uint32_t cserdiv) {
+    ctl_ = (ctl_ & ~(kDivFieldMask << kCserDivShift)) | ((cserdiv & kDivFieldMask) << kCserDivShift) |
+           kEnCserClk;
+    NotifyModuleClocks();
 }
 
 void Pr31x00Clock::RegisterModuleClockListener(std::function<void()> fn) {
@@ -201,9 +205,7 @@ void Pr31x00Clock::NotifyModuleClocks() {
    philips_nino_300 nk.exe 0x9F411AC0. */
 GuestCycleClock::Rate Pr31x00Clock::VideoClockRate() const {
     if ((ctl_ & kEnVidClk) == 0u) return GuestCycleClock::Rate{0u, 1u};
-    const GuestCycleClock::Rate upper = UpperMuxRate();
-    return GuestCycleClock::Rate{upper.num,
-                                 upper.den << ((power_ >> kPowerVidRfShift) & kPowerVidRfMask)};
+    return UpperMuxRate().Scaled(1u, uint64_t{1} << ((power_ >> kPowerVidRfShift) & kPowerVidRfMask));
 }
 
 void Pr31x00Clock::RegisterVideoClockListener(std::function<void()> fn) {
@@ -212,7 +214,7 @@ void Pr31x00Clock::RegisterVideoClockListener(std::function<void()> fn) {
 
 void Pr31x00Clock::NotifyVideoClock(GuestCycleClock::Rate before) {
     const GuestCycleClock::Rate now = VideoClockRate();
-    if (now.num * before.den == before.num * now.den) return;
+    if (now.Reduced() == before.Reduced()) return;
     for (auto& fn : video_listeners_) fn();
 }
 
@@ -224,4 +226,8 @@ void Pr31x00Clock::SaveState(StateWriter& w) {
 void Pr31x00Clock::RestoreState(StateReader& r) {
     r.Read("ctl", ctl_);
     r.Read("power_clock_bits", power_);
+}
+
+void Pr31x00Clock::PostRestore() {
+    SetCoreRate(config_->ReducedFrequency());
 }

@@ -48,6 +48,7 @@ public:
     /* MIPS16 ASE (U15509EJ2V0UM ch.3); MIPS16EN strapped active on the EM-500 -
        nk_main_kernel.exe executes JALX 0x77C240F7 @0x9F033DBC. */
     bool HasMips16() const override { return true; }
+    bool HasTx39MultiplyAdd() const override { return false; }
 };
 
 }  // namespace

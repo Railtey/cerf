@@ -56,6 +56,8 @@ public:
     bool HasVr41xxPowerModes() const override { return false; }
     /* No MIPS16 on the R3900 core (TMPR39xx-um documents none). */
     bool HasMips16() const override { return false; }
+    /* "The multiply-add instructions are extensions to the R3000A" (PR31700.PDF p.20). */
+    bool HasTx39MultiplyAdd() const override { return true; }
 };
 
 }  // namespace

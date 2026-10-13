@@ -22,4 +22,5 @@ public:
 
     virtual bool FillReceived(uint32_t ddar, uint32_t pa, uint32_t bytes,
                               GuestCycleClock::Rate word_rate) = 0;
+    virtual void OnReceiveRestored() = 0;
 };

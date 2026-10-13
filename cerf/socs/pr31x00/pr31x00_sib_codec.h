@@ -1,8 +1,10 @@
 #pragma once
 
 #include "../../core/service.h"
+#include "pr31x00_sib_audio.h"
 
 #include <cstdint>
+#include <functional>
 
 class StateWriter;
 class StateReader;
@@ -19,6 +21,10 @@ public:
     /* SIBIRQ input-pin level (SIB CTL $074 bit 31, §13.6.6): driven active-high
        while the codec has a pending interrupt. */
     virtual bool IrqAsserted() { return false; }
+
+    virtual uint32_t ReceivedWord(Pr31x00SibCircuit circuit, uint32_t input_word) = 0;
+    virtual bool     AudioOutputAudible() = 0;
+    virtual void     RegisterBeforeChange(std::function<void()> fn) = 0;
 
     virtual void SaveState(StateWriter&) {}
     virtual void RestoreState(StateReader&) {}

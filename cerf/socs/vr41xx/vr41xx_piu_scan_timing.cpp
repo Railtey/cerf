@@ -19,17 +19,24 @@ void Vr41xxPiuScanTiming::Attach(GuestCycleClock* clock, Vr41xxRtcxTicks* rtcx) 
     rtcx_  = rtcx;
 }
 
-/* DataScan "S A S A S A S A", ADPScan "A A A A", S = STABLE x 30 us, A = "about 10 us"
-   (VR4121 UM Figure 20-5, VR4102 UM Figure 19-5); STABLE is the DataScan and CmdScan
-   stabilization time (VR4121 UM 20.3.4); CmdScan fetches "one port only" (20.2 (4)). */
+/* S = STABLE x 30 us, A = "about 10 us" (VR4121 UM Figure 20-5, VR4102 UM Figure 19-5); STABLE
+   is the CmdScan stabilization time (VR4121 UM 20.3.4); CmdScan fetches "one port only" (20.2
+   (4)). */
 uint64_t Vr41xxPiuScanTiming::ReadyCycle(uint16_t kind, uint16_t stable, uint64_t start_tick,
                                          uint64_t start_cycle) {
-    const uint64_t pairs  = kind == kData ? 4u : kind == kCmd ? 1u : 0u;
-    const uint64_t convs  = kind == kCmd ? 1u : 4u;
-    const uint64_t settle = pairs * (stable & 0x003Fu);
+    if (kind != kCmd) return start_cycle;
+    const uint64_t settle = stable & 0x003Fu;
     const uint64_t settled =
         settle == 0u ? start_cycle : std::max(start_cycle, rtcx_->CycleOf(start_tick + settle));
-    return settled + clock_->NsToCycles(static_cast<int64_t>(convs * kAdConversionNs));
+    return settled + clock_->NsToCycles(static_cast<int64_t>(kAdConversionNs));
+}
+
+void Vr41xxPiuScanTiming::SetReady(uint64_t cycle) {
+    const uint64_t now    = clock_->Cycles();
+    const int64_t  now_ns = clock_->NowNs();
+    ready_cycle_ = cycle;
+    ready_ns_    = cycle >= now ? now_ns + clock_->CyclesToNs(cycle - now)
+                                : now_ns - clock_->CyclesToNs(now - cycle);
 }
 
 void Vr41xxPiuScanTiming::Begin(uint16_t kind, uint16_t stable, uint64_t start_tick,
@@ -38,8 +45,8 @@ void Vr41xxPiuScanTiming::Begin(uint16_t kind, uint16_t stable, uint64_t start_t
         emu_.Get<Fatal>().Die("VR41xx PIU: scan %u started while scan %u is in flight; "
                               "PADDLOSTINTR is not modeled", kind, kind_);
     }
-    kind_        = kind;
-    ready_cycle_ = ReadyCycle(kind, stable, start_tick, start_cycle);
+    kind_ = kind;
+    SetReady(ReadyCycle(kind, stable, start_tick, start_cycle));
 }
 
 uint16_t Vr41xxPiuScanTiming::Take() {
@@ -48,14 +55,24 @@ uint16_t Vr41xxPiuScanTiming::Take() {
     return kind;
 }
 
+void Vr41xxPiuScanTiming::Retime(uint64_t now) {
+    if (kind_ == kIdle || ready_cycle_ <= now) return;
+    const int64_t left = ready_ns_ - clock_->NowNs();
+    ready_cycle_ = now + (left > 0 ? clock_->NsToCycles(left) : uint64_t{0});
+}
+
 void Vr41xxPiuScanTiming::Save(StateWriter& w, uint64_t now) const {
+    const int64_t now_ns = clock_->NowNs();
     w.Write("scan_kind", kind_);
-    w.Write("scan_ready_in", kind_ != kIdle && ready_cycle_ > now ? ready_cycle_ - now : uint64_t{0});
+    w.Write("scan_ready_ns", kind_ != kIdle && ready_cycle_ > now && ready_ns_ > now_ns
+                                 ? static_cast<uint64_t>(ready_ns_ - now_ns)
+                                 : uint64_t{0});
 }
 
 void Vr41xxPiuScanTiming::Restore(StateReader& r, uint64_t now) {
     uint64_t ready_in = 0;
     r.Read("scan_kind", kind_);
-    r.Read("scan_ready_in", ready_in);
-    ready_cycle_ = now + ready_in;
+    r.Read("scan_ready_ns", ready_in);
+    ready_ns_    = clock_->NowNs() + static_cast<int64_t>(ready_in);
+    ready_cycle_ = now + clock_->NsToCycles(static_cast<int64_t>(ready_in));
 }

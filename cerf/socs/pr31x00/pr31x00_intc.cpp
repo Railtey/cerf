@@ -10,6 +10,7 @@
 #include "../../state/state_stream.h"
 #include "../guest_cpu_reset.h"
 
+#include <array>
 #include <cstdint>
 
 namespace {
@@ -102,9 +103,80 @@ void Pr31x00Intc::OnReady() {
        (thus interrupts cleared)." */
     emu_.Get<GuestCpuReset>().RegisterResetReleaseListener([this] {
         std::lock_guard<std::mutex> lk(mtx_);
-        for (uint32_t i = 0; i < kSets; ++i) status_[i] = free_running_[i];
+        for (uint32_t i = 0; i < kSets; ++i) {
+            status_[i] = free_running_[i];
+            ClearTimedLocked(i, ~0u);
+        }
         RecomputeLocked();
     });
+}
+
+/* PRIORITYMASK[15:0] enables the high priority interrupt of each level (TMPR3911 §8.3.17,
+   printed p.8-18); the level of each source is the §8.3.6 table (printed p.8-15). */
+bool Pr31x00Intc::PathOpenLocked(uint32_t set, uint32_t bit) const {
+    if ((enable_[set] & bit) != 0u) return true;
+    for (uint32_t level = 1; level <= 15; ++level) {
+        if ((enable6_ & (1u << level)) == 0u) continue;
+        for (const HighPrioTerm& t : kHighPrio[level]) {
+            if (t.set == set && (t.mask & bit) != 0u) return true;
+        }
+    }
+    return false;
+}
+
+void Pr31x00Intc::SettleTimedSources() {
+    std::array<Pr31x00IntcTimedSource*, kMaxTimedSources> sources{};
+    size_t count = 0;
+    {
+        std::lock_guard<std::mutex> lk(mtx_);
+        for (const TimedSource& t : timed_sources_) sources[count++] = t.src;
+    }
+    for (size_t i = 0; i < count; ++i) sources[i]->Settle();
+}
+
+void Pr31x00Intc::LatchTimedLocked() {
+    bool latched = false;
+    for (const TimedSource& t : timed_sources_) {
+        if (!t.src->EdgeSinceClear()) continue;
+        status_[t.set] |= t.bit;
+        t.src->OnLatched();
+        latched = true;
+    }
+    if (latched) RecomputeLocked();
+}
+
+void Pr31x00Intc::ClearTimedLocked(uint32_t set, uint32_t bits) {
+    for (const TimedSource& t : timed_sources_) {
+        if (t.set == set && (bits & t.bit) != 0u) t.src->OnStatusCleared();
+    }
+}
+
+void Pr31x00Intc::UpdateTimedPathsLocked(bool force) {
+    for (TimedSource& t : timed_sources_) {
+        const bool open = PathOpenLocked(t.set, t.bit);
+        if (open == t.open && !force) continue;
+        t.open = open;
+        if (open && t.src->EdgeSinceClear()) {
+            status_[t.set] |= t.bit;
+            t.src->OnLatched();
+        }
+        t.src->OnPathChanged(open);
+    }
+}
+
+void Pr31x00Intc::RegisterTimedSource(uint32_t set, uint32_t bit, Pr31x00IntcTimedSource& src) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    if (set >= kSets) {
+        emu_.Get<Fatal>().Die("Pr31x00Intc: timed source on status set %u bit 0x%08X; the INTC "
+                              "has %u sets", set, bit, kSets);
+    }
+    if (timed_sources_.size() >= kMaxTimedSources) {
+        emu_.Get<Fatal>().Die("Pr31x00Intc: timed source %zu past the %zu the INTC holds",
+                              timed_sources_.size() + 1u, kMaxTimedSources);
+    }
+    const bool open = PathOpenLocked(set, bit);
+    timed_sources_.push_back({set, bit, &src, open});
+    if (open) src.OnPathChanged(true);
 }
 
 /* The priority encoder takes only the Priority Mask and the 15 high priority sources,
@@ -207,6 +279,7 @@ void Pr31x00Intc::ClearPending(uint32_t set, uint32_t bits) {
     }
     status_[set] &= ~bits;
     status_[set] |= free_running_[set];
+    ClearTimedLocked(set, bits);
     RecomputeLocked();
 }
 
@@ -223,15 +296,18 @@ void Pr31x00Intc::RegisterEnableListener(uint32_t set, uint32_t bits,
 }
 
 uint32_t Pr31x00Intc::ReadWord(uint32_t addr) {
-    std::lock_guard<std::mutex> lk(mtx_);
     const uint32_t off = addr - kBase;
+    if (off < kOffStatus0 + kSets * 4u || off == kOffStatus6) SettleTimedSources();
+    std::lock_guard<std::mutex> lk(mtx_);
 
     if (off < kOffStatus0 + kSets * 4u) {
+        LatchTimedLocked();
         const uint32_t set = off / 4u;
         return status_[set];
     }
 
     if (off == kOffStatus6) {
+        LatchTimedLocked();
         uint32_t v = (HighPriorityLevelFor(status_) & 0xFu) << kStatus6IntVectShift;
         if (IrqHighFor(status_)) v |= kStatus6IrqHigh;
         if (IrqLowFor(status_))  v |= kStatus6IrqLow;
@@ -256,6 +332,7 @@ void Pr31x00Intc::WriteWord(uint32_t addr, uint32_t value) {
         const uint32_t set = off / 4u;
         status_[set] &= ~value;
         status_[set] |= free_running_[set];
+        ClearTimedLocked(set, value);
         RecomputeLocked();
         return;
     }
@@ -266,6 +343,7 @@ void Pr31x00Intc::WriteWord(uint32_t addr, uint32_t value) {
             HaltUnsupportedAccess("PR31x00 INTC Enable reserved bits", addr, value);
         }
         enable_[set] = value;
+        UpdateTimedPathsLocked(false);
         RecomputeLocked();
         std::vector<std::function<void()>> fire;
         for (const EnableListener& l : enable_listeners_) {
@@ -285,6 +363,7 @@ void Pr31x00Intc::WriteWord(uint32_t addr, uint32_t value) {
             HaltUnsupportedAccess("PR31x00 INTC Enable6 reserved bits 31-19", addr, value);
         }
         enable6_ = value & (kGlobalEn | kPriorityMask);
+        UpdateTimedPathsLocked(false);
         RecomputeLocked();
         return;
     }
@@ -312,6 +391,7 @@ void Pr31x00Intc::RestoreState(StateReader& r) {
 
 void Pr31x00Intc::PostRestore() {
     std::lock_guard<std::mutex> lk(mtx_);
+    UpdateTimedPathsLocked(true);
     RecomputeLocked();   /* re-drive the CPU Int level from restored state */
 }
 

@@ -1,45 +1,18 @@
 #include "casio_cassiopeia_em500_audio.h"
 
+#include "casio_cassiopeia_em500_capture.h"
+#include "casio_cassiopeia_em500_rate_ladder.h"
+#include "casio_cassiopeia_em500_speaker.h"
+
 #include "../../core/cerf_emulator.h"
 #include "../../core/fatal.h"
 #include "../../core/log.h"
-#include "../../cpu/emulated_memory.h"
-#include "../../host/audio_activity_widget.h"
-#include "../../jit/mips/mips_mmu.h"
+#include "../../host/paced_wave_out.h"
 #include "../../socs/guest_cpu_reset.h"
 #include "../../state/state_stream.h"
 
 #include <algorithm>
 #include <iterator>
-#include <vector>
-
-namespace {
-
-/* loc_F62984 @0xF6298C-@0xF629C0: li $v1 select + li $a1 doubler pairs skipped by
-   btnez on slti 0x2711 / 0x3A99 / 0x4A39 / 0x6591 and slt 0x9C41, at @0xF62990 /
-   @0xF6299A / @0xF629A4 / @0xF629AE / @0xF629B8. */
-uint32_t RateHzFor(uint32_t select, bool doubler) {
-    if (!doubler) {
-        switch (select) {
-            case 0x40u: return 8000u;
-            case 0x10u: return 11025u;
-            case 0x30u: return 16000u;
-            case 0x00u: return 22050u;
-            default: break;
-        }
-    } else {
-        switch (select) {
-            case 0x30u: return 32000u;
-            case 0x00u: return 44100u;
-            default: break;
-        }
-    }
-    LOG(Caution, "EM-500 audio 0x0880 rate select 0x%02X with doubler %u is not a "
-                 "loc_F62984 ladder row\n", select, doubler ? 1u : 0u);
-    CerfFatalExit(CERF_FATAL_RUNTIME_ERROR);
-}
-
-}  /* namespace */
 
 void CasioCassiopeiaEm500Audio::Init(CerfEmulator& emu,
                                      std::function<void()> on_irq_change) {
@@ -51,12 +24,10 @@ void CasioCassiopeiaEm500Audio::Init(CerfEmulator& emu,
     auto& reset = emu.Get<GuestCpuReset>();
     reset.RegisterResetListener([this](ResetLineKind) { OnResetLine(); });
     reset.RegisterResetReleaseListener([this] { on_irq_change_(); });
-    paced_.Start("Em500Audio", /*rate_hz=*/0, /*channels=*/0, /*bits=*/0,
-                 /*allow_resampler=*/true);
-    emu.Get<AudioActivityWidget>().NotePresent();
+    speaker_ = &emu.Get<CasioCassiopeiaEm500Speaker>();
+    mic_     = &emu.Get<CasioCassiopeiaEm500Capture>();
+    ladder_  = &emu.Get<CasioCassiopeiaEm500RateLadder>();
 }
-
-void CasioCassiopeiaEm500Audio::OnShutdown() { paced_.Stop(); }
 
 void CasioCassiopeiaEm500Audio::OnResetLine() {
     {
@@ -70,31 +41,18 @@ void CasioCassiopeiaEm500Audio::OnResetLine() {
         ran_dry_  = false;
         rate_hz_  = 0u;
         channels_ = 0u;
+        capture_  = false;
     }
     status_8A8_.store(0u, std::memory_order_release);
-    paced_.StopAudioOut();
+    speaker_->Abort();
 }
 
 void CasioCassiopeiaEm500Audio::SetRateDoubler(bool on) {
-    std::unique_lock<std::mutex> lk(mtx_);
-    rate_doubler_ = on;
-    RequireStreamFormat(lk);
-}
-
-void CasioCassiopeiaEm500Audio::RequireStreamFormat(std::unique_lock<std::mutex>& lk) {
-    if (!Running() && queued_ == 0u) return;
-    const uint32_t select          = reg_880_ & kRateSelectMask;
-    const bool     doubler         = rate_doubler_;
-    const uint16_t channels        = Channels();
-    const uint32_t stream_rate     = rate_hz_;
-    const uint16_t stream_channels = channels_;
-    const uint32_t queued          = queued_;
-    lk.unlock();
-    const uint32_t rate = RateHzFor(select, doubler);
-    if (rate == stream_rate && channels == stream_channels) return;
-    emu_->Get<Fatal>().Die("EM-500 audio: the %u Hz x %u ch stream changed to %u Hz x %u ch "
-                           "with %u blocks in flight", stream_rate, stream_channels, rate,
-                           channels, queued);
+    {
+        std::lock_guard<std::mutex> lk(mtx_);
+        rate_doubler_ = on;
+    }
+    RequireStreamFormat();
 }
 
 bool CasioCassiopeiaEm500Audio::TryReadHalf(uint32_t off, uint16_t& out) {
@@ -119,9 +77,16 @@ bool CasioCassiopeiaEm500Audio::TryReadHalf(uint32_t off, uint16_t& out) {
 bool CasioCassiopeiaEm500Audio::TryWriteHalf(uint32_t off, uint16_t value) {
     const auto merge = [value](uint32_t& reg) { reg = (reg & 0xFFFF0000u) | value; };
     if (off == kOffLatch8A0) { OnLatchWrite(value, 0xFFFF0000u); return true; }
-    std::unique_lock<std::mutex> lk(mtx_);
+    if (off == kOffCtrl880 || off == kOffFormat888) {
+        {
+            std::lock_guard<std::mutex> lk(mtx_);
+            merge(off == kOffCtrl880 ? reg_880_ : reg_888_);
+        }
+        RequireStreamFormat();
+        return true;
+    }
+    std::lock_guard<std::mutex> lk(mtx_);
     switch (off) {
-        case kOffCtrl880:   merge(reg_880_); break;
         /* dword_F622D4 @0xF62384 lhu 0x884 / @0xF62386 or 1 / @0xF62388 sh, loc_F61D94
            @0xF61DB2-@0xF61DB8, sub_F62520 @0xF6257E-@0xF62586 and loc_F62984
            @0xF62A38-@0xF62A3E / @0xF62A7E-@0xF62A86 read-modify-write 0x0884 with no
@@ -130,13 +95,10 @@ bool CasioCassiopeiaEm500Audio::TryWriteHalf(uint32_t off, uint16_t value) {
             reg_884_ = (reg_884_ & 0xFFFF0000u) |
                        (value & static_cast<uint16_t>(~kEnableBusyBit));
             return true;
-        case kOffFormat888: merge(reg_888_); break;
         case kOffAckL8C8:   merge(reg_8C8_); return true;
         case kOffAckR8CC:   merge(reg_8CC_); return true;
         default: return false;
     }
-    RequireStreamFormat(lk);
-    return true;
 }
 
 bool CasioCassiopeiaEm500Audio::TryReadWord(uint32_t off, uint32_t& out) {
@@ -159,14 +121,15 @@ bool CasioCassiopeiaEm500Audio::TryWriteWord(uint32_t off, uint32_t value) {
     if (off >= kOffDescLo && off <= kOffDescHi && (off & 3u) == 0u) {
         const uint32_t index = (off - kOffDescLo) / 4u;
         uint32_t in_flight = 0;
-        bool     refill    = false;
+        bool     stored    = false;
         {
             std::lock_guard<std::mutex> lk(mtx_);
             in_flight = queued_;
-            refill    = index >= kDescNextStart && queued_ == 1u && Running() && PlayEnabled();
-            if (in_flight == 0u || refill) desc_[index] = value;
+            stored = queued_ == 0u ||
+                     (Running() && Streaming() && index >= kDescNextStart && queued_ == 1u);
+            if (stored) desc_[index] = value;
         }
-        if (in_flight != 0u && !refill) {
+        if (!stored) {
             emu_->Get<Fatal>().Die("EM-500 audio: DMA descriptor 0x%04X write 0x%08X with %u "
                                    "blocks in flight; not modeled", off, value, in_flight);
         }
@@ -176,11 +139,18 @@ bool CasioCassiopeiaEm500Audio::TryWriteWord(uint32_t off, uint32_t value) {
     switch (off) {
         case kOffChan890:   OnChannelWrite(value); return true;
         case kOffLatch8A0:  OnLatchWrite(value, 0u); return true;
+        case kOffCtrl880:
+        case kOffFormat888:
+            {
+                std::lock_guard<std::mutex> lk(mtx_);
+                (off == kOffCtrl880 ? reg_880_ : reg_888_) = value;
+            }
+            RequireStreamFormat();
+            return true;
         default: break;
     }
-    std::unique_lock<std::mutex> lk(mtx_);
+    std::lock_guard<std::mutex> lk(mtx_);
     switch (off) {
-        case kOffCtrl880:   reg_880_ = value; break;
         case kOffStrobe898:
             /* loc_F618CC @0xF6196E sw $s1(=1); dword_F622D4 @0xF6238E sw $a3(=1)
                gated on 0x0884 bit0 @0xF62380; loc_F61EAC @0xF61EF8 lw / @0xF61EFA
@@ -193,14 +163,11 @@ bool CasioCassiopeiaEm500Audio::TryWriteWord(uint32_t off, uint32_t value) {
             reg_898_ = value;
             return true;
         case kOffEnable884: reg_884_ = value & ~kEnableBusyBit; return true;
-        case kOffFormat888: reg_888_ = value; break;
         case kOffGate8C4:   reg_8C4_ = value; return true;
         case kOffAckL8C8:   reg_8C8_ = value; return true;
         case kOffAckR8CC:   reg_8CC_ = value; return true;
         default: return false;
     }
-    RequireStreamFormat(lk);
-    return true;
 }
 
 void CasioCassiopeiaEm500Audio::OnLatchWrite(uint32_t value, uint32_t keep_mask) {
@@ -212,58 +179,83 @@ void CasioCassiopeiaEm500Audio::OnLatchWrite(uint32_t value, uint32_t keep_mask)
         const bool was = Running();
         reg_8A0_ = (reg_8A0_ & keep_mask) | (value & ~keep_mask);
         started = !was && Running();
-        drained = was && !Running() && queued_ == 0u;
+        drained = was && !Running() && queued_ == 0u && !capture_;
         chan    = reg_890_;
     }
-    if (started && (chan & kChanPlay) == 0u) {
+    if (started && (chan & (kChanPlay | kChanCapture)) == 0u) {
         emu_->Get<Fatal>().Die("EM-500 audio: 0x08A0 start with 0x0890 = 0x%08X (playback not "
                                "enabled); not modeled", chan);
     }
-    if (drained) paced_.FinishAudioOut();
-    if (!started) return;
-    StartStream();
-    StartTransfers();
+    if (drained) speaker_->Finish();
+    if (started) StartStream();
 }
 
 void CasioCassiopeiaEm500Audio::OnChannelWrite(uint32_t value) {
-    if ((value & kChanCapture) != 0u) {
-        emu_->Get<Fatal>().Die("EM-500 audio: 0x0890 write 0x%08X enables capture; not modeled",
-                               value);
+    if ((value & kChanPlay) != 0u && (value & kChanCapture) != 0u) {
+        emu_->Get<Fatal>().Die("EM-500 audio: 0x0890 write 0x%08X enables playback and capture "
+                               "together", value);
     }
-    bool     started       = false;
-    bool     clears_active = false;
-    uint32_t in_flight     = 0;
+    bool     started      = false;
+    bool     clears_play  = false;
+    bool     latched_stop = false;
+    uint32_t in_flight    = 0;
     {
         std::lock_guard<std::mutex> lk(mtx_);
-        const bool was = PlayEnabled();
-        in_flight     = queued_;
-        clears_active = was && (value & kChanPlay) == 0u && in_flight != 0u;
-        if (!clears_active) {
+        const bool was  = Streaming();
+        const bool stop = capture_ && CaptureEnabled() && (value & kChanCapture) == 0u &&
+                          queued_ != 0u;
+        in_flight    = queued_;
+        clears_play  = PlayEnabled() && (value & kChanPlay) == 0u && in_flight != 0u;
+        latched_stop = stop && Running();
+        if (!clears_play && !latched_stop) {
             reg_890_ = value;
-            started  = !was && PlayEnabled() && Running();
+            if (stop) {
+                clock_->Disarm(event_);
+                queued_ = 0u;
+            }
+            started  = !was && Streaming() && Running();
         }
     }
-    if (clears_active) {
+    if (clears_play) {
         emu_->Get<Fatal>().Die("EM-500 audio: 0x0890 write 0x%08X clears playback enable with %u "
                                "blocks in flight; not modeled", value, in_flight);
     }
-    if (!started) return;
-    StartStream();
-    StartTransfers();
+    if (latched_stop) {
+        emu_->Get<Fatal>().Die("EM-500 audio: 0x0890 write 0x%08X clears capture enable with the "
+                               "0x08A0 latch set and %u blocks in flight", value, in_flight);
+    }
+    if (started) StartStream();
 }
 
-void CasioCassiopeiaEm500Audio::StartTransfers() {
-    QueueDescriptor(kDescCurStart);
-    QueueDescriptor(kDescNextStart);
+void CasioCassiopeiaEm500Audio::RequireStreamFormat() {
+    uint32_t select = 0, stream_rate = 0, queued = 0;
+    uint16_t channels = 0, stream_channels = 0;
+    bool     doubler = false;
+    {
+        std::lock_guard<std::mutex> lk(mtx_);
+        if (!Running() && queued_ == 0u) return;
+        select          = reg_880_ & kRateSelectMask;
+        doubler         = rate_doubler_;
+        channels        = Channels();
+        stream_rate     = rate_hz_;
+        stream_channels = channels_;
+        queued          = queued_;
+    }
+    const uint32_t rate = ladder_->RequireRate(select, doubler);
+    if (rate == stream_rate && channels == stream_channels) return;
+    emu_->Get<Fatal>().Die("EM-500 audio: the %u Hz x %u ch stream changed to %u Hz x %u ch "
+                           "with %u blocks in flight", stream_rate, stream_channels, rate,
+                           channels, queued);
 }
 
 uint32_t CasioCassiopeiaEm500Audio::FrameBytes() const {
+    if (capture_) return CasioCassiopeiaEm500Capture::kFrameBytes;
     return static_cast<uint32_t>(channels_) * (kBitsPerSample / 8u);
 }
 
 void CasioCassiopeiaEm500Audio::StartStream() {
-    uint32_t select = 0;
-    bool     doubler = false;
+    uint32_t select    = 0;
+    bool     doubler   = false;
     uint32_t in_flight = 0;
     {
         std::lock_guard<std::mutex> lk(mtx_);
@@ -275,37 +267,46 @@ void CasioCassiopeiaEm500Audio::StartStream() {
         emu_->Get<Fatal>().Die("EM-500 audio: stream restart with %u blocks in flight; not "
                                "modeled", in_flight);
     }
-    const uint32_t rate = RateHzFor(select, doubler);
+    const uint32_t rate = ladder_->RequireRate(select, doubler);
     uint16_t channels = 0;
-    bool     fits = false;
+    bool     capture = false;
     {
         std::lock_guard<std::mutex> lk(mtx_);
+        clock_->Disarm(event_);
+        queued_      = 0u;
+        ran_dry_     = false;
         rate_hz_     = rate;
         channels_    = Channels();
-        ran_dry_     = false;
-        fits = frames_.SetRate(clock_->ClockRate(), GuestCycleClock::Rate{rate_hz_, 1u});
+        capture_     = !PlayEnabled() && CaptureEnabled();
+        frames_.SetRate(clock_->ClockRate(), GuestCycleClock::Rate{rate_hz_, 1u});
         frames_.Start(clock_->Cycles());
         channels = channels_;
+        capture  = capture_;
     }
-    if (!fits) {
-        emu_->Get<Fatal>().Die("EM-500 audio: a %u Hz sample clock against the core clock "
-                               "overflows the 64-bit scale", rate);
+    if (capture) {
+        mic_->Request(rate);
+        mic_->Clear();
+    } else {
+        speaker_->SetFormat(rate, channels, kBitsPerSample);
+        speaker_->Begin();
     }
-    paced_.SetFormat(rate, channels, kBitsPerSample);
-    paced_.BeginAudioOut({});
+    QueueDescriptor(kDescCurStart);
+    QueueDescriptor(kDescNextStart);
 }
 
 void CasioCassiopeiaEm500Audio::QueueDescriptor(uint32_t start_index) {
     uint32_t start_va = 0;
     uint32_t end_va = 0;
     uint32_t frame_bytes = 0;
+    bool     capture = false;
     bool     dry = false;
     {
         std::lock_guard<std::mutex> lk(mtx_);
-        if (!Running() || !PlayEnabled()) return;
+        if (!Running() || !Streaming()) return;
         start_va = desc_[start_index];
         end_va = desc_[start_index + 1u];
         frame_bytes = FrameBytes();
+        capture = capture_;
         dry = ran_dry_;
     }
     if (dry) {
@@ -332,16 +333,7 @@ void CasioCassiopeiaEm500Audio::QueueDescriptor(uint32_t start_index) {
         ++queued_;
         if (queued_ == 1u) ArmBlockEndLocked();
     }
-    QueueHostBytes(start_va, length);
-}
-
-void CasioCassiopeiaEm500Audio::QueueHostBytes(uint32_t va, uint32_t length) {
-    std::vector<uint8_t> block(length);
-    /* VR4102 UM ch.5 p131 "(3) kseg1": references are not mapped through TLB and the
-       physical address is the virtual address minus 0xA0000000. */
-    emu_->Get<EmulatedMemory>().CopyOut(MipsSeg::UnmappedPa(va), block.data(), length);
-    emu_->Get<AudioActivityWidget>().MarkTx();
-    paced_.QueueOutputInHostBlocks(block.data(), length);
+    if (!capture) speaker_->QueueBlock(start_va, length);
 }
 
 void CasioCassiopeiaEm500Audio::ArmBlockEndLocked() {
@@ -349,24 +341,43 @@ void CasioCassiopeiaEm500Audio::ArmBlockEndLocked() {
 }
 
 void CasioCassiopeiaEm500Audio::OnRateChange() {
-    bool fits = true;
+    std::lock_guard<std::mutex> lk(mtx_);
+    if (rate_hz_ == 0u) return;
+    frames_.Rescale(clock_->Cycles(), clock_->ClockRate(), GuestCycleClock::Rate{rate_hz_, 1u});
+    if (queued_ != 0u) ArmBlockEndLocked();
+}
+
+void CasioCassiopeiaEm500Audio::RestartHostOutput() {
+    Block    pending[kMaxQueued] = {};
+    uint32_t count = 0, rate = 0, frame_bytes = 0;
+    uint64_t frame = 0;
+    uint16_t channels = 0;
     {
         std::lock_guard<std::mutex> lk(mtx_);
-        if (rate_hz_ == 0u) return;
-        fits = frames_.Rescale(clock_->Cycles(), clock_->ClockRate(),
-                               GuestCycleClock::Rate{rate_hz_, 1u});
-        if (fits && queued_ != 0u) ArmBlockEndLocked();
+        count = queued_;
+        std::copy(blocks_, blocks_ + kMaxQueued, pending);
+        frame       = frames_.TicksAt(clock_->Cycles());
+        rate        = rate_hz_;
+        channels    = channels_;
+        frame_bytes = FrameBytes();
     }
-    if (!fits) {
-        emu_->Get<Fatal>().Die("EM-500 audio: the %u Hz sample phase does not fit the new core "
-                               "clock ratio", rate_hz_);
+    speaker_->SetFormat(rate, channels, kBitsPerSample);
+    speaker_->Begin();
+    if (count == 0u) return;
+    const int64_t left_frames = static_cast<int64_t>(pending[0].end - frame);
+    if (left_frames > 0) {
+        const uint32_t left = static_cast<uint32_t>(left_frames) * frame_bytes;
+        speaker_->QueueBlock(pending[0].va + pending[0].length - left, left);
     }
+    for (uint32_t i = 1; i < count; ++i) speaker_->QueueBlock(pending[i].va, pending[i].length);
 }
 
 void CasioCassiopeiaEm500Audio::OnBlockEnd() {
-    bool drained = false;
+    bool  drained = false;
+    Block captured;
     {
         std::lock_guard<std::mutex> lk(mtx_);
+        if (capture_) captured = blocks_[0];
         desc_[kDescCurStart] = desc_[kDescNextStart];
         desc_[kDescCurEnd] = desc_[kDescNextEnd];
         blocks_[0] = blocks_[1];
@@ -375,11 +386,12 @@ void CasioCassiopeiaEm500Audio::OnBlockEnd() {
         else ran_dry_ = true;
         /* casio_cassiopeia_em500_ppc2000 wavedev.dll loc_F61EAC @0xF61EBC sw 0 -> 0x08A0;
            @0xF61EC8 lw 0x0884 / @0xF61ECC and 4 / @0xF61ECE beqz / @0xF61ED2 b. */
-        drained = queued_ == 0u && !Running();
+        drained = queued_ == 0u && !Running() && !capture_;
     }
+    if (captured.length != 0u) mic_->WriteBlock(captured.va, captured.length);
     status_8A8_.fetch_or(kStatusBlockDone, std::memory_order_acq_rel);
     on_irq_change_();
-    if (drained) paced_.FinishAudioOut();
+    if (drained) speaker_->Finish();
 }
 
 void CasioCassiopeiaEm500Audio::SaveState(StateWriter& w) const {
@@ -400,6 +412,7 @@ void CasioCassiopeiaEm500Audio::SaveState(StateWriter& w) const {
     const bool     streaming = rate_hz_ != 0u;
     w.Write("stream_rate", rate_hz_);
     w.Write("stream_channels", channels_);
+    w.Write<uint8_t>("stream_capture", capture_ ? 1u : 0u);
     w.Write("blocks_queued", queued_);
     w.Write<uint8_t>("stream_ran_dry", ran_dry_ ? 1u : 0u);
     for (const Block& b : blocks_) {
@@ -415,7 +428,8 @@ void CasioCassiopeiaEm500Audio::SaveState(StateWriter& w) const {
 }
 
 void CasioCassiopeiaEm500Audio::RestoreState(StateReader& r) {
-    paced_.StopAudioOut();
+    speaker_->Abort();
+    mic_->Clear();
     std::lock_guard<std::mutex> lk(mtx_);
     r.Read("reg_880", reg_880_);
     r.Read("reg_884", reg_884_);
@@ -433,11 +447,14 @@ void CasioCassiopeiaEm500Audio::RestoreState(StateReader& r) {
     uint16_t status = 0;
     r.Read("status_8A8", status);
     status_8A8_.store(status, std::memory_order_release);
-    uint8_t                  dry = 0;
     RatedTickCount::Position at;
     r.Read("stream_rate", rate_hz_);
     r.Read("stream_channels", channels_);
+    uint8_t capture = 0;
+    r.Read("stream_capture", capture);
+    capture_ = capture != 0;
     r.Read("blocks_queued", queued_);
+    uint8_t dry = 0;
     r.Read("stream_ran_dry", dry);
     ran_dry_ = dry != 0u;
     for (Block& b : blocks_) {
@@ -458,27 +475,17 @@ void CasioCassiopeiaEm500Audio::RestoreState(StateReader& r) {
 }
 
 void CasioCassiopeiaEm500Audio::PostRestore() {
-    Block    pending[kMaxQueued] = {};
-    uint32_t count = 0, rate = 0, frame_bytes = 0;
-    uint64_t frame = 0;
-    uint16_t channels = 0;
+    bool     capture = false;
+    uint32_t rate    = 0;
     {
         std::lock_guard<std::mutex> lk(mtx_);
-        count = queued_;
-        if (count == 0u && !Running()) return;
-        std::copy(blocks_, blocks_ + kMaxQueued, pending);
-        frame       = frames_.TicksAt(clock_->Cycles());
-        rate        = rate_hz_;
-        channels    = channels_;
-        frame_bytes = FrameBytes();
+        if (queued_ == 0u && !Running()) return;
+        capture = capture_;
+        rate    = rate_hz_;
     }
-    paced_.SetFormat(rate, channels, kBitsPerSample);
-    paced_.BeginAudioOut({});
-    if (count == 0u) return;
-    const int64_t left_frames = static_cast<int64_t>(pending[0].end - frame);
-    if (left_frames > 0) {
-        const uint32_t left = static_cast<uint32_t>(left_frames) * frame_bytes;
-        QueueHostBytes(pending[0].va + pending[0].length - left, left);
+    if (capture) {
+        mic_->Request(rate);
+        return;
     }
-    for (uint32_t i = 1; i < count; ++i) QueueHostBytes(pending[i].va, pending[i].length);
+    RestartHostOutput();
 }

@@ -58,6 +58,10 @@ MipsPlaceFn MipsPlaceFnSelector::Select(const MipsDecodedInsn* d) {
             if (d->rt == MipsRegimm::kBLTZAL)      return &PlaceMipsBltzal;
             if (d->rt == MipsRegimm::kBGEZAL)      return &PlaceMipsBgezal;
             return &PlaceMipsUndefined;
+        case MipsOp::kSPECIAL2:
+            if (d->funct == MipsSpecial2::kMADD)   return &PlaceMipsMadd;
+            if (d->funct == MipsSpecial2::kMADDU)  return &PlaceMipsMaddu;
+            return &PlaceMipsUndefined;
         case MipsOp::kBEQ:   return &PlaceMipsBeq;
         case MipsOp::kBNE:   return &PlaceMipsBne;
         case MipsOp::kSPECIAL:

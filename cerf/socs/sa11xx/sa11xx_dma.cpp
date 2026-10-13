@@ -489,6 +489,7 @@ void Sa11xxDma::RestoreState(StateReader& r) {
         clock_->Disarm(done_[ch]);
     }
     for (Sa11xxDmaTransmitObserver* o : transmit_) o->OnTransmitRestored();
+    for (Sa11xxDmaReceiveSource* s : receive_) s->OnReceiveRestored();
 }
 
 void Sa11xxDma::PostRestore() {

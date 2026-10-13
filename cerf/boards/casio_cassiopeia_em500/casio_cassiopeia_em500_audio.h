@@ -1,6 +1,5 @@
 #pragma once
 
-#include "../../host/paced_wave_out.h"
 #include "../../jit/guest_cycle_clock.h"
 #include "../../socs/rated_tick_count.h"
 
@@ -9,6 +8,9 @@
 #include <functional>
 #include <mutex>
 
+class CasioCassiopeiaEm500Capture;
+class CasioCassiopeiaEm500RateLadder;
+class CasioCassiopeiaEm500Speaker;
 class CerfEmulator;
 class StateWriter;
 class StateReader;
@@ -18,7 +20,6 @@ class StateReader;
 class CasioCassiopeiaEm500Audio {
 public:
     void Init(CerfEmulator& emu, std::function<void()> on_irq_change);
-    void OnShutdown();
 
     bool TryReadHalf (uint32_t off, uint16_t& out);
     bool TryWriteHalf(uint32_t off, uint16_t  value);
@@ -61,8 +62,8 @@ private:
     /* casio_cassiopeia_em500_ppc2000 wavedev.dll bit1 playback enable loc_F618CC @0xF6194E (|=2),
        cleared loc_F61EAC @0xF61F0C li 3 / @0xF61F0E neg / @0xF61F10 and; bit0 capture @0xF6277E. */
     static constexpr uint32_t kOffChan890 = 0x0890u;
-    static constexpr uint32_t kChanCapture = 0x1u;
     static constexpr uint32_t kChanPlay    = 0x2u;
+    static constexpr uint32_t kChanCapture = 0x1u;
     /* casio_cassiopeia_em500_ppc2000 wavedev.dll bit0 transfer strobe: loc_F618CC @0xF6196E sw 1;
        cleared loc_F61EAC @0xF61EF8 lw / @0xF61EFA li 2 / @0xF61EFC neg / @0xF61F00 sw; re-strobed
        by the IST decode dword_F622D4 @0xF6238E. */
@@ -108,6 +109,8 @@ private:
     bool Running() const { return (reg_8A0_ & 0x1u) != 0u; }
     /* loc_F618CC @0xF6194E 0x0890 |= 2; loc_F61EAC @0xF61F0C li 3 / neg / and. */
     bool PlayEnabled() const { return (reg_890_ & kChanPlay) != 0u; }
+    bool CaptureEnabled() const { return (reg_890_ & kChanCapture) != 0u; }
+    bool Streaming() const { return PlayEnabled() || CaptureEnabled(); }
     uint16_t Channels() const { return (reg_888_ & 0x2u) != 0u ? 1u : 2u; }
 
     struct Block {
@@ -119,19 +122,20 @@ private:
     uint32_t FrameBytes() const;
     void     OnLatchWrite(uint32_t value, uint32_t keep_mask);
     void     OnChannelWrite(uint32_t value);
-    void     RequireStreamFormat(std::unique_lock<std::mutex>& lk);
+    void     RequireStreamFormat();
     void     StartStream();
-    void     StartTransfers();
     void     QueueDescriptor(uint32_t start_index);
-    void     QueueHostBytes(uint32_t va, uint32_t length);
     void     ArmBlockEndLocked();
+    void     RestartHostOutput();
     void     OnRateChange();
     void     OnBlockEnd();
     void     OnResetLine();
 
     CerfEmulator* emu_ = nullptr;
     std::function<void()> on_irq_change_;
-    PacedWaveOut paced_;
+    CasioCassiopeiaEm500Speaker*          speaker_ = nullptr;
+    CasioCassiopeiaEm500Capture*          mic_     = nullptr;
+    const CasioCassiopeiaEm500RateLadder* ladder_  = nullptr;
 
     GuestCycleClock*        clock_ = nullptr;
     GuestCycleClock::Event* event_ = nullptr;
@@ -159,7 +163,8 @@ private:
     static constexpr uint32_t kMaxQueued = 2;
     Block    blocks_[kMaxQueued] = {};
     uint32_t queued_      = 0;
-    bool     ran_dry_     = false;
     uint32_t rate_hz_     = 0;
     uint16_t channels_    = 0;
+    bool     capture_     = false;
+    bool     ran_dry_     = false;
 };

@@ -175,10 +175,6 @@ void CasioCassiopeiaEm500Companion::OnReady() {
     emu_.Get<PeripheralDispatcher>().Register(this);
 }
 
-void CasioCassiopeiaEm500Companion::OnShutdown() {
-    audio_.OnShutdown();
-}
-
 uint8_t CasioCassiopeiaEm500Companion::ReadByte(uint32_t addr) {
     const uint32_t off = addr - kBase;
     if (uint8_t v; display_.TryReadByte(off, v)) return v;

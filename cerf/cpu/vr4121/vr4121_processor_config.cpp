@@ -56,6 +56,7 @@ public:
        MIPS16EN pin at RTC reset (ibid. 3.1); this board's strap state is not
        established from its ROM - JALX stays undecoded (loud-fatal). */
     bool HasMips16() const override { return false; }
+    bool HasTx39MultiplyAdd() const override { return false; }
 };
 
 }  // namespace

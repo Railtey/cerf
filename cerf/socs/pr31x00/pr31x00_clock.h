@@ -7,6 +7,8 @@
 #include <functional>
 #include <vector>
 
+class Tx39ConfigRegister;
+
 class Pr31x00Clock : public Peripheral {
 public:
     using Peripheral::Peripheral;
@@ -26,6 +28,7 @@ public:
 
     void SaveState(StateWriter& w) override;
     void RestoreState(StateReader& r) override;
+    void PostRestore() override;
 
     GuestCycleClock::Rate ResetCpuRate() const;
     void     SetPowerClockBits(uint32_t power_ctl);
@@ -36,6 +39,7 @@ public:
     GuestCycleClock::Rate SibMasterClockRate() const;
     GuestCycleClock::Rate UartClockRate(uint32_t uart_clock_enable) const;
     void                  RegisterModuleClockListener(std::function<void()> fn);
+    void                  PresetSerialClock(uint32_t cserdiv);
 
 protected:
     uint64_t         PllHz() const;
@@ -51,6 +55,7 @@ private:
     void NotifyVideoClock(GuestCycleClock::Rate before);
     void NotifyModuleClocks();
 
+    Tx39ConfigRegister* config_ = nullptr;
     uint32_t ctl_   = 0;
     uint32_t power_ = 0;
     std::vector<std::function<void()>> video_listeners_;

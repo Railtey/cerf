@@ -34,6 +34,7 @@ public:
     bool HasVr41xxPowerModes() const override { return false; }
     /* No MIPS16 (vr5500a_upd30550a_datasheet.pdf documents none). */
     bool HasMips16() const override { return false; }
+    bool HasTx39MultiplyAdd() const override { return false; }
 };
 
 }  /* namespace */

@@ -26,6 +26,7 @@ public:
     bool Rescale(uint64_t cycle, GuestCycleClock::Rate core, GuestCycleClock::Rate tick);
 
     Position PositionAt(uint64_t cycle) const { return ticks_.PositionAt(cycle); }
+    uint64_t CycleOfTick(uint64_t tick) const { return ticks_.CycleOfTick(tick); }
     uint64_t TickInFrame(uint64_t cycle) const { return ticks_.TicksAt(cycle) % frame_.ticks; }
     bool     EdgeCycle(uint64_t edge, uint64_t& cycle) const;
 

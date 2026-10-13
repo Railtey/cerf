@@ -26,6 +26,7 @@ protected:
     bool     ScanActiveLocked() const { return state_ != State::Stopped; }
     uint64_t ScanTickInFrameLocked(uint64_t now) const;
     uint64_t ScanTicksLocked(uint64_t now) const { return scan_.PositionAt(now).ticks; }
+    uint64_t ScanCycleOfTickLocked(uint64_t tick) const { return scan_.CycleOfTick(tick); }
     void     StartScanLocked(uint64_t now);
     void     StopScanLocked();
     bool     PauseScanLocked(uint64_t now);

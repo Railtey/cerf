@@ -104,12 +104,11 @@ void MipsJit::SetHostChainExit(bool requested) { channel_->SetHostExit(requested
 
 void MipsJit::Run() {
     if (channel_->DispatchRequests() != 0u) {
-        const uint32_t req = channel_->TakeDispatchRequests();
+        const uint32_t req   = channel_->TakeDispatchRequests();
+        const bool     reset = (req & MipsInterruptChannel::kDispatchReset) != 0u;
+        if (reset) DeliverReset();
         if (req & MipsInterruptChannel::kDispatchHostClock) host_requests_->ServiceRequests();
-        if (req & MipsInterruptChannel::kDispatchReset) {
-            DeliverReset();
-            return;
-        }
+        if (reset) return;
     }
 
     if (cpu_state_->idle_wait != MipsIdle::kNone && !channel_->ResumeIdle()) return;

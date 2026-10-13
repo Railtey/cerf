@@ -2,7 +2,6 @@
 
 #include "pr31x00_clock.h"
 #include "pr31x00_intc.h"
-#include "pr31x00_io.h"
 
 #include "../../boards/board_context.h"
 #include "pr31500_id.h"
@@ -54,19 +53,21 @@ constexpr uint32_t kTxHoldReserved = 0xFFFFFE00u;
    off - nk.exe sub_9F411310 stops the CPU only when it is. */
 constexpr uint32_t kCtl1Reset = (1u << 30) | (1u << 6);
 
-constexpr uint32_t kCtl1Uarton   = 1u << 31;
-constexpr uint32_t kCtl1Empty    = 1u << 30;
-constexpr uint32_t kCtl1Reserved = 0x0FFF0000u;
+constexpr uint32_t kCtl1Uarton      = 1u << 31;
+constexpr uint32_t kCtl1Empty       = 1u << 30;
+constexpr uint32_t kCtl1PrxHoldFull = 1u << 29;
+constexpr uint32_t kCtl1RxHoldFull  = 1u << 28;
+constexpr uint32_t kCtl1Reserved    = 0x0FFF0000u;
 constexpr uint32_t kCtl1DisTxd   = 1u << 6;
 constexpr uint32_t kCtl1EnUart   = 1u << 0;
 
-/* ENDMARX<15>/ENDMALOOP<10> arm a circular RX DMA: serial.dll sub_1862BDC opens COM1
-   with CTL1 |= 0x8401 (ENDMARX|ENDMALOOP|ENUART). ENDMATX<14>, ENBREAKHALT<12>,
-   LOOPBACK<4> and the IC-test bits (13/11) stay unmodeled (§16.5.1). */
+/* TMPR3911 §16.5.1 (pages 16-11 / 16-12): ENDMARX<15> ENDMATX<14> TESTMODE<13>
+   ENBREAKHALT<12> ENDMATEST<11> ENDMALOOP<10> LOOPBACK<4>. */
 constexpr uint32_t kCtl1EnDmaRx   = 1u << 15;
+constexpr uint32_t kCtl1EnDmaTx   = 1u << 14;
 constexpr uint32_t kCtl1EnDmaLoop = 1u << 10;
-constexpr uint32_t kCtl1Unmodeled = 0x00007810u;
-constexpr uint32_t kCtl1Writable  = 0x000087EFu;
+constexpr uint32_t kCtl1Unmodeled = 0x00003810u;
+constexpr uint32_t kCtl1Writable  = 0x0000C7EFu;
 
 /* Frame format (§16.5.1): BIT_7<3> selects a 7-bit character, ENPARITY<1> enables
    parity with EVENPARITY<2> selecting even, TWOSTOP<5> selects two stop bits. */
@@ -87,19 +88,22 @@ bool Pr31x00Uart::ShouldRegister() {
 void Pr31x00Uart::OnReady() {
     ctl1_ = kCtl1Reset & kCtl1Writable;
     module_clock_ = &emu_.Get<Pr31x00Clock>();
-    rx_dma_ = std::make_unique<Pr31x00UartRxDma>(emu_, TxSource());
-    rx_dma_->Attach([this](const Pr31x00UartRxDma::RxInts& i) { RaiseRxInts(i); },
-                    [this] { OnRxLineIdle(); });
+    dma_      = &emu_.Get<Pr31x00UartDma>();
+    dma_port_ = dma_->Attach(TxSource(),
+                             [this](const Pr31x00UartDma::RxInts& i) { RaiseRxInts(i); },
+                             [this] { OnRxLineIdle(); });
+    tx_      = &emu_.Get<Pr31x00UartTransmitter>();
+    tx_port_ = tx_->Attach(dma_port_,
+                           [this](const uint8_t* data, size_t n) { DeliverTx(data, n); },
+                           [this](const Pr31x00UartTransmitter::TxInts& i) { RaiseTxInts(i); });
     module_clock_->RegisterModuleClockListener([this] {
-        Pr31x00UartRxDma::LineTiming timing;
-        bool                         moved;
+        bool moved;
         {
             std::lock_guard<std::mutex> lk(mu_);
-            timing = LineTimingLocked();
-            moved  = ComputeLineConfigLocked().baud != fired_baud_;
+            moved = ComputeLineConfigLocked().baud != fired_baud_;
         }
         if (moved) FireLineConfig();
-        else       rx_dma_->SetLine(timing);
+        else       ApplyClockState();
     });
     line_cfg_   = ComputeLineConfigLocked();
     fired_baud_ = line_cfg_.baud;
@@ -109,18 +113,16 @@ void Pr31x00Uart::OnReady() {
     auto& reset = emu_.Get<GuestCpuReset>();
     reset.RegisterResetListener([this](ResetLineKind) {
         { std::lock_guard<std::mutex> lk(mu_); ctl1_ = kCtl1Reset & kCtl1Writable; }
-        rx_dma_->SetArmed(false);
+        dma_->ResetLine(dma_port_);
+        tx_->ResetLine(tx_port_);
     });
     reset.RegisterResetReleaseListener([this] { FireLineConfig(); });
 
-    auto* wiring = emu_.TryGet<Pr31x00SerialWiring>();
-    if (!wiring) return;
-    modem_ = wiring->ForUart(MmioBase());
+    if (auto* wiring = emu_.TryGet<Pr31x00SerialWiring>()) modem_ = wiring->ForUart(MmioBase());
+    modem_lines_ = &emu_.Get<Pr31x00UartModemLines>();
+    modem_port_  = modem_lines_->Attach(modem_ ? &*modem_ : nullptr,
+                                        [this](bool dtr, bool rts) { NotifyControlLines(dtr, rts); });
     if (!modem_) return;
-
-    auto& io = emu_.Get<Pr31x00Io>();
-    io.RegisterMfioOutObserver([this](uint32_t v, uint32_t m) { OnMfioOut(v, m); });
-    io.RegisterIoOutObserver([this](uint32_t v, uint32_t m) { OnIoOut(v, m); });
 
     /* No endpoint is attached yet. The lines are active low, so leaving their pins
        at the 0 they reset to reads as CTS and carrier already asserted - on the Velo
@@ -141,22 +143,27 @@ void Pr31x00Uart::OnShutdown() {
     if (cradle_) cradle_->OnShutdown();
 }
 
-/* The transmit holding and shift registers drain within the access that fills them,
-   so EMPTY never falls and UARTON tracks ENUART with no shutdown delay. RX bytes go
-   to the DMA buffer, not the holding register, so PRXHOLDFULL/RXHOLDFULL stay clear. */
 uint32_t Pr31x00Uart::ReadWord(uint32_t addr) {
     switch (addr - MmioBase()) {
+        /* TMPR3911 §16.5.1 (pages 16-11 / 16-12): UARTON "the module will not shut down until
+           the Transmit Holding Register and Transmit Shift Register are empty"; EMPTY "is high
+           if the Transmit Holding Register and Transmit Shift Register are both empty". */
         case kOffCtl1: {
+            uint32_t v = 0;
+            if (dma_->PrxHoldFull(dma_port_)) v |= kCtl1PrxHoldFull;
+            if (dma_->RxHoldFull(dma_port_))  v |= kCtl1RxHoldFull;
+            const bool tx_empty = tx_->Empty(tx_port_);
             std::lock_guard<std::mutex> lk(mu_);
-            uint32_t v = (ctl1_ & kCtl1Writable) | kCtl1Empty;
-            if (ctl1_ & kCtl1EnUart) v |= kCtl1Uarton;
+            v |= ctl1_ & kCtl1Writable;
+            if (tx_empty) v |= kCtl1Empty;
+            if ((ctl1_ & kCtl1EnUart) || !tx_empty) v |= kCtl1Uarton;
             return v;
         }
 
         /* DMA_COUNT (§16.5.5), read-only: the receive DMA's own address counter. The
            driver adds it to the buffer base to find the write offset and copies up to
            there (serial.dll sub_1EB2620), keeping its read cursor privately. */
-        case kOffDmaCount: return rx_dma_->Count();
+        case kOffDmaCount: return dma_->Count(dma_port_);
 
         default: HaltUnsupportedAccess("PR31x00 UART ReadWord", addr, 0);
     }
@@ -167,9 +174,6 @@ void Pr31x00Uart::WriteWord(uint32_t addr, uint32_t value) {
         case kOffCtl1: WriteCtl1(addr, value); return;
 
         case kOffCtl2:
-            if (value & ~kCtl2BaudMask) {
-                HaltUnsupportedAccess("PR31x00 UART CTL2 reserved", addr, value);
-            }
             { std::lock_guard<std::mutex> lk(mu_); ctl2_baud_ = value & kCtl2BaudMask; }
             FireLineConfig();
             return;
@@ -178,14 +182,14 @@ void Pr31x00Uart::WriteWord(uint32_t addr, uint32_t value) {
             if (value & kDmaCtl1Reserved) {
                 HaltUnsupportedAccess("PR31x00 UART DMA_CTL1 reserved", addr, value);
             }
-            rx_dma_->SetBuffer(value);
+            dma_->SetBuffer(dma_port_, value);
             return;
 
         case kOffDmaCtl2:
             if (value & kDmaCtl2Reserved) {
                 HaltUnsupportedAccess("PR31x00 UART DMA_CTL2 reserved", addr, value);
             }
-            rx_dma_->SetLength((value & kDmaLenMask) + 1u);
+            dma_->SetLength(dma_port_, (value & kDmaLenMask) + 1u);
             return;
 
         case kOffData: WriteTxHold(addr, value); return;
@@ -201,21 +205,60 @@ void Pr31x00Uart::WriteCtl1(uint32_t addr, uint32_t value) {
     if (value & kCtl1Unmodeled) {
         HaltUnsupportedAccess("PR31x00 UART CTL1 unmodeled control", addr, value);
     }
-    /* ENDMALOOP clear stops the DMA when it reaches the end of the buffer (§16.2.4);
-       only the looping channel is modelled. */
+    if ((value & kCtl1EnDmaRx) && (value & kCtl1EnDmaTx)) {
+        HaltUnsupportedAccess("PR31x00 UART CTL1 sets ENDMARX and ENDMATX", addr, value);
+    }
     if ((value & kCtl1EnDmaRx) && !(value & kCtl1EnDmaLoop)) {
         HaltUnsupportedAccess("PR31x00 UART RX DMA armed without ENDMALOOP", addr, value);
     }
+    if ((value & kCtl1EnDmaTx) && (value & kCtl1EnDmaLoop)) {
+        HaltUnsupportedAccess("PR31x00 UART TX DMA armed with ENDMALOOP", addr, value);
+    }
+    bool tx_start;
     {
         std::lock_guard<std::mutex> lk(mu_);
-        ctl1_ = value & kCtl1Writable;   /* UARTON, EMPTY, PRXHOLDFULL, RXHOLDFULL are read-only */
+        tx_start = (value & kCtl1EnDmaTx) != 0u && (ctl1_ & kCtl1EnDmaTx) == 0u;
+        ctl1_    = value & kCtl1Writable;
     }
-    rx_dma_->SetArmed((value & kCtl1EnDmaRx) != 0u);
+    if ((value & kCtl1EnDmaTx) == 0u) tx_->CancelDma(tx_port_);
+    dma_->SetControl(dma_port_, (value & kCtl1EnUart) != 0u, (value & kCtl1EnDmaRx) != 0u);
     FireLineConfig();
+    if (tx_start) TransmitDma(addr, value);
 }
 
-/* DISTXD disconnects TXD from the pin, so a byte written while it is set never
-   reaches the wire; when an endpoint is attached its stream replaces the debug sink. */
+/* TMPR3911 §16.5.1 (page 16-12) ENDMATX "should not be set until the UARTDMACNTL1 and
+   UARTDMACNTL2 registers are setup, the module is enabled and the empty flag is set". */
+void Pr31x00Uart::TransmitDma(uint32_t addr, uint32_t control) {
+    if ((control & kCtl1EnUart) == 0u || (control & kCtl1DisTxd) != 0u) {
+        HaltUnsupportedAccess("PR31x00 UART TX DMA armed with ENUART clear or DISTXD set",
+                              addr, control);
+    }
+    if (dma_->Length(dma_port_) == 0u) {
+        HaltUnsupportedAccess("PR31x00 UART TX DMA armed with no DMALENGTH programmed",
+                              addr, control);
+    }
+    tx_->StartDma(tx_port_);
+}
+
+void Pr31x00Uart::RaiseTxInts(const Pr31x00UartTransmitter::TxInts& ints) {
+    uint32_t bits = 0;
+    if (ints.sent)     bits |= TxEmptyIntBit() | TxAvailIntBit();
+    if (ints.dma_full) bits |= DmaFullIntBit();
+    if (ints.dma_half) bits |= DmaHalfIntBit();
+    emu_.Get<Pr31x00Intc>().SetPending(1, bits);
+}
+
+void Pr31x00Uart::DeliverTx(const uint8_t* data, size_t n) {
+    std::lock_guard<std::recursive_mutex> elk(endpoint_mu_);
+    if (endpoint_) {
+        endpoint_->OnGuestTx(data, n);
+        if (cradle_) cradle_->MarkTx();
+        return;
+    }
+    auto& sink = emu_.Get<KernelDebugSink>();
+    for (size_t i = 0; i < n; ++i) sink.EmitChar(static_cast<char>(data[i]), tx_line_, TxSource());
+}
+
 void Pr31x00Uart::WriteTxHold(uint32_t addr, uint32_t value) {
     if (value & kTxHoldReserved) {
         HaltUnsupportedAccess("PR31x00 UART TXHOLD reserved", addr, value);
@@ -231,48 +274,23 @@ void Pr31x00Uart::WriteTxHold(uint32_t addr, uint32_t value) {
         }
     }
 
-    const uint8_t byte = static_cast<uint8_t>(value & kTxDataMask);
-    {
-        std::lock_guard<std::recursive_mutex> elk(endpoint_mu_);
-        if (endpoint_) {
-            endpoint_->OnGuestTx(&byte, 1);
-            if (cradle_) cradle_->MarkTx();
-        } else {
-            emu_.Get<KernelDebugSink>().EmitChar(static_cast<char>(byte), tx_line_,
-                                                 TxSource());
-        }
-    }
-    emu_.Get<Pr31x00Intc>().SetPending(1, TxEmptyIntBit() | TxAvailIntBit());
+    tx_->WriteHold(tx_port_, static_cast<uint8_t>(value & kTxDataMask));
 }
 
 void Pr31x00Uart::PushRx(const uint8_t* data, size_t n) {
     if (n == 0) return;
     {
         std::lock_guard<std::mutex> lk(mu_);
-        /* The receiver is off, so nothing reaches the Receive Holding Register. */
         if ((ctl1_ & kCtl1EnUart) == 0u) return;
-        /* ENUART without ENDMARX leaves each byte in the Receive Holding Register for
-           the CPU to read (§16.2.4). serial.dll sets and clears the two together (Open
-           sub_1EB3374 CTL1 |= 0x8401, Close sub_1EB3550 CTL1 &= ~0x8401), so that path
-           never runs and the holding-register receive is not modelled. */
-        if ((ctl1_ & kCtl1EnDmaRx) == 0u) {
-            HaltUnsupportedAccess("PR31x00 UART receive with no RX DMA armed",
-                                  MmioBase(), ctl1_);
-        }
     }
-    /* An armed channel whose DMA_CTL2 was never written has no buffer to fill. */
-    if (rx_dma_->Length() == 0u) {
-        HaltUnsupportedAccess("PR31x00 UART RX DMA armed with no DMALENGTH programmed",
-                              MmioBase(), 0);
-    }
-    rx_dma_->Receive(data, n);
+    dma_->Receive(dma_port_, data, n);
     if (cradle_) cradle_->MarkRx();
 }
 
 /* The wire, not the guest's buffer: the DMA engine cannot tell how far the driver has
    read, so a feeder is free to send again once its bytes have all been clocked out. */
 bool Pr31x00Uart::RxEmpty() const {
-    return rx_dma_->LineIdle();
+    return dma_->LineIdle(dma_port_);
 }
 
 void Pr31x00Uart::OnRxLineIdle() {
@@ -280,9 +298,10 @@ void Pr31x00Uart::OnRxLineIdle() {
     if (rx_drain_cb_) rx_drain_cb_();
 }
 
-void Pr31x00Uart::RaiseRxInts(const Pr31x00UartRxDma::RxInts& ints) {
+void Pr31x00Uart::RaiseRxInts(const Pr31x00UartDma::RxInts& ints) {
     uint32_t bits = 0;
     if (ints.rx)       bits |= RxIntBit();
+    if (ints.overrun)  bits |= RxOverrunIntBit();
     if (ints.dma_half) bits |= DmaHalfIntBit();
     if (ints.dma_full) bits |= DmaFullIntBit();
     emu_.Get<Pr31x00Intc>().SetPending(1, bits);
@@ -293,23 +312,8 @@ void Pr31x00Uart::SetRxDrainCallback(RxDrainFn cb) {
     rx_drain_cb_ = std::move(cb);
 }
 
-/* An asserted line drives its pin low (Nino GetModemStatus sub_1861A68 takes CTS on
-   (MFIODIN & 0x40)==0; Velo sub_1EB1F04 takes CTS on (MFIODIN & 0x40000000)==0 and
-   DCD on (IODIN & 0x10)==0), so the level handed to the pin is the inverse. */
 void Pr31x00Uart::SetModemInputs(bool cts, bool dsr, bool ri, bool dcd) {
-    if (!modem_) return;
-    DriveModemInput(modem_->cts, cts);
-    DriveModemInput(modem_->dcd, dcd);
-    DriveModemInput(modem_->dsr, dsr);
-    DriveModemInput(modem_->ri,  ri);
-}
-
-void Pr31x00Uart::DriveModemInput(const Pr31x00SerialPin& p, bool asserted) {
-    if (!p.Wired()) return;
-    auto&          io  = emu_.Get<Pr31x00Io>();
-    const uint32_t pin = static_cast<uint32_t>(p.pin);
-    if (p.bank == Pr31x00SerialPin::Bank::Mfio) io.DriveMfioInput(pin, !asserted);
-    else                                        io.DriveIoInput(pin, !asserted);
+    if (modem_) modem_lines_->SetInputs(modem_port_, cts, dsr, ri, dcd);
 }
 
 SerialLine::LineConfig Pr31x00Uart::ComputeLineConfigLocked() const {
@@ -325,16 +329,14 @@ SerialLine::LineConfig Pr31x00Uart::ComputeLineConfigLocked() const {
     return c;
 }
 
-/* §16.4 p16-9: start, 7 or 8 data bits, parity, then the transfer as the stop bit is clocked in;
-   TWOSTOP adds a stop bit on the transmitter only (p16-13). */
-Pr31x00UartRxDma::LineTiming Pr31x00Uart::LineTimingLocked() const {
-    const LineConfig c = ComputeLineConfigLocked();
-    Pr31x00UartRxDma::LineTiming t;
-    t.uart_clock          = module_clock_->UartClockRate(ClockEnableBit());
-    t.uart_clocks_per_bit = kClocksPerBaud * (static_cast<uint64_t>(ctl2_baud_) + 1u);
-    t.transfer_bits       = 1u + c.data_bits + (c.parity != LineConfig::Parity::None ? 1u : 0u) + 1u;
-    t.frame_bits          = t.transfer_bits + (c.stop == LineConfig::Stop::Two ? 1u : 0u);
-    return t;
+bool Pr31x00Uart::UartClockRunning() const {
+    return module_clock_->UartClockRate(ClockEnableBit()).num != 0u;
+}
+
+void Pr31x00Uart::ApplyClockState() {
+    const bool running = UartClockRunning();
+    dma_->SetClockRunning(dma_port_, running);
+    tx_->SetClockRunning(tx_port_, running);
 }
 
 SerialLine::LineConfig Pr31x00Uart::GetLineConfig() const {
@@ -348,79 +350,29 @@ void Pr31x00Uart::SetLineConfigCallback(LineConfigFn cb) {
 }
 
 void Pr31x00Uart::FireLineConfig() {
-    LineConfig                   cfg;
-    Pr31x00UartRxDma::LineTiming timing;
+    LineConfig cfg;
     {
         std::lock_guard<std::mutex> lk(mu_);
         cfg         = ComputeLineConfigLocked();
-        timing      = LineTimingLocked();
         fired_baud_ = cfg.baud;
         line_cfg_   = cfg;
     }
-    rx_dma_->SetLine(timing);
+    ApplyClockState();
     std::lock_guard<std::recursive_mutex> elk(endpoint_mu_);
     if (line_cfg_cb_) line_cfg_cb_(cfg);
 }
 
 void Pr31x00Uart::SetEndpoint(SerialEndpoint* ep) {
     bool dtr, rts;
-    { std::lock_guard<std::mutex> lk(mu_); dtr = dtr_; rts = rts_; }
+    modem_lines_->Control(modem_port_, dtr, rts);
     std::lock_guard<std::recursive_mutex> elk(endpoint_mu_);
     endpoint_ = ep;
     if (ep) ep->OnControlLines(dtr, rts);
 }
 
-/* SET_DTR/SET_RTS clear the pin's bit, so an asserted output reads low. DTR and RTS
-   can sit in different banks (Velo RTS on MFIODOUT<31>, DTR on IODOUT<3>), so each
-   bank's latest value is kept and both lines recomputed from whichever one moved. */
-bool Pr31x00Uart::AssertedLocked(const Pr31x00SerialPin& p) const {
-    if (!p.Wired()) return false;
-    const bool     mfio = p.bank == Pr31x00SerialPin::Bank::Mfio;
-    const uint32_t dout = mfio ? mfio_dout_ : io_dout_;
-    const uint32_t mask = mfio ? mfio_out_mask_ : io_out_mask_;
-    const uint32_t bit  = 1u << p.pin;
-    /* The pins reset to inputs, so an undriven line is not asserted even though its
-       DOUT bit reads 0. */
-    if ((mask & bit) == 0u) return false;
-    return (dout & bit) == 0u;
-}
-
-bool Pr31x00Uart::RecomputeControlLocked(bool& dtr, bool& rts) {
-    const bool nd = AssertedLocked(modem_->dtr);
-    const bool nr = AssertedLocked(modem_->rts);
-    if (nd == dtr_ && nr == rts_) return false;
-    dtr_ = nd;
-    rts_ = nr;
-    dtr  = nd;
-    rts  = nr;
-    return true;
-}
-
 void Pr31x00Uart::NotifyControlLines(bool dtr, bool rts) {
     std::lock_guard<std::recursive_mutex> elk(endpoint_mu_);
     if (endpoint_) endpoint_->OnControlLines(dtr, rts);
-}
-
-void Pr31x00Uart::OnMfioOut(uint32_t mfio_dout, uint32_t out_mask) {
-    bool dtr, rts;
-    {
-        std::lock_guard<std::mutex> lk(mu_);
-        mfio_dout_     = mfio_dout;
-        mfio_out_mask_ = out_mask;
-        if (!RecomputeControlLocked(dtr, rts)) return;
-    }
-    NotifyControlLines(dtr, rts);
-}
-
-void Pr31x00Uart::OnIoOut(uint32_t io_dout, uint32_t out_mask) {
-    bool dtr, rts;
-    {
-        std::lock_guard<std::mutex> lk(mu_);
-        io_dout_     = io_dout;
-        io_out_mask_ = out_mask;
-        if (!RecomputeControlLocked(dtr, rts)) return;
-    }
-    NotifyControlLines(dtr, rts);
 }
 
 /* Every insert and eject takes SerialCradle::mtx_ and then this mu_ (SetEndpoint,
@@ -429,28 +381,17 @@ void Pr31x00Uart::OnIoOut(uint32_t io_dout, uint32_t out_mask) {
    user ejecting the card. */
 void Pr31x00Uart::SaveState(StateWriter& w) {
     /* Not named ctl1: dlgs.h (via windows.h) defines that as a dialog control id. */
-    uint32_t ctl1_v, baud, mfio_dout, mfio_mask, io_dout, io_mask;
-    uint8_t  dtr, rts;
+    uint32_t ctl1_v, baud;
     {
         std::lock_guard<std::mutex> lk(mu_);
-        ctl1_v    = ctl1_;
-        baud      = ctl2_baud_;
-        mfio_dout = mfio_dout_;
-        mfio_mask = mfio_out_mask_;
-        io_dout   = io_dout_;
-        io_mask   = io_out_mask_;
-        dtr       = dtr_ ? 1u : 0u;
-        rts       = rts_ ? 1u : 0u;
+        ctl1_v = ctl1_;
+        baud   = ctl2_baud_;
     }
     w.Write("ctl1_v", ctl1_v);
     w.Write("baud", baud);
-    w.Write("mfio_dout", mfio_dout);
-    w.Write("mfio_mask", mfio_mask);
-    w.Write("io_dout", io_dout);
-    w.Write("io_mask", io_mask);
-    w.Write("dtr", dtr);
-    w.Write("rts", rts);
-    rx_dma_->SaveState(w);
+    modem_lines_->SaveState(modem_port_, w);
+    dma_->SaveState(dma_port_, w);
+    tx_->SaveState(tx_port_, w);
     if (cradle_) cradle_->SaveCradleState(w);
 }
 
@@ -459,36 +400,25 @@ void Pr31x00Uart::RestoreState(StateReader& r) {
         std::lock_guard<std::mutex> lk(mu_);
         r.Read("ctl1_v", ctl1_);
         r.Read("baud", ctl2_baud_);
-        r.Read("mfio_dout", mfio_dout_);
-        r.Read("mfio_mask", mfio_out_mask_);
-        r.Read("io_dout", io_dout_);
-        r.Read("io_mask", io_out_mask_);
-        uint8_t b = 0;
-        r.Read("dtr", b); dtr_ = b != 0;
-        r.Read("rts", b); rts_ = b != 0;
     }
+    modem_lines_->RestoreState(modem_port_, r);
     {
         std::lock_guard<std::recursive_mutex> elk(endpoint_mu_);
         endpoint_ = nullptr;
         rx_drain_cb_ = nullptr;
         line_cfg_cb_ = nullptr;
     }
-    rx_dma_->RestoreState(r);
+    dma_->RestoreState(dma_port_, r);
+    tx_->RestoreState(tx_port_, r);
     if (cradle_) cradle_->RestoreCradleState(r);
 }
 
-/* RestoreState detaches the line's endpoint, and WriteTxHold routes guest TX to the
-   debug sink whenever no endpoint is bound, so a restored port only carries traffic
-   once the cradle re-inserts the card it saved. The DMA engine's clock rate is derived
-   from CTL1 and CTL2, so it is re-applied once both are back. */
 void Pr31x00Uart::PostRestore() {
-    Pr31x00UartRxDma::LineTiming timing;
     {
         std::lock_guard<std::mutex> lk(mu_);
-        timing      = LineTimingLocked();
         line_cfg_   = ComputeLineConfigLocked();
         fired_baud_ = line_cfg_.baud;
     }
-    rx_dma_->SetLine(timing);
+    ApplyClockState();
     if (cradle_) cradle_->PostRestore();
 }

@@ -12,6 +12,11 @@
 
 namespace {
 
+/* UCB1300 datasheet p.5, pin table note 6: "SIBDOUT reset state is 1 until the SIB bus is
+   running." */
+constexpr uint32_t kHeldCodecWord    = 0xFFFFFFFFu;
+constexpr uint32_t kInputPathOffWord = 0u;
+
 class Ucb1x00SibAdapter : public Pr31x00SibCodec {
 public:
     using Pr31x00SibCodec::Pr31x00SibCodec;
@@ -31,6 +36,16 @@ public:
         emu_.Get<Ucb1x00Codec>().WriteReg(reg, value);
     }
     bool IrqAsserted() override { return emu_.Get<Ucb1x00Codec>().IrqAsserted(); }
+    uint32_t ReceivedWord(Pr31x00SibCircuit circuit, uint32_t input_word) override {
+        const Ucb1x00Codec::InputState in = emu_.Get<Ucb1x00Codec>().Input(
+            circuit == Pr31x00SibCircuit::Sound ? Ucb1x00Codec::Path::Audio : Ucb1x00Codec::Path::Telecom);
+        if (in == Ucb1x00Codec::InputState::Held) return kHeldCodecWord;
+        return in == Ucb1x00Codec::InputState::On ? input_word : kInputPathOffWord;
+    }
+    bool AudioOutputAudible() override { return emu_.Get<Ucb1x00Codec>().AudioOutputAudible(); }
+    void RegisterBeforeChange(std::function<void()> fn) override {
+        emu_.Get<Ucb1x00Codec>().RegisterBeforeChange(std::move(fn));
+    }
     void SaveState(StateWriter& w) override    { emu_.Get<Ucb1x00Codec>().SaveState(w); }
     void RestoreState(StateReader& r) override { emu_.Get<Ucb1x00Codec>().RestoreState(r); }
 };

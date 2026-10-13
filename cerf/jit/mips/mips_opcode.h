@@ -34,6 +34,7 @@ namespace MipsOp {            /* major opcode, bits 31..26 */
     constexpr uint32_t kDADDIU  = 0x19;   /* doubleword add immediate unsigned (64-bit, no trap) */
     constexpr uint32_t kLDL     = 0x1A;   /* load doubleword left (unaligned, 64-bit) */
     constexpr uint32_t kLDR     = 0x1B;   /* load doubleword right (unaligned, 64-bit) */
+    constexpr uint32_t kSPECIAL2 = 0x1C;  /* R3900 MADD / MADDU 011100 (TMPR39xx-um p.155) */
     constexpr uint32_t kJALX    = 0x1D;   /* jump and link exchange to MIPS16 (VR4100 Series UM
                                              U15509EJ2V0UM 3.4.1; QEMU translate.c OPC_JALX) */
     constexpr uint32_t kLB      = 0x20;
@@ -110,6 +111,11 @@ namespace MipsSpecial {       /* funct, bits 5..0 (op == SPECIAL) */
     constexpr uint32_t kDSRL    = 0x3A;   /* doubleword shift right logical (64-bit, sa 0..31) */
     constexpr uint32_t kDSLL32  = 0x3C;   /* doubleword shift left logical +32 (64-bit) */
     constexpr uint32_t kDSRL32  = 0x3E;   /* doubleword shift right logical +32 (R bit = DROTR32) */
+}
+
+namespace MipsSpecial2 {      /* funct, bits 5..0 (op == SPECIAL2; TMPR39xx-um p.155-156) */
+    constexpr uint32_t kMADD    = 0x00;
+    constexpr uint32_t kMADDU   = 0x01;
 }
 
 namespace MipsRegimm {        /* rt, bits 20..16 (op == REGIMM) */

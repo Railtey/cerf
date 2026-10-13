@@ -61,6 +61,10 @@ public:
        (ibid. 3.4.3). */
     virtual bool HasMips16() const = 0;
 
+    /* R3900 core MADD / MADDU (TMPR39xx-um p.155-156): major opcode 011100, funct 000000 /
+       000001. */
+    virtual bool HasTx39MultiplyAdd() const = 0;
+
     /* Whether this SoC implements CP0 register `rd` - gates the config-dependent
        registers (Count/Compare, WatchLo/WatchHi); always-present registers
        return true and are further validated by Cp0RegOffset. Consumed by the

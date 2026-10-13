@@ -7,7 +7,7 @@
 class Pr31x00Clock;
 class Pr31x00Intc;
 
-/* Philips PR31x00 Video Module, TMPR3911/3912 ch.17. Registers $028-$05C. */
+/* TMPR3911 §17.4.1-§17.4.4: Video Control 1-4 ($028-$034). */
 class Pr31x00Lcd : public RasterScanPeripheral {
 public:
     using RasterScanPeripheral::RasterScanPeripheral;
@@ -16,7 +16,7 @@ public:
     void OnReady() override;
 
     uint32_t MmioBase() const override { return 0x10C00028u; }
-    uint32_t MmioSize() const override { return 0x38u; }   /* $028-$05F */
+    uint32_t MmioSize() const override { return 0x10u; }
 
     uint32_t ReadWord(uint32_t addr) override;
     void     WriteWord(uint32_t addr, uint32_t value) override;
@@ -34,10 +34,6 @@ public:
     uint32_t GetGuestH() const;
     uint32_t GetBitsPerPixel() const;
 
-    /* Maps a raw pixel value to its 4-bit gray shade. 4-bit gray needs no LUT;
-       2-bit gray selects one of four BLUESEL nibbles (§17.3.7). */
-    uint32_t ShadeFor(uint32_t raw) const;
-
     void SaveState(StateWriter& w) override;
     void RestoreState(StateReader& r) override;
     void PostRestore() override;
@@ -49,22 +45,36 @@ protected:
     void                   ScanEdgesRan() override;
 
 private:
-    void StorePattern(uint32_t idx, uint32_t addr, uint32_t value,
-                      uint32_t recommended, const char* op);
     void     WriteRegLocked(uint32_t addr, uint32_t value, uint64_t now);
     bool     ScanWantedLocked() const;
     void     SyncScanLocked(uint64_t now);
     uint32_t LineCntLocked(uint64_t now) const;
+    void     WriteTimingLocked(uint32_t value, uint64_t now);
+    void     LoadTimingLocked();
+    void     ApplyLoadsLocked(uint64_t now);
+    void     ArmLoadLocked();
+    void     ScheduleFreezeLocked(uint64_t now);
+    void     OnLoadEvent();
+    void     RearmLoad();
 
-    static constexpr uint32_t kRegs = 14;   /* VIDEO_CTL1..CTL14 */
+    static constexpr uint32_t kRegs = 4;
 
     uint32_t reg_[kRegs] = {};
 
-    Pr31x00Intc*  intc_  = nullptr;
-    Pr31x00Clock* clock_ = nullptr;
+    Pr31x00Intc*            intc_       = nullptr;
+    Pr31x00Clock*           clock_      = nullptr;
+    GuestCycleClock*        cycles_     = nullptr;
+    GuestCycleClock::Event* load_event_ = nullptr;
 
     uint32_t held_linecnt_       = 0;
     bool     frame_edge_pending_ = false;
     bool     enabled_edge_       = false;
     bool     cp_rate_changed_    = false;
+    uint32_t vidrate_            = 0;
+    uint32_t lineval_            = 0;
+    bool     lineval_due_        = false;
+    uint64_t lineval_tick_       = 0;
+    bool     freeze_due_         = false;
+    bool     freeze_stopped_     = false;
+    uint64_t freeze_tick_        = 0;
 };

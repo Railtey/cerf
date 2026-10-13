@@ -1,11 +1,14 @@
 #include "vr41xx_kiu.h"
 
 #include "../../core/cerf_emulator.h"
+#include "../../core/fatal.h"
+#include "../../jit/host_request_channel.h"
 #include "../../peripherals/peripheral_dispatcher.h"
 #include "../../state/state_stream.h"
 #include "../guest_cpu_reset.h"
 #include "vr41xx_cmu.h"
 #include "vr41xx_icu.h"
+#include "vr41xx_kiu_key_pins.h"
 #include "vr41xx_kiu_regs.h"
 
 #include <cstdint>
@@ -27,15 +30,19 @@ void Vr41xxKiu::OnReady() {
         rtcx_.Rescale();
         ArmEventLocked();
     });
-    host_requests_ = &emu_.Get<HostRequestChannel>();
-    host_requests_->RegisterListener([this] {
+    key_pins_ = &emu_.Get<Vr41xxKiuKeyPins>();
+    emu_.Get<HostRequestChannel>().RegisterListener([this] {
         std::lock_guard<std::mutex> lk(mtx_);
         ApplyHostKeysLocked();
     });
-    emu_.Get<Vr41xxCmu>().RegisterClockUser(kCmuMskKiu, "KIU", [this] {
+    /* "(or Standby mode with TClock masked), be sure to set the KIU to the auto scan mode ... and
+       confirm that the sequencer in the Wait key in state" (VR4102 UM 21.2.3, printed p.428). */
+    emu_.Get<Vr41xxCmu>().RegisterClockListener(kCmuMskKiu, [this](bool supplied_after) {
         std::lock_guard<std::mutex> lk(mtx_);
-        UpdateLocked();
-        return sstat_ == kSStatScanning;
+        if (!supplied_after) UpdateLocked();
+        else if (sstat_ == kSStatScanning || sstat_ == kSStatInterval)
+            emu_.Get<Fatal>().Die("Vr41xxKiu: CMUCLKMSK supplies the KIU TClock to a sequencer "
+                                  "left in SSTAT %u while it was masked; not modeled", sstat_);
     });
     emu_.Get<PeripheralDispatcher>().Register(this);
     emu_.Get<GuestCpuReset>().RegisterResetListener([this](ResetLineKind kind) {
@@ -267,9 +274,15 @@ void Vr41xxKiu::ApplyScanRepLocked() {
 
 void Vr41xxKiu::PublishCausesLocked() { emu_.Get<Vr41xxIcu>().SetKiuSource(causes_); }
 
+void Vr41xxKiu::RequireTclockIfTimedLocked(const char* operation) {
+    if (sstat_ == kSStatScanning || sstat_ == kSStatInterval)
+        emu_.Get<Vr41xxCmu>().RequireTclock(kCmuMskKiu, operation);
+}
+
 uint16_t Vr41xxKiu::ReadHalf(uint32_t addr) {
     const uint32_t off = addr - kBase;
     std::lock_guard<std::mutex> lk(mtx_);
+    RequireTclockIfTimedLocked("KIU register read");
     UpdateLocked();
     if (off <= kOffDat5 && (off & 1u) == 0u) {
         data_unread_ = false;
@@ -291,6 +304,7 @@ uint16_t Vr41xxKiu::ReadHalf(uint32_t addr) {
 void Vr41xxKiu::WriteHalf(uint32_t addr, uint16_t value) {
     const uint32_t off = addr - kBase;
     std::lock_guard<std::mutex> lk(mtx_);
+    RequireTclockIfTimedLocked("KIU register write");
     AdvancePhaseLocked();
     switch (off) {
         case kOffScanRep:
@@ -358,25 +372,15 @@ void Vr41xxKiu::WriteHalf(uint32_t addr, uint16_t value) {
 void Vr41xxKiu::SetKeyState(uint8_t matrix_index, bool pressed) {
     if (matrix_index >= 96u)
         HaltUnsupportedAccess("KIU SetKeyState index", matrix_index, pressed);
-
-    {
-        std::lock_guard<std::mutex> lk(mtx_);
-        const uint32_t reg  = matrix_index >> 4;
-        const uint16_t mask = static_cast<uint16_t>(1u << (matrix_index & 15u));
-        if (((host_held_[reg] & mask) != 0) == pressed)
-            return;
-        if (pressed) host_held_[reg] |= mask;
-        else         host_held_[reg] &= static_cast<uint16_t>(~mask);
-        host_dirty_ = true;
-    }
-    host_requests_->Request();
+    key_pins_->Set(matrix_index, pressed);
 }
 
 void Vr41xxKiu::ApplyHostKeysLocked() {
-    if (!host_dirty_) return;
-    host_dirty_ = false;
+    uint16_t pins[Vr41xxKiuKeyPins::kRegs];
+    if (!key_pins_->Take(pins)) return;
+    RequireTclockIfTimedLocked("KIU key input");
     AdvancePhaseLocked();
-    for (uint32_t i = 0; i < 6u; ++i) held_[i] = host_held_[i];
+    for (uint32_t i = 0; i < Vr41xxKiuKeyPins::kRegs; ++i) held_[i] = pins[i];
     ReevaluateWaitKeyInLocked();
     PublishCausesLocked();
     UpdateLocked();
@@ -431,8 +435,7 @@ void Vr41xxKiu::RestoreState(StateReader& r) {
     rtcx_.Rebase();
     phase_end_ = rtcx_.Now() + static_cast<uint64_t>(phase_rel);
     for (uint16_t& w : held_) w = 0;
-    for (uint16_t& w : host_held_) w = 0;
-    host_dirty_ = false;
+    key_pins_->Clear();
 }
 
 void Vr41xxKiu::PostRestore() {

@@ -117,12 +117,20 @@ constexpr uint16_t kAudClipStat = 1u << 6;
    DYN_VFLAG_ENA<12>, A_BIG_ENDIAN<14>, T_BIG_ENDIAN<15>. */
 constexpr uint16_t kModeUnmodelled = 0x003Fu | (1u << 12) | (1u << 14) | (1u << 15);
 
-/* UCB1300 datasheet p.50: TEL_IN_ENA<14> and TEL_OUT_ENA<15> activate the telecom
-   paths, AUD_LOOP<8> the audio codec loopback. */
-constexpr uint16_t kTelCtlBUnmodelled = (1u << 14) | (1u << 15);
+/* UCB1300 datasheet p.50: AUD_LOOP<8> enables the audio codec loopback. */
 constexpr uint16_t kAudCtlBUnmodelled = 1u << 8;
 
+/* UCB1300 datasheet p.50, UCB1200 p.49, UCB1100 Address 6 / 8: TEL_IN_ENA<14> "the telecom input
+   path is activated", AUD_MUTE<13> "the audio output is muted", AUD_IN_ENA<14> "the audio codec
+   input path is activated", AUD_OUT_ENA<15> "the audio codec output path is activated". */
+constexpr uint16_t kTelInEna  = 1u << 14;
+constexpr uint16_t kAudMute   = 1u << 13;
+constexpr uint16_t kAudInEna  = 1u << 14;
+constexpr uint16_t kAudOutEna = 1u << 15;
+
 constexpr size_t kMaxStates = 8;
+
+constexpr const char* kInputStateNames[] = {"off", "on", "held in reset"};
 
 }
 
@@ -136,6 +144,7 @@ Ucb1x00Codec::State Ucb1x00Codec::PowerOn(bool held) const {
 void Ucb1x00Codec::OnReady() {
     states_.assign(1, PowerOn(false));
     emu_.Get<GuestCpuReset>().RegisterResetListener([this](ResetLineKind kind) {
+        NotifyBeforeChange();
         auto& reset = emu_.Get<GuestCpuReset>();
         std::lock_guard<std::mutex> lk(mutex_);
         if (kind == ResetLineKind::Rtc) {
@@ -149,6 +158,7 @@ void Ucb1x00Codec::OnReady() {
         }
         PublishIrqLocked();
     });
+    emu_.Get<GuestDeepSleep>().RegisterSleepEntryListener([this] { NotifyBeforeChange(); });
     emu_.Get<GuestDeepSleep>().RegisterPowerUpListener([this] {
         std::lock_guard<std::mutex> lk(mutex_);
         if (emu_.Get<Ucb1x00Board>().CodecSocResetReach() ==
@@ -157,6 +167,14 @@ void Ucb1x00Codec::OnReady() {
         }
         PublishIrqLocked();
     });
+}
+
+void Ucb1x00Codec::RegisterBeforeChange(std::function<void()> fn) {
+    before_change_.push_back(std::move(fn));
+}
+
+void Ucb1x00Codec::NotifyBeforeChange() {
+    for (auto& fn : before_change_) fn();
 }
 
 void Ucb1x00Codec::ForkLocked(const char* event) {
@@ -186,6 +204,7 @@ void Ucb1x00Codec::DedupeLocked() {
 
 /* UCB1300 datasheet p.32: RESET holds the internal reset asserted. */
 void Ucb1x00Codec::DriveResetPin(ResetPin level) {
+    NotifyBeforeChange();
     std::lock_guard<std::mutex> lk(mutex_);
     if (level == pin_) return;
     pin_ = level;
@@ -232,12 +251,41 @@ uint16_t Ucb1x00Codec::ReadStateLocked(const State& s, uint8_t reg) const {
     }
 }
 
-uint16_t Ucb1x00Codec::ReadReg(uint8_t reg) {
+uint16_t Ucb1x00Codec::ReadReg(uint8_t reg) { return ReadField(reg, 0xFFFFu); }
+
+Ucb1x00Codec::InputState Ucb1x00Codec::InputOf(const State& s, Path path) {
+    if (s.held) return InputState::Held;
+    const uint16_t ena = path == Path::Audio ? (s.regs[kRegAudCtlB] & kAudInEna)
+                                             : (s.regs[kRegTelCtlB] & kTelInEna);
+    return ena != 0u ? InputState::On : InputState::Off;
+}
+
+Ucb1x00Codec::InputState Ucb1x00Codec::Input(Path path) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    const InputState first = InputOf(states_[0], path);
+    for (size_t i = 1; i < states_.size(); ++i) {
+        const InputState in = InputOf(states_[i], path);
+        if (in != first) {
+            emu_.Get<Fatal>().Die("ucb1x00: the %s input path is %s or %s depending on whether "
+                                  "%s reached the codec; the board's codec RESET wiring does "
+                                  "not settle it", path == Path::Audio ? "audio" : "telecom",
+                                  kInputStateNames[static_cast<size_t>(first)],
+                                  kInputStateNames[static_cast<size_t>(in)], fork_event_);
+        }
+    }
+    return first;
+}
+
+bool Ucb1x00Codec::AudioOutputAudible() {
+    return ReadField(kRegAudCtlB, kAudOutEna | kAudMute) == kAudOutEna;
+}
+
+uint16_t Ucb1x00Codec::ReadField(uint8_t reg, uint16_t mask) {
     const uint8_t r = reg & 0xFu;
     std::lock_guard<std::mutex> lk(mutex_);
-    const uint16_t first = ReadStateLocked(states_[0], r);
+    const uint16_t first = ReadStateLocked(states_[0], r) & mask;
     for (size_t i = 1; i < states_.size(); ++i) {
-        const uint16_t v = ReadStateLocked(states_[i], r);
+        const uint16_t v = ReadStateLocked(states_[i], r) & mask;
         if (v != first) {
             emu_.Get<Fatal>().Die("ucb1x00: register %u reads 0x%04X or 0x%04X depending on "
                                   "whether %s reached the codec; the board's codec RESET "
@@ -291,7 +339,6 @@ void Ucb1x00Codec::WriteReg(uint8_t reg, uint16_t value) {
             r == kRegIeRis ? "rising" : "falling", value);
     }
     const uint16_t unmodelled = r == kRegMode    ? kModeUnmodelled
-                              : r == kRegTelCtlB ? kTelCtlBUnmodelled
                               : r == kRegAudCtlB ? kAudCtlBUnmodelled
                                                  : 0u;
     if ((value & unmodelled) != 0u) {
@@ -299,6 +346,7 @@ void Ucb1x00Codec::WriteReg(uint8_t reg, uint16_t value) {
                               "effect on the codec is not modelled", value, r,
                               static_cast<uint16_t>(value & unmodelled));
     }
+    NotifyBeforeChange();
     std::lock_guard<std::mutex> lk(mutex_);
     for (State& s : states_) WriteStateLocked(s, r, value);
     DedupeLocked();

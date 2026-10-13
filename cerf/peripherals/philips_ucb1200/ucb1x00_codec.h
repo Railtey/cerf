@@ -5,6 +5,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <vector>
 
@@ -18,8 +19,14 @@ public:
 
     void OnReady() override;
 
-    uint16_t ReadReg(uint8_t reg);
-    void     WriteReg(uint8_t reg, uint16_t value);
+    enum class Path : uint8_t { Audio, Telecom };
+    enum class InputState : uint8_t { Off, On, Held };
+
+    uint16_t   ReadReg(uint8_t reg);
+    void       WriteReg(uint8_t reg, uint16_t value);
+    InputState Input(Path path);
+    bool     AudioOutputAudible();
+    void     RegisterBeforeChange(std::function<void()> fn);
 
     void SetTouchPressed(bool pressed);
     bool PenDown();
@@ -51,6 +58,9 @@ private:
     };
 
     State    PowerOn(bool held) const;
+    void     NotifyBeforeChange();
+    static InputState InputOf(const State& s, Path path);
+    uint16_t ReadField(uint8_t reg, uint16_t mask);
     void     ForkLocked(const char* event);
     void     DedupeLocked();
     uint16_t ReadStateLocked(const State& s, uint8_t reg) const;
@@ -63,6 +73,7 @@ private:
 
     std::mutex         mutex_;
     std::vector<State> states_;
+    std::vector<std::function<void()>> before_change_;
     const char*        fork_event_ = "";
     ResetPin           pin_        = ResetPin::High;
     bool               irq_out_    = false;

@@ -16,17 +16,16 @@ public:
     using Peripheral::Peripheral;
 
     void RequireTclock(uint16_t mask_bit, const char* operation) const;
-    void RegisterClockUser(uint16_t mask_bit, const char* unit, std::function<bool()> scanning);
+    void RegisterClockListener(uint16_t mask_bit, std::function<void(bool supplied_after)> fn);
 
 protected:
     virtual uint16_t ClockMask() const = 0;
     void ClockMaskWriting(uint16_t next) const;
 
 private:
-    struct ClockUser {
-        uint16_t              mask_bit;
-        const char*           unit;
-        std::function<bool()> scanning;
+    struct ClockListener {
+        uint16_t                  mask_bit;
+        std::function<void(bool)> fn;
     };
-    std::vector<ClockUser> clock_users_;
+    std::vector<ClockListener> clock_listeners_;
 };

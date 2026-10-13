@@ -13,8 +13,6 @@ public:
 
     virtual uint32_t Piu2Base() const = 0;
     virtual uint32_t Piu2Size() const = 0;
-    virtual uint16_t ReadHalf2(uint32_t off) = 0;
-    virtual void     WriteHalf2(uint32_t off, uint16_t value) = 0;
 
     /* PADDATA(9:0) is the A/D converter's 10-bit sampling data (VR4121 UM 20.3.9,
        VR4102 UM 19.3.9). */

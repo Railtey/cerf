@@ -1,6 +1,7 @@
 #define NOMINMAX
 
 #include "pr31x00_lcd.h"
+#include "pr31x00_lcd_gray_scale.h"
 
 #include "../../boards/board_context.h"
 #include "pr31500_id.h"
@@ -54,10 +55,12 @@ public:
 
     void RenderInto(uint32_t* dib_bgra32, uint32_t host_w, uint32_t host_h) override {
         auto& lcd = emu_.Get<Pr31x00Lcd>();
+        const auto& gray       = emu_.Get<Pr31x00LcdGrayScale>();
         const uint32_t fb_pa   = lcd.GetFbPa();
         const uint32_t guest_w = lcd.GetGuestW();
         const uint32_t guest_h = lcd.GetGuestH();
         const uint32_t bpp     = lcd.GetBitsPerPixel();
+        const bool     invert  = lcd.IsInverted();
 
         std::memset(dib_bgra32, 0, (size_t)host_w * host_h * 4u);
 
@@ -75,7 +78,7 @@ public:
             for (uint32_t x = 0; x < copy_w; ++x) {
                 /* Figure 17.2.1: the leftmost pixels of a line are driven by UD3, UD2, UD1, UD0,
                    so a byte's most significant bits hold the leftmost pixel. */
-                dst_row[x] = ExpandShade(lcd.ShadeFor(lcd_pixel::PackedIndexMsbFirst(src_row, x, bpp)));
+                dst_row[x] = ExpandShade(gray.ShadeFor(lcd_pixel::PackedIndexMsbFirst(src_row, x, bpp), bpp, invert));
             }
         }
     }

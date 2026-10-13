@@ -27,7 +27,8 @@ void MipsInsnDecoder::OnReady() {
     decoder_.Configure(cfg.HasFpu(), cfg.HasLlsc(),
                        cfg.IsaLevel() == MipsIsaLevel::kMips4,
                        cfg.HasVr41xxPowerModes(),
-                       has_64bit, has_eret, has_rfe, cfg.HasMips16());
+                       has_64bit, has_eret, has_rfe, cfg.HasMips16(),
+                       cfg.HasTx39MultiplyAdd());
     m16_decoder_.Configure(has_64bit);
 }
 

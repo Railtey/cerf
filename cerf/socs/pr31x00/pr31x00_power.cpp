@@ -149,8 +149,7 @@ public:
         } else if (was_stp && !now_stp) {
             DisarmStopTimer();
         } else if (was_stp && ((prev ^ next) & kStpTimerVal) != 0u) {
-            RequireStopTimerValue();
-            ArmStopTimerEvent();
+            MatchStopTimer();
         }
 
         /* TMPR3911 §12.3.1 p.12-14: "When powering down the system, [VCCON] must be
@@ -195,26 +194,8 @@ public:
         pending_cause_.store(cause, std::memory_order_release);
         uint8_t armed = 0;
         r.Read("stp_armed", armed);
-        if (armed > 1u) {
-            r.Reject("Pr31x00Power: restored Stop Timer flag armed=%u", armed);
-        }
         uint32_t count = 0;
         r.Read("stp_count", count);
-        if (count > kStpCounterMask || (armed == 0u && count != 0u)) {
-            r.Reject("Pr31x00Power: restored Stop Timer count %u with armed=%u", count, armed);
-        }
-        if ((ctl & ~kWritable) != 0u || (ctl & kStopCpu) != 0u || signals_ != kPwrOk ||
-            cause > kCauseCold) {
-            r.Reject("Pr31x00Power: restored Power Control 0x%08X, signals 0x%08X or reset "
-                     "cause %u out of range", ctl, signals_, cause);
-        }
-        if ((armed != 0u) != ((ctl & kEnStpTimer) != 0u)) {
-            r.Reject("Pr31x00Power: restored Stop Timer flag armed=%u with Power Control 0x%08X",
-                     armed, ctl);
-        }
-        if (armed != 0u && StopTimerValue() == 0u) {
-            r.Reject("Pr31x00Power: restored Stop Timer counting with STPTIMERVAL 0");
-        }
         stp_armed_          = armed != 0u;
         stp_restored_count_ = count;
     }
@@ -239,13 +220,6 @@ private:
 
     uint32_t StopTimerValue() const { return (Ctl() & kStpTimerVal) >> kStpTimerValShift; }
 
-    /* §12.2.8: "a maximum duration of 120 ms, in steps of 8 ms". */
-    void RequireStopTimerValue() const {
-        if (StopTimerValue() == 0u) {
-            emu_.Get<Fatal>().Die("Pr31x00Power: Stop Timer counting with STPTIMERVAL 0");
-        }
-    }
-
     uint32_t StopTimerCount() {
         return static_cast<uint32_t>((rtc_->Tc0Carries() - stp_base_) & kStpCounterMask);
     }
@@ -253,9 +227,15 @@ private:
     /* §12.2.8: the counter is zero while ENSTPTIMER is clear and counts the 8 ms
        pulse once it is set. */
     void StartStopTimer() {
-        RequireStopTimerValue();
         stp_base_  = rtc_->Tc0Carries();
         stp_armed_ = true;
+        MatchStopTimer();
+    }
+
+    /* §12.3.1 p.12-12: "When the Stop Timer is enabled the STPTIMERINT interrupt will be set
+       when the counter is equal to the value set by these bits." */
+    void MatchStopTimer() {
+        if (StopTimerCount() == StopTimerValue()) intc_->SetPending(kStpIntStatusSet, kStpTimerInt);
         ArmStopTimerEvent();
     }
 

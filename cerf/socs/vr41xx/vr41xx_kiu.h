@@ -1,12 +1,13 @@
 #pragma once
 
 #include "../../jit/guest_cycle_clock.h"
-#include "../../jit/host_request_channel.h"
 #include "../../peripherals/peripheral_base.h"
 #include "vr41xx_rtcx_ticks.h"
 
 #include <cstdint>
 #include <mutex>
+
+class Vr41xxKiuKeyPins;
 
 /* KIUSCANREP STPREP[5:0] 000000 is "64 times" on the VR4102 (UM 21.2.2 p425) and RFU on the
    VR4111 (UM 22.2.2 p463) and VR4121 (UM 22.2.2 p514). VR4111 Figure 22-3 p473 and VR4121
@@ -62,8 +63,6 @@ private:
        "the key scan operation automatically starts after key contact is detected",
        VR4121 UM 22.2.2 p514). */
     uint16_t held_[6]   = {0, 0, 0, 0, 0, 0};
-    uint16_t host_held_[6] = {0, 0, 0, 0, 0, 0};
-    bool     host_dirty_   = false;
     /* KIUSCANREP reset row: D0 ATSCAN = 1, every other bit 0 (VR4111 UM 22.2.2 p463,
        VR4102 UM 21.2.2 p425, VR4121 UM 22.2.2 p514). */
     uint16_t scanrep_   = 0x0001;
@@ -110,7 +109,7 @@ private:
 
     GuestCycleClock*        clock_ = nullptr;
     GuestCycleClock::Event* event_ = nullptr;
-    HostRequestChannel*     host_requests_ = nullptr;
+    Vr41xxKiuKeyPins*       key_pins_ = nullptr;
     Vr41xxRtcxTicks         rtcx_{emu_, Vr41xxRtcxDomain::Peripheral};
 
     bool EnabledLocked() const;
@@ -136,4 +135,5 @@ private:
     uint32_t StpRepCountLocked() const;
     void PublishCausesLocked();
     void ApplyResetLocked();
+    void RequireTclockIfTimedLocked(const char* operation);
 };

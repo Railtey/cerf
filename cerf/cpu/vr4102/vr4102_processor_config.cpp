@@ -52,6 +52,7 @@ public:
     bool HasVr41xxPowerModes() const override { return true; }   /* VR4102 UM ch.27 */
     /* "32-bit fixed instruction encoding, MIPS III ISA, no MIPS16" (UM ch.3). */
     bool HasMips16() const override { return false; }
+    bool HasTx39MultiplyAdd() const override { return false; }
 };
 
 }  // namespace

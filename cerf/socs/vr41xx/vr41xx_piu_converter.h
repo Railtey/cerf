@@ -1,14 +1,27 @@
 #pragma once
 
+#include "../../peripherals/peripheral_base.h"
+
 #include <cstdint>
+#include <mutex>
 
-class CerfEmulator;
-class StateReader;
-class StateWriter;
-
-class Vr41xxPiuConverter {
+class Vr41xxPiuConverter : public Peripheral {
 public:
-    explicit Vr41xxPiuConverter(CerfEmulator& emu) : emu_(emu) {}
+    using Peripheral::Peripheral;
+
+    bool ShouldRegister() override;
+    void OnReady() override;
+
+    uint32_t MmioBase() const override;
+    uint32_t MmioSize() const override;
+
+    uint16_t ReadHalf(uint32_t addr) override;
+    void     WriteHalf(uint32_t addr, uint16_t value) override;
+
+    uint8_t  ReadByte (uint32_t addr) override { HaltUnsupportedAccess("VR41xx PIU2 ReadByte", addr, 0); }
+    uint32_t ReadWord (uint32_t addr) override { HaltUnsupportedAccess("VR41xx PIU2 ReadWord", addr, 0); }
+    void WriteByte(uint32_t addr, uint8_t  v) override { HaltUnsupportedAccess("VR41xx PIU2 WriteByte", addr, v); }
+    void WriteWord(uint32_t addr, uint32_t v) override { HaltUnsupportedAccess("VR41xx PIU2 WriteWord", addr, v); }
 
     int  ConvertCoordinates(uint16_t pos_x, uint16_t pos_y);
     bool ConvertCommand(uint16_t cmd, uint16_t pos_x, uint16_t pos_y);
@@ -16,17 +29,14 @@ public:
 
     void InvalidatePage(int page);
     void InvalidateAdBuffer();
-
-    bool ReadBuffer(uint32_t off, uint16_t* value) const;
-    bool WriteBuffer(uint32_t off, uint16_t value);
-
     void Reset();
-    void Save(StateWriter& w) const;
-    void Restore(StateReader& r);
+
+    void SaveState(StateWriter& w) override;
+    void RestoreState(StateReader& r) override;
 
 private:
-    CerfEmulator& emu_;
-    uint16_t      page_buf_[2][5] = {};
-    uint16_t      next_page_      = 0;
-    uint16_t      adbuf_[4]       = {};
+    std::mutex mtx_;
+    uint16_t   page_buf_[2][5] = {};
+    uint16_t   next_page_      = 0;
+    uint16_t   adbuf_[4]       = {};
 };

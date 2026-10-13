@@ -61,6 +61,7 @@ public:
         clock_->RegisterRateListener([this] {
             std::lock_guard<std::mutex> lk(mtx_);
             rtcx_.Rescale();
+            scan_.Retime(clock_->Cycles());
             ArmLocked();
         });
         host_requests_ = &emu_.Get<HostRequestChannel>();
@@ -68,11 +69,15 @@ public:
             std::lock_guard<std::mutex> lk(mtx_);
             ApplyHostPenLocked();
         });
-        emu_.Get<Vr41xxCmu>().RegisterClockUser(kCmuMskPiu, "PIU", [this] {
+        cmu_ = &emu_.Get<Vr41xxCmu>();
+        cmu_->RegisterClockListener(kCmuMskPiu, [this](bool supplied_after) {
+            if (supplied_after) return;
             std::lock_guard<std::mutex> lk(mtx_);
             AdvanceLocked();
             ArmLocked();
-            return scan_.Kind() != kScanIdle;
+            if (scan_.Kind() != kScanIdle)
+                emu_.Get<Fatal>().Die("VR41xx PIU: CMUCLKMSK masks the PIU TClock during scan %u; "
+                                      "the unit without TClock is not modeled", scan_.Kind());
         });
         emu_.Get<PeripheralDispatcher>().Register(this);
         emu_.Get<GuestCpuReset>().RegisterResetListener([this](ResetLineKind) {
@@ -118,20 +123,17 @@ public:
         AdvanceLocked();
         switch (addr - M.base) {
             case kOffCnt: ApplyCntWriteLocked(value); return;
-            case kOffInt: AckIntLocked(value); return;
+            case kOffInt: AckIntLocked(value); AdvanceLocked(); return;
             /* PIUSIVLREG D10:0 SCANINTVAL, PIUSTBLREG D5:0 STABLE, PIUCMDREG D12:0
                (VR4121 UM 20.3.3/20.3.4/20.3.5, VR4102 UM 19.3.3/19.3.4/19.3.5). */
-            case kOffSivl: sivl_ = value & 0x07FFu; return;
+            case kOffSivl: sivl_ = value & 0x07FFu; ArmLocked(); return;
             case kOffStbl: stbl_ = value & 0x003Fu; return;
             case kOffCmd:  cmd_  = value & 0x1FFFu; return;
             /* PIUASCNREG D1:0 (VR4121 UM 20.3.6, VR4102 UM 19.3.6); PIUAMSKREG D7:0 (VR4121 UM
                20.3.7, VR4102 UM 19.3.7). */
             case kOffAscn:
-                if ((value & kAdpsStart) && state_ != kStStandby && state_ != kStDisable) {
-                    emu_.Get<Fatal>().Die("VR41xx PIU: PIUASCNREG ADPSSTART set in PADSTATE %u; "
-                                          "the port scan out of that state is not modeled", state_);
-                }
                 ascn_ = value & 0x0003u;
+                if (StartAdPortScanFromWaitLocked(clock_->Cycles())) ArmLocked();
                 return;
             case kOffAmsk: amsk_ = value & 0x00FFu; return;
             default: HaltUnsupportedAccess("VR41xx PIU WriteHalf", addr, value);
@@ -142,19 +144,6 @@ public:
     uint32_t ReadWord (uint32_t addr) override { HaltUnsupportedAccess("VR41xx PIU ReadWord", addr, 0); }
     void WriteByte(uint32_t addr, uint8_t  v) override { HaltUnsupportedAccess("VR41xx PIU WriteByte", addr, v); }
     void WriteWord(uint32_t addr, uint32_t v) override { HaltUnsupportedAccess("VR41xx PIU WriteWord", addr, v); }
-
-    uint16_t ReadHalf2(uint32_t off) override {
-        std::lock_guard<std::mutex> lk(mtx_);
-        uint16_t value = 0;
-        if (converter_.ReadBuffer(off, &value)) return value;
-        HaltUnsupportedAccess("VR41xx PIU2 ReadHalf", M.piu2_base + off, 0);
-    }
-
-    void WriteHalf2(uint32_t off, uint16_t value) override {
-        std::lock_guard<std::mutex> lk(mtx_);
-        if (converter_.WriteBuffer(off, value)) return;
-        HaltUnsupportedAccess("VR41xx PIU2 WriteHalf", M.piu2_base + off, value);
-    }
 
     void SetPen(bool down, uint16_t pos_x, uint16_t pos_y) override {
         {
@@ -179,9 +168,11 @@ public:
         w.Write<uint8_t>("pen_prev", pen_prev_ ? 1 : 0);
         w.Write<uint8_t>("penstc", penstc_ ? 1 : 0);
         w.Write("pos_x", pos_x_); w.Write("pos_y", pos_y_);
-        converter_.Save(w);
         w.Write("ascn", ascn_);
         w.Write("amsk", amsk_);
+        w.Write("adps_return", adps_return_);
+        const uint64_t now_tick = rtcx_.Now();
+        w.Write("next_sample_in", next_sample_ > now_tick ? next_sample_ - now_tick : uint64_t{0});
         scan_.Save(w, clock_->Cycles());
     }
 
@@ -192,9 +183,11 @@ public:
         uint8_t prev = 0, stc = 0;
         r.Read("pen_prev", prev); r.Read("penstc", stc);
         r.Read("pos_x", pos_x_); r.Read("pos_y", pos_y_);
-        converter_.Restore(r);
         r.Read("ascn", ascn_);
         r.Read("amsk", amsk_);
+        r.Read("adps_return", adps_return_);
+        uint64_t next_in = 0;
+        r.Read("next_sample_in", next_in);
         scan_.Restore(r, clock_->Cycles());
         /* PIUCNTREG D14 PENSTP "Previous touch panel contact state" (R/W) and D13 PENSTC
            "Current touch panel contact state" (VR4102 UM 19.3.1); "when PENCHGINTR is
@@ -207,7 +200,7 @@ public:
         AbandonScanOutsideStateLocked();
         host_pen_.Clear();
         rtcx_.Rebase();
-        next_sample_ = rtcx_.Now();
+        next_sample_ = rtcx_.Now() + next_in;
     }
 
     void PostRestore() override {
@@ -225,16 +218,7 @@ private:
         LatchPenstcLocked();
         intreg_ |= kPenChgIntr;
         if (down) {
-            if ((cnt_cfg_ & kSeqEn) && (cnt_cfg_ & kAtStart) &&
-                state_ == kStWaitPenTouch) {
-                state_ = kStPenDataScan;
-            }
-            if (state_ == kStPenDataScan && scan_.Kind() == kScanIdle && rtcx_.Running()) {
-                BeginScanLocked(kScanData, rtcx_.Now(), clock_->Cycles());
-                next_sample_ = rtcx_.Now() + IntervalTicksLocked();
-            } else if (state_ == kStPenDataScan && scan_.Kind() == kScanIdle) {
-                next_sample_ = rtcx_.Now();
-            }
+            StartTouchScanLocked();
         } else if ((cnt_cfg_ & kAtStop) &&
                    (state_ == kStIntervalNext ||
                     (state_ == kStPenDataScan && scan_.Kind() == kScanIdle))) {
@@ -264,9 +248,9 @@ private:
     void AckIntLocked(uint16_t value) {
         const uint16_t clr = value & kIntCauses;
         intreg_ &= ~clr;
-        if (clr & kPage0Intr) converter_.InvalidatePage(0);
-        if (clr & kPage1Intr) converter_.InvalidatePage(1);
-        if (clr & kPadAdpIntr) converter_.InvalidateAdBuffer();
+        if (clr & kPage0Intr) Converter().InvalidatePage(0);
+        if (clr & kPage1Intr) Converter().InvalidatePage(1);
+        if (clr & kPadAdpIntr) Converter().InvalidateAdBuffer();
         if constexpr (M.penstc_latched_by_penchg) {
             if (clr & kPenChgIntr) penstc_ = pen_cur_;
         }
@@ -298,36 +282,53 @@ private:
 
         AbandonScanOutsideStateLocked();
         if (state_ == kStAdPortScan && scan_.Kind() == kScanIdle) {
+            adps_return_ = kStStandby;
             BeginScanLocked(kScanAdPort, rtcx_.Now(), clock_->Cycles());
-            ArmLocked();
         }
-
-        /* PADATSTART "1: Auto start during touch state" (VR4121 UM 20.3.1, VR4102 UM
-           19.3.1). */
-        if (pen_cur_ && (cnt_cfg_ & kSeqEn) && (cnt_cfg_ & kAtStart) &&
-            state_ == kStWaitPenTouch) {
-            state_ = kStPenDataScan;
-            BeginScanLocked(kScanData, rtcx_.Now(), clock_->Cycles());
-            next_sample_ = rtcx_.Now() + IntervalTicksLocked();
-            ArmLocked();
-        } else if (state_ == kStCmdScan) {
+        StartTouchScanLocked();
+        if (state_ == kStCmdScan) {
             /* A command scan fetches "one port only" per PIUSEQEN kick and CmdScan has no
                self-loop (VR4121 UM 20.2 (4), Figure 20-4; VR4102 UM 19.2, Figure 19-4);
                touch.dll sub_15A0E24 re-arms "PIUCNTREG |= PIUSEQEN" after every sample. */
+            if (scan_.Kind() != kScanIdle) CompleteScanLocked();
             BeginScanLocked(kScanCmd, rtcx_.Now(), clock_->Cycles());
-            ArmLocked();
         }
+        StartAdPortScanFromWaitLocked(clock_->Cycles());
+        ArmLocked();
+    }
+
+    /* PADATSTART "1: Auto start during touch state" (VR4102 UM 19.3.1, printed p.387). */
+    void StartTouchScanLocked() {
+        if (pen_cur_ && (cnt_cfg_ & kSeqEn) && (cnt_cfg_ & kAtStart) && state_ == kStWaitPenTouch) {
+            state_ = kStPenDataScan;
+        }
+        if (!pen_cur_ || state_ != kStPenDataScan || scan_.Kind() != kScanIdle) return;
+        if (rtcx_.Running()) BeginScanLocked(kScanData, rtcx_.Now(), clock_->Cycles());
+        next_sample_ = rtcx_.Now() + (rtcx_.Running() ? IntervalTicksLocked() : 0u);
+    }
+
+    /* VR4102 UM Figure 19-4 (printed p.384): WaitPenTouch and Interval go to ADPortScan on
+       "ADPSStart=1"; 19.2: "the state changes to the state in which the ADPSSTART bit was
+       active". */
+    bool StartAdPortScanFromWaitLocked(uint64_t at_cycle) {
+        if ((ascn_ & kAdpsStart) == 0u || scan_.Kind() != kScanIdle) return false;
+        if (state_ != kStWaitPenTouch && state_ != kStIntervalNext) return false;
+        adps_return_ = state_;
+        state_       = kStAdPortScan;
+        BeginScanLocked(kScanAdPort, rtcx_.Now(), at_cycle);
+        return true;
     }
 
     void BeginScanLocked(uint16_t kind, uint64_t start_tick, uint64_t start_cycle) {
-        emu_.Get<Vr41xxCmu>().RequireTclock(kCmuMskPiu, "PIU scan start");
+        cmu_->RequireTclock(kCmuMskPiu, "PIU scan start");
         scan_.Begin(kind, stbl_, start_tick, start_cycle);
     }
 
     void CompleteScanLocked() {
+        const uint64_t done = scan_.ReadyAt();
         const uint16_t kind = scan_.Take();
         if (kind == kScanData) {
-            const int page = converter_.ConvertCoordinates(pos_x_, pos_y_);
+            const int page = Converter().ConvertCoordinates(pos_x_, pos_y_);
             /* PIUINTREG OVP "1: Valid data older than page 1 buffer data is retained / 0: Valid
                data older than page 0 buffer data is retained" (VR4121 UM 20.3.2, VR4102 UM
                19.3.2). */
@@ -335,12 +336,14 @@ private:
             intreg_ = (intreg_ & ~kOvp) | ((page == 1) ? kOvp : 0u);
             state_ = (!pen_cur_ && (cnt_cfg_ & kAtStop)) ? kStWaitPenTouch : kStIntervalNext;
             if (synthetic_hold_ != 0 && --synthetic_hold_ == 0) PenEdgeLocked(false);
+            StartAdPortScanFromWaitLocked(done);
         } else if (kind == kScanCmd) {
-            if (converter_.ConvertCommand(cmd_, pos_x_, pos_y_)) intreg_ |= kPadCmdIntr;
+            if (Converter().ConvertCommand(cmd_, pos_x_, pos_y_)) intreg_ |= kPadCmdIntr;
         } else {
-            if (converter_.ScanAdPorts(ascn_, amsk_)) intreg_ |= kPadAdpIntr;
+            if (Converter().ScanAdPorts(ascn_, amsk_)) intreg_ |= kPadAdpIntr;
             ascn_ &= ~kAdpsStart;
-            state_ = kStStandby;
+            state_ = adps_return_;
+            StartTouchScanLocked();
         }
         DriveIcuLocked();
     }
@@ -355,6 +358,8 @@ private:
         emu_.Get<Vr41xxIcu>().SetPiuSource(intreg_ & kIntCauses);
     }
 
+    Vr41xxPiuConverter& Converter() { return emu_.Get<Vr41xxPiuConverter>(); }
+
     /* "Interval = SCANINTVAL(10:0) x 30 us" (VR4121 UM 20.3.3, VR4102 UM 19.3.3). */
     uint64_t IntervalTicksLocked() const {
         const uint64_t ticks = sivl_ & 0x07FFu;
@@ -367,8 +372,12 @@ private:
 
     bool SamplingLocked() const { return state_ == kStPenDataScan || state_ == kStIntervalNext; }
 
+    bool IntervalRunningLocked() const {
+        return SamplingLocked() || (state_ == kStAdPortScan && adps_return_ == kStIntervalNext);
+    }
+
     bool IntervalScanStartedLocked() {
-        return SamplingLocked() && rtcx_.Running() && rtcx_.Now() >= next_sample_;
+        return IntervalRunningLocked() && rtcx_.Running() && rtcx_.Now() >= next_sample_;
     }
 
     void AdvanceLocked() {
@@ -384,6 +393,8 @@ private:
                 emu_.Get<Fatal>().Die("VR41xx PIU: data scan with the pen released and PADATSTOP "
                                       "0; the released panel's A/D values are not modeled");
             }
+            /* VR4102 UM 19.2 (printed p.385) IntervalNextScan: "If the PADATSTOP bit is inactive,
+               it changes to the PenDataScan state after the specified time period has elapsed." */
             state_ = kStPenDataScan;
             BeginScanLocked(kScanData, next_sample_, rtcx_.CycleOf(next_sample_));
             next_sample_ += IntervalTicksLocked();
@@ -396,14 +407,14 @@ private:
     }
 
     void ArmLocked() {
-        if (!rtcx_.Running() || (scan_.Kind() == kScanIdle && !SamplingLocked())) {
+        if (!rtcx_.Running() || (scan_.Kind() == kScanIdle && !IntervalRunningLocked())) {
             clock_->Disarm(event_);
             return;
         }
-        clock_->Arm(event_, scan_.Kind() != kScanIdle
-                                ? scan_.ReadyAt()
-                                : scan_.ReadyCycle(kScanData, stbl_, next_sample_,
-                                                   rtcx_.CycleOf(next_sample_)));
+        uint64_t at = scan_.Kind() != kScanIdle ? scan_.ReadyAt() : UINT64_MAX;
+        const uint64_t start = rtcx_.CycleOf(next_sample_);
+        if (IntervalRunningLocked() && start < at) at = start;
+        if (at == UINT64_MAX) clock_->Disarm(event_); else clock_->Arm(event_, at);
     }
 
     void ApplyHostPenLocked() {
@@ -426,6 +437,7 @@ private:
             synthetic_hold_ = kSyntheticHoldScans;
             PenEdgeLocked(true);
         }
+        StartAdPortScanFromWaitLocked(clock_->Cycles());
         ArmLocked();
     }
 
@@ -441,7 +453,7 @@ private:
         cmd_       = kCmdPowerOn;
         pen_prev_  = false;
         penstc_    = pen_cur_;
-        converter_.Reset();
+        Converter().Reset();
         ascn_      = 0;
         amsk_      = 0;
         scan_.Drop();
@@ -451,6 +463,7 @@ private:
     mutable std::mutex mtx_;
 
     uint16_t state_    = kStDisable;
+    uint16_t adps_return_ = kStStandby;
     uint16_t cnt_cfg_  = 0;
     uint16_t intreg_   = 0;
     uint16_t sivl_     = M.sivl_power_on;
@@ -464,7 +477,6 @@ private:
     uint16_t pos_y_    = 0;
     uint16_t synthetic_hold_ = 0;
 
-    Vr41xxPiuConverter converter_{emu_};
     uint16_t ascn_ = 0;
     uint16_t amsk_ = 0;
 
@@ -479,6 +491,7 @@ private:
     GuestCycleClock*        clock_       = nullptr;
     GuestCycleClock::Event* event_       = nullptr;
     HostRequestChannel*     host_requests_ = nullptr;
+    Vr41xxCmu*              cmu_         = nullptr;
     Vr41xxRtcxTicks         rtcx_{emu_, Vr41xxRtcxDomain::Peripheral};
     uint64_t                next_sample_ = 0;
     Vr41xxPiuHostPen        host_pen_;
