@@ -3,6 +3,8 @@
 #include "../../peripherals/peripheral_base.h"
 
 #include <cstdint>
+#include <functional>
+#include <vector>
 
 /* SA-1110 §11.7 LCD Controller. Register layout per §11.7.12:
    LCCR0 +0x00, LCSR +0x04 (W1C), DBAR1 +0x10, DCAR1 +0x14 (R-O),
@@ -36,10 +38,13 @@ public:
         return (lccr0_ & 0x4u) ? lpp * 2u : lpp;
     }
 
+    void RegisterEnableListener(std::function<void()> fn);
+
     void SaveState(StateWriter& w) override;
     void RestoreState(StateReader& r) override;
 
 private:
+    std::vector<std::function<void()>> enable_listeners_;
     uint32_t lccr0_ = 0;
     uint32_t lcsr_  = 0;
     uint32_t dbar1_ = 0;

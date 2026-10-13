@@ -18,6 +18,10 @@ void Sa11xxLcd::OnReady() {
     emu_.Get<PeripheralDispatcher>().Register(this);
 }
 
+void Sa11xxLcd::RegisterEnableListener(std::function<void()> fn) {
+    enable_listeners_.push_back(std::move(fn));
+}
+
 void Sa11xxLcd::PublishScreenSizeOnEnableEdge(uint32_t old_lccr0,
                                               uint32_t new_lccr0) {
     if (((old_lccr0 & 0x1u) == 0u) && ((new_lccr0 & 0x1u) != 0u)) {
@@ -52,6 +56,9 @@ void Sa11xxLcd::WriteReg(uint32_t off, uint32_t value) {
                complete after disable). Kernel sub_800AABBC spins on this
                bit; without it the JIT hangs in that polling loop forever. */
             if ((old & 0x1u) != 0u && (value & 0x1u) == 0u) lcsr_ |= 0x1u;
+            if (((old ^ value) & 0x1u) != 0u) {
+                for (auto& fn : enable_listeners_) fn();
+            }
             break;
         }
         case 0x04: lcsr_ &= ~value; break;         /* §11.7.11: status W1C */

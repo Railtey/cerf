@@ -462,6 +462,7 @@ void Sa11xxSspStream::Save(StateWriter& w) {
         w.Write("stream_frame_push", f.push);
         w.Write("stream_frame_value", f.value);
     }
+    if (device_) device_->SaveState(w);
 }
 
 void Sa11xxSspStream::Restore(StateReader& r) {
@@ -486,10 +487,12 @@ void Sa11xxSspStream::Restore(StateReader& r) {
     }
     enabled_ = enabled != 0u;
     fmt_     = Sa11xxSspFrameFormat::Of(sscr0_, sscr1_);
+    if (device_) device_->RestoreState(r);
 }
 
 void Sa11xxSspStream::PostRestore(uint64_t now) {
     pins_ = ReadPins();
+    if (device_) device_->PostRestore();
     RefreshLine(now);
 }
 

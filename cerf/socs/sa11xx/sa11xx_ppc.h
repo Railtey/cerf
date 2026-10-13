@@ -7,6 +7,8 @@
 #include <mutex>
 #include <vector>
 
+class Sa11xxLcd;
+
 /* SA-1110 Dev Man §11.13: PPC peripheral-pin control, 22 pins. Register block:
    PPDR (+0x0) pin direction (0=input/1=output, reset 0=all input), PPSR (+0x4)
    pin state, PPAR/PSDR/PPFR (+0x8..+0x10); MCCR1 (+0x30, MCP) shares the block,
@@ -43,12 +45,21 @@ public:
     void     RegisterMccr1Listener(std::function<void()> fn);
     void     RegisterPparListener(std::function<void()> fn);
 
+    uint32_t LcdPinsDrivenLow() const;
+    void     RegisterOutputListener(std::function<void()> fn);
+
 private:
     void WriteMccr1(uint32_t value);
     void NotifyIfPpar(uint32_t index);
+    void NotifyIfOutputs(uint32_t index);
+    void NotifyOutputs();
 
     std::vector<std::function<void()>> mccr1_listeners_;
     std::vector<std::function<void()>> ppar_listeners_;
+    std::vector<std::function<void()>> output_listeners_;
+    Sa11xxLcd* lcd_ = nullptr;
+    static constexpr uint32_t kLcdPinMask       = 0x00000FFFu;
+    static constexpr uint32_t kPpdrIndex        = 0u;
     static constexpr uint32_t kPparIndex        = 2u;
     static constexpr uint32_t kReservedIrdaPoke = 0x28u;  /* HPIrDA sub_EE4B88. */
     static constexpr uint32_t kMccr1Offset      = 0x30u;  /* SA-1110 Dev Man: MCCR1 R/W. */

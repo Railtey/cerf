@@ -2,6 +2,8 @@
 
 #include "../../core/cerf_emulator.h"
 #include "../../core/log.h"
+#include "../../socs/sa11xx/sa11xx_ppc.h"
+#include "../../state/state_stream.h"
 #include "../board_context.h"
 #include "hp_jornada_700_family_id.h"
 #include "hp_jornada_700_battery.h"
@@ -33,6 +35,11 @@ public:
         return bd && bd->GetBoardFamilyId() == BoardFamilyId::HpJornada700;
     }
 
+    void OnReady() override {
+        ppc_ = &emu_.Get<Sa11xxPpc>();
+        ppc_->RegisterOutputListener([this] { OnPpcOutputs(); });
+    }
+
     Pins WiredTo() const override { return Pins::SerialPort4; }
 
     uint16_t Exchange(uint16_t tx_frame) override {
@@ -40,7 +47,69 @@ public:
         return BitRev8(Consume(byte));
     }
 
+    void SaveState(StateWriter& w) override {
+        w.Write<uint8_t>("mcu_contrast", contrast_);
+        w.Write<uint8_t>("mcu_brightness", brightness_);
+        w.Write<uint32_t>("mcu_param_bytes_left", param_bytes_left_);
+        w.Write<uint8_t>("mcu_param", static_cast<uint8_t>(param_));
+        w.Write<uint32_t>("mcu_response_count", static_cast<uint32_t>(response_.size()));
+        for (uint8_t b : response_) w.Write<uint8_t>("mcu_response_byte", b);
+        emu_.Get<HpJornada700Touch>().SaveState(w);
+    }
+
+    void RestoreState(StateReader& r) override {
+        uint8_t  param = 0;
+        uint32_t count = 0;
+        r.Read("mcu_contrast", contrast_);
+        r.Read("mcu_brightness", brightness_);
+        r.Read("mcu_param_bytes_left", param_bytes_left_);
+        r.Read("mcu_param", param);
+        r.Read("mcu_response_count", count);
+        param_ = static_cast<Param>(param);
+        response_.clear();
+        for (uint32_t i = 0; i < count; ++i) {
+            uint8_t b = 0;
+            r.Read("mcu_response_byte", b);
+            response_.push_back(b);
+        }
+        emu_.Get<HpJornada700Touch>().RestoreState(r);
+    }
+
+    void PostRestore() override {
+        lfclk_low_ = LfclkDrivenLow();
+        emu_.Get<HpJornada700Touch>().PostRestore();
+    }
+
 private:
+    enum class Param : uint8_t { None, Contrast, Brightness, TouchRate };
+
+    /* HP Jornada 720 Hardware Configuration § 4.1; SA-1110 Dev Man PPDR bit 10
+       L_FCLK (printed 11-169); jornada720 nk.exe sub_8004F824. */
+    static constexpr uint32_t kLfclkPin = 1u << 10;
+    static constexpr uint8_t kPowerOnContrast   = 0x36;
+    static constexpr uint8_t kPowerOnBrightness = 0x19;
+
+    bool LfclkDrivenLow() const { return (ppc_->LcdPinsDrivenLow() & kLfclkPin) != 0u; }
+
+    void OnPpcOutputs() {
+        const bool low = LfclkDrivenLow();
+        if (low && !lfclk_low_) ResetMcu();
+        lfclk_low_ = low;
+    }
+
+    void ResetMcu() {
+        LOG(Periph, "[J720MCU] reset: L_FCLK driven low\n");
+        response_.clear();
+        param_bytes_left_ = 0;
+        param_            = Param::None;
+        contrast_         = kPowerOnContrast;
+        brightness_       = kPowerOnBrightness;
+        std::vector<uint8_t> discarded;
+        emu_.Get<HpJornada700Keyboard>().DrainScancodes(discarded);
+        emu_.Get<HpJornada700Led>().SetState(HpJornada700Led::State::Off);
+        emu_.Get<HpJornada700Touch>().ResetSampleRate();
+    }
+
     /* HP doc §4.7 command values (+ the 0xD5/0xD7 setters this ROM's OAL
        actually uses - sub_8004F454 sends D5/D7, level, 0x3F trailer). */
     enum : uint8_t {
@@ -51,6 +120,8 @@ private:
         kGetScanKeyCode = 0x90,
         kKbdInitParam   = 0x95,
         kGetTouchSamples= 0xA0,
+        /* jornada720 touch.dll sub_FB1750, spidrv.dll sub_FE146C. */
+        kSetTouchRate   = 0xA2,
         kGetBatteryData = 0xC0,
         kGetContrast    = 0xD0,
         kSetContrast    = 0xD1,
@@ -82,10 +153,7 @@ private:
     uint8_t Consume(uint8_t byte) {
         if (param_bytes_left_ > 0) {
             --param_bytes_left_;
-            if (param_target_) {
-                *param_target_ = byte;
-                param_target_ = nullptr;
-            }
+            TakeParam(byte);
             return kTxDummy;
         }
         if (!response_.empty()) {
@@ -95,6 +163,16 @@ private:
         }
         if (byte == kTxDummy || byte == kTxDummyRaw) return kTxDummy;
         return Command(byte);
+    }
+
+    void TakeParam(uint8_t byte) {
+        switch (param_) {
+            case Param::Contrast:   contrast_ = byte; break;
+            case Param::Brightness: brightness_ = byte; break;
+            case Param::TouchRate:  emu_.Get<HpJornada700Touch>().SelectSampleRate(byte); break;
+            case Param::None:       break;
+        }
+        param_ = Param::None;
     }
 
     uint8_t Command(uint8_t cmd) {
@@ -148,11 +226,15 @@ private:
             case kGetBrightness: response_.push_back(brightness_); break;
             case kSetContrast:
                 param_bytes_left_ = 1;
-                param_target_ = &contrast_;
+                param_ = Param::Contrast;
                 break;
             case kSetBrightness:
                 param_bytes_left_ = 1;
-                param_target_ = &brightness_;
+                param_ = Param::Brightness;
+                break;
+            case kSetTouchRate:
+                param_bytes_left_ = 1;
+                param_ = Param::TouchRate;
                 break;
             case kKbdInitParam:
                 /* Undocumented; TSCkbdr.dll sub_FC4248 sends 0x95 + 2 data
@@ -162,11 +244,11 @@ private:
                 break;
             case kSetContrast2:               /* level + 0x3F trailer. */
                 param_bytes_left_ = 2;
-                param_target_ = &contrast_;
+                param_ = Param::Contrast;
                 break;
             case kSetBrightness2:
                 param_bytes_left_ = 2;
-                param_target_ = &brightness_;
+                param_ = Param::Brightness;
                 break;
             case kGetLedStatus:
                 response_.push_back(emu_.Get<HpJornada700Led>().StatusByte());
@@ -199,9 +281,11 @@ private:
 
     std::deque<uint8_t> response_;
     uint32_t param_bytes_left_ = 0;
-    uint8_t* param_target_     = nullptr;
-    uint8_t  contrast_   = 0x36;   /* firmware defaults (sub_8004F454 /  */
-    uint8_t  brightness_ = 0x19;   /* HP doc §5 display-on sequence).    */
+    Param    param_            = Param::None;
+    uint8_t  contrast_         = kPowerOnContrast;
+    uint8_t  brightness_       = kPowerOnBrightness;
+    Sa11xxPpc* ppc_            = nullptr;
+    bool       lfclk_low_      = false;
 };
 
 }  /* namespace */

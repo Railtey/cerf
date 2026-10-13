@@ -1,4 +1,5 @@
 #include "sa11xx_ppc.h"
+#include "sa11xx_lcd.h"
 
 #include "../../core/cerf_emulator.h"
 #include "../../core/log.h"
@@ -25,11 +26,16 @@ void Sa11xxPpc::OnReady() {
        and to the PPC unit", PSDR "is not reset like PPDR"; PPDR, PPAR and MCCR1 reset rows 0
        (printed 11-169, 11-173, 11-141). */
     emu_.Get<GuestCpuReset>().RegisterResetListener([this](ResetLineKind) {
-        std::lock_guard<std::mutex> lk(mtx_);
-        regs_[0] = 0u;
-        regs_[2] = 0u;
-        mccr1_   = 0u;
+        {
+            std::lock_guard<std::mutex> lk(mtx_);
+            regs_[0] = 0u;
+            regs_[2] = 0u;
+            mccr1_   = 0u;
+        }
+        NotifyOutputs();
     });
+    lcd_ = &emu_.Get<Sa11xxLcd>();
+    lcd_->RegisterEnableListener([this] { NotifyOutputs(); });
     emu_.Get<PeripheralDispatcher>().Register(this);
 }
 
@@ -49,6 +55,25 @@ void Sa11xxPpc::RegisterPparListener(std::function<void()> fn) {
 void Sa11xxPpc::NotifyIfPpar(uint32_t index) {
     if (index != kPparIndex) return;
     for (auto& fn : ppar_listeners_) fn();
+}
+
+/* SA-1110 Dev Man § 11.13.4 (printed 11-170), PPSR bits 11..0 (printed 11-171). */
+uint32_t Sa11xxPpc::LcdPinsDrivenLow() const {
+    if (lcd_->IsEnabled()) return 0u;
+    std::lock_guard<std::mutex> lk(mtx_);
+    return regs_[kPpdrIndex] & ~regs_[kPpsrIndex] & kLcdPinMask;
+}
+
+void Sa11xxPpc::RegisterOutputListener(std::function<void()> fn) {
+    output_listeners_.push_back(std::move(fn));
+}
+
+void Sa11xxPpc::NotifyIfOutputs(uint32_t index) {
+    if (index == kPpdrIndex || index == kPpsrIndex) NotifyOutputs();
+}
+
+void Sa11xxPpc::NotifyOutputs() {
+    for (auto& fn : output_listeners_) fn();
 }
 
 void Sa11xxPpc::WriteMccr1(uint32_t value) {
@@ -112,6 +137,7 @@ void Sa11xxPpc::WriteByte(uint32_t addr, uint8_t value) {
             regs_[index] = cleared | (static_cast<uint32_t>(value) << shift);
         }
         NotifyIfPpar(index);
+        NotifyIfOutputs(index);
         return;
     }
     if (base == kMccr1Offset) {
@@ -135,6 +161,7 @@ void Sa11xxPpc::WriteWord(uint32_t addr, uint32_t value) {
             regs_[index] = value;
         }
         NotifyIfPpar(index);
+        NotifyIfOutputs(index);
         return;
     }
     if (off == kMccr1Offset) { WriteMccr1(value); return; }

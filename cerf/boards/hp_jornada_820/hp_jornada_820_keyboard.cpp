@@ -6,6 +6,7 @@
 #include "../../host/keyboard_router.h"
 #include "../../socs/sa11xx/sa11xx_gpio.h"
 #include "../../socs/sa11xx/sa11xx_ssp_device.h"
+#include "../../state/state_stream.h"
 #include "../board_context.h"
 #include "hp_jornada_820_family_id.h"
 
@@ -54,6 +55,30 @@ public:
             return 0;
         }
         return emu_.Get<HpJornada820Keyboard>().NextScancode();  /* post-init keystroke */
+    }
+
+    void SaveState(StateWriter& w) override {
+        w.Write<uint32_t>("kbd_reply_count", static_cast<uint32_t>(reply_.size()));
+        for (uint8_t b : reply_) w.Write<uint8_t>("kbd_reply_byte", b);
+        w.Write<int32_t>("kbd_cmd", cmd_);
+        w.Write<int32_t>("kbd_params_left", params_left_);
+        w.Write<uint8_t>("kbd_in_cmd", in_cmd_ ? 1u : 0u);
+    }
+
+    void RestoreState(StateReader& r) override {
+        uint32_t count  = 0;
+        uint8_t  in_cmd = 0;
+        r.Read("kbd_reply_count", count);
+        reply_.clear();
+        for (uint32_t i = 0; i < count; ++i) {
+            uint8_t b = 0;
+            r.Read("kbd_reply_byte", b);
+            reply_.push_back(b);
+        }
+        r.Read("kbd_cmd", cmd_);
+        r.Read("kbd_params_left", params_left_);
+        r.Read("kbd_in_cmd", in_cmd);
+        in_cmd_ = in_cmd != 0u;
     }
 
 private:
