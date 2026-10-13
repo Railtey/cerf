@@ -2,17 +2,13 @@
 #include "../../core/service.h"
 #include "../../boards/board_context.h"
 #include "compaq_ipaq_h3000_family_id.h"
-#include "../../host/host_canvas.h"
-#include "../../host/touch_input.h"
+#include "../../peripherals/touch/guest_clock_touch_input.h"
 #include "../../socs/sa11xx/sa11xx_sp1_uart.h"
-#include "../../state/emulation_freeze.h"
+#include "../../socs/uart_endpoint.h"
+#include "../../state/state_stream.h"
 
-#include <atomic>
-#include <chrono>
-#include <condition_variable>
 #include <cstdint>
 #include <mutex>
-#include <thread>
 
 namespace {
 
@@ -59,62 +55,22 @@ constexpr uint16_t kAdcXMin = 60;
 constexpr uint16_t kAdcXMax = 960;
 constexpr uint16_t kAdcYMin = 35;
 constexpr uint16_t kAdcYMax = 980;
-constexpr auto     kSamplePeriod = std::chrono::milliseconds(20);
+/* ipaq_h3600_ppc2002 touch.dll sub_1F21340 (TouchPanelGetDeviceCaps): TPDC_SAMPLE_RATE
+   low 100, high 100. */
+constexpr GuestCycleClock::Rate kSampleRate{100u, 1u};
 
-class CompaqIpaqH3000MicroP : public Service {
+constexpr GuestClockTouchInput::PanelRange kPanel{kAdcXMin, kAdcXMax, kAdcYMin, kAdcYMax};
+
+class CompaqIpaqH3000MicroP : public GuestClockTouchInput, public UartEndpoint {
 public:
-    using Service::Service;
+    using GuestClockTouchInput::GuestClockTouchInput;
 
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
         return bd && bd->GetBoardFamilyId() == BoardFamilyId::CompaqIpaqH3000;
     }
 
-    void OnReady() override {
-        emu_.Get<Sa11xxSp1Uart>().SetTxListener(
-            [this](uint8_t b) { OnTxByte(b); });
-    }
-
-    /* Linux drivers/input/touchscreen/ipaq-micro-ts.c:
-       press = MSG_TOUCHSCREEN with len=4, payload [Y_BE16, X_BE16].
-       release = MSG_TOUCHSCREEN with len=0. */
-    void SendTouchPress(uint16_t adc_x, uint16_t adc_y) {
-        const uint8_t payload[4] = {
-            static_cast<uint8_t>((adc_y >> 8) & 0xFFu),
-            static_cast<uint8_t>(adc_y        & 0xFFu),
-            static_cast<uint8_t>((adc_x >> 8) & 0xFFu),
-            static_cast<uint8_t>(adc_x        & 0xFFu),
-        };
-        SendFrame(kMsgTouch, payload, 4);
-    }
-    void SendTouchRelease() { SendFrame(kMsgTouch, nullptr, 0); }
-
-private:
-    enum State : uint8_t { kWaitSof, kHaveSof, kData, kWaitCksum };
-
-    std::mutex state_mtx_;
-    State    state_         = kWaitSof;
-    uint8_t  rx_id_         = 0;
-    uint8_t  rx_len_        = 0;
-    uint8_t  rx_count_      = 0;
-    uint8_t  rx_buf_[16]    = {};
-
-    void Push(uint8_t b) { emu_.Get<Sa11xxSp1Uart>().PushRxByte(b); }
-
-    void SendFrame(uint8_t msg_id, const uint8_t* data, uint8_t len) {
-        const uint8_t hdr = static_cast<uint8_t>(
-            ((msg_id & 0x0Fu) << 4) | (len & 0x0Fu));
-        uint8_t cksum = hdr;
-        Push(kSof);
-        Push(hdr);
-        for (uint8_t i = 0; i < len; ++i) {
-            Push(data[i]);
-            cksum = static_cast<uint8_t>(cksum + data[i]);
-        }
-        Push(cksum);
-    }
-
-    void OnTxByte(uint8_t b) {
+    void OnGuestTx(uint8_t b) override {
         std::lock_guard<std::mutex> lk(state_mtx_);
         switch (state_) {
             case kWaitSof:
@@ -136,6 +92,102 @@ private:
                 state_ = kWaitSof;
                 break;
         }
+    }
+
+    void SaveState(StateWriter& w) override {
+        std::lock_guard<std::mutex> lk(state_mtx_);
+        w.Write("microp_state", state_);
+        w.Write("microp_rx_id", rx_id_);
+        w.Write("microp_rx_len", rx_len_);
+        w.Write("microp_rx_count", rx_count_);
+        w.WriteBytes("microp_rx_buf", rx_buf_, sizeof(rx_buf_));
+        w.Write<uint8_t>("microp_pen_down", pen_down_ ? 1u : 0u);
+    }
+
+    void RestoreState(StateReader& r) override {
+        uint8_t down = 0;
+        {
+            std::lock_guard<std::mutex> lk(state_mtx_);
+            r.Read("microp_state", state_);
+            r.Read("microp_rx_id", rx_id_);
+            r.Read("microp_rx_len", rx_len_);
+            r.Read("microp_rx_count", rx_count_);
+            r.ReadBytes("microp_rx_buf", rx_buf_, sizeof(rx_buf_));
+            r.Read("microp_pen_down", down);
+        }
+        ClearOnRestore();
+        pen_down_ = false;
+        if (down != 0u) SendTouchRelease();
+    }
+
+protected:
+    void OnTouchReady() override { emu_.Get<Sa11xxSp1Uart>().AttachEndpoint(this); }
+
+    void ApplyHostPen(const HostPen& pen) override {
+        const bool down = pen.kind == kPenDown;
+        if (down == pen_down_) return;
+        pen_down_ = down;
+        if (!pen_down_) {
+            StopSamples();
+            SendTouchRelease();
+            return;
+        }
+        SendSample(pen.x, pen.y);
+        StartSamples(kSampleRate);
+    }
+
+    void OnSample() override {
+        int x = 0;
+        int y = 0;
+        LatestPosition(&x, &y);
+        SendSample(x, y);
+    }
+
+private:
+    /* Linux drivers/input/touchscreen/ipaq-micro-ts.c:
+       press = MSG_TOUCHSCREEN with len=4, payload [Y_BE16, X_BE16].
+       release = MSG_TOUCHSCREEN with len=0. */
+    void SendTouchPress(uint16_t adc_x, uint16_t adc_y) {
+        const uint8_t payload[4] = {
+            static_cast<uint8_t>((adc_y >> 8) & 0xFFu),
+            static_cast<uint8_t>(adc_y        & 0xFFu),
+            static_cast<uint8_t>((adc_x >> 8) & 0xFFu),
+            static_cast<uint8_t>(adc_x        & 0xFFu),
+        };
+        SendFrame(kMsgTouch, payload, 4);
+    }
+    void SendTouchRelease() { SendFrame(kMsgTouch, nullptr, 0); }
+
+    enum State : uint8_t { kWaitSof, kHaveSof, kData, kWaitCksum };
+
+    std::mutex state_mtx_;
+    State    state_         = kWaitSof;
+    uint8_t  rx_id_         = 0;
+    uint8_t  rx_len_        = 0;
+    uint8_t  rx_count_      = 0;
+    uint8_t  rx_buf_[16]    = {};
+    bool     pen_down_      = false;
+
+    void SendSample(int x, int y) {
+        uint16_t adc_x = 0;
+        uint16_t adc_y = 0;
+        MapToPanel(x, y, kPanel, &adc_x, &adc_y);
+        SendTouchPress(adc_x, adc_y);
+    }
+
+    void Push(uint8_t b) { emu_.Get<Sa11xxSp1Uart>().PushRxByte(b); }
+
+    void SendFrame(uint8_t msg_id, const uint8_t* data, uint8_t len) {
+        const uint8_t hdr = static_cast<uint8_t>(
+            ((msg_id & 0x0Fu) << 4) | (len & 0x0Fu));
+        uint8_t cksum = hdr;
+        Push(kSof);
+        Push(hdr);
+        for (uint8_t i = 0; i < len; ++i) {
+            Push(data[i]);
+            cksum = static_cast<uint8_t>(cksum + data[i]);
+        }
+        Push(cksum);
     }
 
     void RespondTo(uint8_t id, const uint8_t* req, uint8_t req_len) {
@@ -176,118 +228,6 @@ private:
     }
 };
 
-static uint16_t MapAxis(int v, int v_max, uint16_t adc_lo, uint16_t adc_hi) {
-    if (v <= 0)     return adc_lo;
-    if (v >= v_max) return adc_hi;
-    const uint32_t span = adc_hi - adc_lo;
-    return static_cast<uint16_t>(
-        adc_lo + (uint32_t)v * span / (uint32_t)v_max);
-}
-
-class CompaqIpaqH3000Touch : public TouchInput {
-public:
-    using TouchInput::TouchInput;
-
-    bool ShouldRegister() override {
-        auto* bd = emu_.TryGet<BoardContext>();
-        return bd && bd->GetBoardFamilyId() == BoardFamilyId::CompaqIpaqH3000;
-    }
-
-    void OnReady() override {
-        sampler_ = std::thread([this] { SamplerLoop(); });
-    }
-
-    ~CompaqIpaqH3000Touch() override {
-        {
-            std::lock_guard<std::mutex> lk(mtx_);
-            stop_ = true;
-        }
-        cv_.notify_all();
-        if (sampler_.joinable()) sampler_.join();
-    }
-
-    void OnPenDown(int x, int y) override {
-        {
-            std::lock_guard<std::mutex> lk(mtx_);
-            last_x_   = x;
-            last_y_   = y;
-            pen_down_ = true;
-        }
-        cv_.notify_all();
-    }
-    void OnPenMove(int x, int y) override {
-        std::lock_guard<std::mutex> lk(mtx_);
-        if (!pen_down_) return;
-        last_x_ = x;
-        last_y_ = y;
-    }
-    void OnPenUp(int /*x*/, int /*y*/) override {
-        {
-            std::lock_guard<std::mutex> lk(mtx_);
-            if (!pen_down_) return;
-            pen_down_ = false;
-        }
-        cv_.notify_all();
-    }
-    void OnCaptureLost() override { OnPenUp(0, 0); }
-
-private:
-    std::mutex              mtx_;
-    std::condition_variable cv_;
-    std::thread             sampler_;
-    bool                    stop_     = false;
-    bool                    pen_down_ = false;
-    int                     last_x_   = 0;
-    int                     last_y_   = 0;
-
-    void EmitPress(int x_host, int y_host) {
-        auto&     hc = emu_.Get<HostCanvas>();
-        const int w = (int)hc.GuestSurfaceWidth ();
-        const int h = (int)hc.GuestSurfaceHeight();
-        const uint16_t adc_x = MapAxis(x_host, w - 1, kAdcXMin, kAdcXMax);
-        const uint16_t adc_y = MapAxis(y_host, h - 1, kAdcYMin, kAdcYMax);
-        emu_.Get<CompaqIpaqH3000MicroP>().SendTouchPress(adc_x, adc_y);
-    }
-
-    void SamplerLoop() {
-        auto& freeze = emu_.Get<EmulationFreeze>();
-        std::unique_lock<std::mutex> lk(mtx_);
-        bool was_down = false;
-        while (!stop_) {
-            if (pen_down_) {
-                const int x = last_x_;
-                const int y = last_y_;
-                lk.unlock();
-                {
-                    auto frozen = freeze.WorkerSection();
-                    EmitPress(x, y);
-                }
-                lk.lock();
-                was_down = true;
-                cv_.wait_for(lk, kSamplePeriod,
-                             [&] { return stop_ || !pen_down_; });
-            } else {
-                if (was_down) {
-                    was_down = false;
-                    lk.unlock();
-                    {
-                        auto frozen = freeze.WorkerSection();
-                        emu_.Get<CompaqIpaqH3000MicroP>().SendTouchRelease();
-                    }
-                    lk.lock();
-                }
-                cv_.wait(lk, [&] { return stop_ || pen_down_; });
-            }
-        }
-        if (was_down) {
-            lk.unlock();
-            auto frozen = freeze.WorkerSection();
-            emu_.Get<CompaqIpaqH3000MicroP>().SendTouchRelease();
-        }
-    }
-};
-
 }  /* namespace */
 
-REGISTER_SERVICE(CompaqIpaqH3000MicroP);
-REGISTER_SERVICE_AS(CompaqIpaqH3000Touch, TouchInput);
+REGISTER_SERVICE_AS(CompaqIpaqH3000MicroP, TouchInput);

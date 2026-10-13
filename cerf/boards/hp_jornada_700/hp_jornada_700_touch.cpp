@@ -4,9 +4,6 @@
 
 #include "../../core/cerf_emulator.h"
 #include "../../core/log.h"
-#include "../../host/host_canvas.h"
-#include "../../host/touch_input.h"
-#include "../../jit/host_request_channel.h"
 #include "../../socs/sa11xx/sa11xx_gpio.h"
 #include "../../state/state_stream.h"
 #include "../board_context.h"
@@ -26,43 +23,19 @@ constexpr GuestCycleClock::Rate kHighRate{200u, 1u};
 constexpr uint8_t               kLowRateArgument  = 8u;
 constexpr uint8_t               kHighRateArgument = 3u;
 
-uint16_t MapAxis(int v, int v_max, uint16_t lo, uint16_t hi) {
-    if (v_max <= 0) return lo;
-    if (v <= 0)     return lo;
-    if (v >= v_max) return hi;
-    return static_cast<uint16_t>(lo + (uint32_t)v * (hi - lo) / (uint32_t)v_max);
-}
-
-class HpJornada700TouchInput : public TouchInput {
-public:
-    using TouchInput::TouchInput;
-    bool ShouldRegister() override {
-        auto* bd = emu_.TryGet<BoardContext>();
-        return bd && bd->GetBoardFamilyId() == BoardFamilyId::HpJornada700;
-    }
-    void OnPenDown(int x, int y) override { emu_.Get<HpJornada700Touch>().PenDown(x, y); }
-    void OnPenMove(int x, int y) override { emu_.Get<HpJornada700Touch>().PenMove(x, y); }
-    void OnPenUp  (int, int) override { emu_.Get<HpJornada700Touch>().PenUp(); }
-    void OnCaptureLost() override { emu_.Get<HpJornada700Touch>().PenUp(); }
-};
+constexpr GuestClockTouchInput::PanelRange kPanel{kAdcXMin, kAdcXMax, kAdcYMin, kAdcYMax};
 
 }
 
-REGISTER_SERVICE(HpJornada700Touch);
-REGISTER_SERVICE_AS(HpJornada700TouchInput, TouchInput);
+REGISTER_SERVICE_AS(HpJornada700Touch, TouchInput);
 
 bool HpJornada700Touch::ShouldRegister() {
     auto* bd = emu_.TryGet<BoardContext>();
     return bd && bd->GetBoardFamilyId() == BoardFamilyId::HpJornada700;
 }
 
-void HpJornada700Touch::OnReady() {
+void HpJornada700Touch::OnTouchReady() {
     DrivePenLine(false);
-    clock_       = &emu_.Get<GuestCycleClock>();
-    pulse_event_ = clock_->Add([this] { OnPulseEvent(); });
-    clock_->RegisterRateListener([this] { RescalePulses(); });
-    host_requests_ = &emu_.Get<HostRequestChannel>();
-    host_requests_->RegisterListener([this] { OnHostRequest(); });
 }
 
 void HpJornada700Touch::DrivePenLine(bool pen_down) {
@@ -79,134 +52,62 @@ void HpJornada700Touch::PulsePenLine() {
     gpio.DriveInputPin(9, false);
 }
 
-void HpJornada700Touch::MapHostToAdc(int hx, int hy, uint16_t* ax, uint16_t* ay) const {
-    auto&     hc = emu_.Get<HostCanvas>();
-    const int w  = (int)hc.GuestSurfaceWidth();
-    const int h  = (int)hc.GuestSurfaceHeight();
-    *ax = MapAxis(hx, w - 1, kAdcXMin, kAdcXMax);
-    *ay = MapAxis(hy, h - 1, kAdcYMin, kAdcYMax);
-}
-
 void HpJornada700Touch::CurrentAdc(uint16_t* adc_x, uint16_t* adc_y) const {
     *adc_x = adc_x_;
     *adc_y = adc_y_;
 }
 
-void HpJornada700Touch::PenDown(int x, int y) {
-    QueueHostPen(HostPen{HostPenKind::Down, x, y, 0u, 0u});
-}
-
 void HpJornada700Touch::TapRawAdc(uint16_t adc_x, uint16_t adc_y) {
-    QueueHostPen(HostPen{HostPenKind::RawTap, 0, 0, adc_x, adc_y});
-}
-
-void HpJornada700Touch::PenMove(int x, int y) {
-    std::lock_guard<std::mutex> lk(host_mtx_);
-    last_x_ = x;
-    last_y_ = y;
-}
-
-void HpJornada700Touch::PenUp() {
-    QueueHostPen(HostPen{HostPenKind::Up, 0, 0, 0u, 0u});
-}
-
-void HpJornada700Touch::QueueHostPen(const HostPen& pen) {
-    {
-        std::lock_guard<std::mutex> lk(host_mtx_);
-        if (pen.kind == HostPenKind::Down) {
-            last_x_ = pen.x;
-            last_y_ = pen.y;
-        }
-        host_pens_.push_back(pen);
-    }
-    host_requests_->Request();
-}
-
-void HpJornada700Touch::OnHostRequest() {
-    std::vector<HostPen> pens;
-    {
-        std::lock_guard<std::mutex> lk(host_mtx_);
-        pens.swap(host_pens_);
-    }
-    for (const HostPen& pen : pens) ApplyHostPen(pen);
+    QueueHostPen(HostPen{kRawTap, adc_x, adc_y});
 }
 
 void HpJornada700Touch::ApplyHostPen(const HostPen& pen) {
-    switch (pen.kind) {
-    case HostPenKind::Down:
-        synthetic_pulses_ = 0;
-        MapHostToAdc(pen.x, pen.y, &adc_x_, &adc_y_);
-        break;
-    case HostPenKind::RawTap:
-        synthetic_pulses_ = 4;
-        adc_x_ = pen.adc_x;
-        adc_y_ = pen.adc_y;
-        break;
-    case HostPenKind::Up:
+    if (pen.kind == kPenUp) {
         if (!pen_down_) return;
         synthetic_pulses_ = 0;
         pen_down_ = false;
-        clock_->Disarm(pulse_event_);
+        StopSamples();
         DrivePenLine(false);
         return;
+    }
+    if (pen.kind == kRawTap) {
+        synthetic_pulses_ = 4;
+        adc_x_ = static_cast<uint16_t>(pen.x);
+        adc_y_ = static_cast<uint16_t>(pen.y);
+    } else {
+        synthetic_pulses_ = 0;
+        MapToPanel(pen.x, pen.y, kPanel, &adc_x_, &adc_y_);
     }
     DrivePenLine(true);
     if (pen_down_) return;
     pen_down_ = true;
-    StartPulses();
+    StartSamples(PulseRate());
 }
 
 GuestCycleClock::Rate HpJornada700Touch::PulseRate() const {
     return high_rate_ ? kHighRate : kLowRate;
 }
 
-void HpJornada700Touch::StartPulses() {
-    pulses_.SetRate(clock_->ClockRate(), PulseRate());
-    pulses_.Start(clock_->Cycles());
-    next_pulse_ = 1u;
-    ArmNextPulse();
-}
-
-void HpJornada700Touch::RescalePulses() {
-    if (!pen_down_) return;
-    pulses_.Rescale(clock_->Cycles(), clock_->ClockRate(), PulseRate());
-    ArmNextPulse();
-}
-
-void HpJornada700Touch::ArmNextPulse() {
-    clock_->Arm(pulse_event_, pulses_.CycleOfTick(next_pulse_));
-}
-
-void HpJornada700Touch::OnPulseEvent() {
-    if (!pen_down_) return;
-    next_pulse_ = pulses_.TicksAt(clock_->Cycles()) + 1u;
-    Pulse();
-    if (pen_down_) ArmNextPulse();
-}
-
-void HpJornada700Touch::Pulse() {
+void HpJornada700Touch::OnSample() {
     if (synthetic_pulses_ > 0) {
         if (--synthetic_pulses_ == 0) {
             pen_down_ = false;
+            StopSamples();
             DrivePenLine(false);
             return;
         }
     } else {
         int x = 0;
         int y = 0;
-        {
-            std::lock_guard<std::mutex> lk(host_mtx_);
-            x = last_x_;
-            y = last_y_;
-        }
-        MapHostToAdc(x, y, &adc_x_, &adc_y_);
+        LatestPosition(&x, &y);
+        MapToPanel(x, y, kPanel, &adc_x_, &adc_y_);
     }
     PulsePenLine();
 }
 
 void HpJornada700Touch::SetHighRate(bool high) {
     high_rate_ = high;
-    RescalePulses();
+    SetSampleRate(PulseRate());
 }
 
 void HpJornada700Touch::ResetSampleRate() { SetHighRate(false); }
@@ -239,9 +140,7 @@ void HpJornada700Touch::RestoreState(StateReader& r) {
     high_rate_        = high != 0u;
     pen_down_         = down != 0u;
     synthetic_pulses_ = 0;
-    clock_->Disarm(pulse_event_);
-    std::lock_guard<std::mutex> lk(host_mtx_);
-    host_pens_.clear();
+    ClearOnRestore();
 }
 
 void HpJornada700Touch::PostRestore() {

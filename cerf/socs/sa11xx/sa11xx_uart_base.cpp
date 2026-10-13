@@ -9,6 +9,7 @@
 #include "../../peripherals/peripheral_dispatcher.h"
 #include "../../state/state_stream.h"
 #include "../guest_cpu_reset.h"
+#include "../uart_endpoint.h"
 #include "sa11xx_external_clocks.h"
 #include "sa11xx_intc.h"
 #include "sa11xx_uart_receiver.h"
@@ -86,7 +87,7 @@ void Sa11xxUartBase::FlushLine() {
 void Sa11xxUartBase::TxByte(uint8_t b) {
     tx_line_.push_back(b);
     if (b == '\n' || tx_line_.size() >= 256) FlushLine();
-    if (tx_listener_) tx_listener_(b);
+    if (endpoint_ != nullptr) endpoint_->OnGuestTx(b);
 }
 
 void Sa11xxUartBase::Emit(const std::vector<uint8_t>& out) {
@@ -254,6 +255,7 @@ void Sa11xxUartBase::SaveState(StateWriter& w) {
     w.Write("intc_asserted", intc_asserted_);
     tx_->Save(port_, w);
     rx_->Save(rx_port_, w);
+    if (endpoint_ != nullptr) endpoint_->SaveState(w);
 }
 
 void Sa11xxUartBase::RestoreState(StateReader& r) {
@@ -266,6 +268,7 @@ void Sa11xxUartBase::RestoreState(StateReader& r) {
     r.Read("intc_asserted", intc_asserted_);
     tx_->Restore(port_, r);
     rx_->Restore(rx_port_, r);
+    if (endpoint_ != nullptr) endpoint_->RestoreState(r);
 }
 
 void Sa11xxUartBase::PostRestore() {
