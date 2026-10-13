@@ -4,8 +4,7 @@ Proven investigation recipes. Use the matching recipe before you invent your own
 
 ## Parallel IDA sweep - one question across many guest binaries
 
-Use this recipe when a question spans many modules at once: "which driver owns SYSINTR N",
-"who touches register X", "does ANY module in the ROM validate this value".
+Use this recipe only when the user asks for a parallel sweep.
 
 1. If the per-module PEs are absent, extract them
    (`references/extracted-roms/<device>/<rom>/fs/Windows/`, see debugging.md § IDA discipline).
