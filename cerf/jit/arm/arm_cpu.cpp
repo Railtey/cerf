@@ -248,6 +248,9 @@ void ArmCpu::RaiseResetException(uint32_t initial_pc, bool initial_thumb) {
 
     state_.deep_sleep    = 0u;
     state_.reset_pending = 0u;
+    state_.idle_wait     = 0u;
+    std::atomic_ref<uint32_t>(state_.chain_exit_request)
+        .fetch_and(~kChainExitIdle, std::memory_order_acq_rel);
 
     ApplySctlrExecutionState();
 
@@ -454,7 +457,9 @@ constexpr void ArmCpu::VisitState(ArmCpuState& s, F& field) {
     field("irq_interrupt_pending", s.irq_interrupt_pending);
     field("reset_pending", s.reset_pending);
     field("deep_sleep", s.deep_sleep);
+    field("idle_wait", s.idle_wait);
     field.Skip(s.chain_exit_request);
+    field.Skip(s.pad);
 }
 
 void ArmCpu::SaveState(StateWriter& w) {
@@ -469,6 +474,7 @@ void ArmCpu::RestoreState(StateReader& r) {
     StateReadField field(r);
     VisitState(state_, field);
     std::atomic_ref<uint32_t>(state_.chain_exit_request)
-        .store(state_.reset_pending != 0u ? kChainExitReset : 0u,
+        .store((state_.reset_pending != 0u ? kChainExitReset : 0u) |
+                   (state_.idle_wait != 0u ? kChainExitIdle : 0u),
                std::memory_order_release);
 }

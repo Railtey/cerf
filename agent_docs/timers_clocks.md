@@ -25,12 +25,20 @@ rate of the SoC.
 
 ## What runs on guest time
 
-- **Every state that the guest can see advance with time runs on guest
-  time.** A timer is one case. The same rule covers a frame or scan-line
-  status bit and a line counter. It also covers a transfer that completes
-  after a delay, a sample rate, a baud rate and a conversion time. The rule
-  holds for a part on every board and every CPU architecture. A shared part
-  never selects its time base by architecture.
+- **A state that the guest sees advance with time runs on guest time.** A
+  timer is one case. The same rule covers an RTC, a count register, and a
+  frame or scan-line status bit. It also covers a stream that the guest feeds
+  at a sample rate, such as audio playback and capture. The rule holds for a
+  part on every board and every CPU architecture. A shared part never selects
+  its time base by architecture.
+- **An operation that needs no chip speed does not run at chip speed.** A
+  transfer, a conversion, a lock or a settle that completes at once stays at
+  once. An instant result shows the guest no host lag. A datasheet duration
+  makes a guest that polls for the result spin on an emulated register. Each
+  poll costs far more host time than the guest cycles that it advances. A part
+  takes the duration of an operation only with evidence. A log must show a
+  guest that fails or corrupts its state while the operation completes at
+  once. The change that adds the duration cites that log.
 - **While guest time runs, a host clock, a host thread and a list of host
   deadlines are never the time base of a guest-visible state.**
 - **When the guest reads a polled state, the part computes that state from

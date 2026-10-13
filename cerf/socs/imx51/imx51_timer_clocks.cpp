@@ -2,8 +2,8 @@
 
 #include "../../boards/board_context.h"
 #include "../../core/cerf_emulator.h"
-#include "../../core/fatal.h"
 #include "imx51_ccm.h"
+#include "imx51_clock_input.h"
 #include "imx51_id.h"
 
 #include <cstdint>
@@ -25,32 +25,34 @@ public:
     void OnReady() override { ccm_ = &emu_.Get<Imx51Ccm>(); }
 
     /* MCIMX51RM Table 7-41: epit1_highfreq, epit2_highfreq and gpt_highfreq are
-       PERCLK-dependent. */
-    uint64_t InputHz(FreescaleTimerUnit unit, FreescaleTimerInput input) const override {
+       PERCLK-dependent. §29.4.2 (page 29-10): ipg_clk_32k "is the 32Khz low reference clock
+       which is provided by the CCM"; Table 7-35 gates no 32 kHz clock. */
+    GuestCycleClock::Rate InputRate(FreescaleTimerUnit unit,
+                                    FreescaleTimerInput input) const override {
+        if (!InputRunsIn(unit, input, FreescaleLowPowerMode::kRun)) return GuestCycleClock::Rate{0u, 1u};
         if (input == FreescaleTimerInput::kLowfreq) {
-            emu_.Get<Fatal>().Die("Imx51TimerClocks: timer unit %u selects the ipg_clk_32k "
-                                  "input", static_cast<unsigned>(unit));
+            return GuestCycleClock::Rate{emu_.Get<Imx51ClockInput>().CkilHz(), 1u};
         }
-        if (!InputRunsIn(unit, input, FreescaleLowPowerMode::kRun)) return 0u;
-        if (input == FreescaleTimerInput::kHighfreq) return ccm_->PerclkRootHz();
-        return ccm_->IpgClkHz();
+        if (input == FreescaleTimerInput::kHighfreq) return ccm_->PerclkRootRate();
+        return ccm_->IpgClkRate();
     }
 
+    /* MCIMX51RM §29.4.2 (page 29-10): ipg_clk_32k "is supposed to be on in low power mode when
+       ipg_clk is turned off". */
     bool InputRunsIn(FreescaleTimerUnit unit, FreescaleTimerInput input,
                      FreescaleLowPowerMode mode) const override {
+        if (input == FreescaleTimerInput::kLowfreq) return true;
         return ccm_->ClockRunsIn(kCcgr2, GateIndex(unit, input), mode);
     }
 
-    /* MCIMX51RM Table 7-26 CLPCR LPM [1:0]: 00 remain in run mode, 01 wait mode,
-       10 STOP mode, 11 LPSR mode. */
+    /* MCIMX51RM Table 7-26 CLPCR LPM [1:0]: 00 remain in run mode, 01 wait mode, 10 STOP mode,
+       11 LPSR mode; §7.4.8.4 (page 7-117): "LPSR is similar to STOP mode". */
     FreescaleLowPowerMode WfiMode() const override {
         switch (ccm_->WfiLowPowerMode()) {
-            case 0u: return FreescaleLowPowerMode::kRun;
-            case 1u: return FreescaleLowPowerMode::kWait;
-            case 2u: return FreescaleLowPowerMode::kStop;
-            default: break;
+            case 0u:  return FreescaleLowPowerMode::kRun;
+            case 1u:  return FreescaleLowPowerMode::kWait;
+            default:  return FreescaleLowPowerMode::kStop;
         }
-        emu_.Get<Fatal>().Die("Imx51TimerClocks: CLPCR selects LPSR mode");
     }
 
     void RegisterRateListener(std::function<void()> fn) override {

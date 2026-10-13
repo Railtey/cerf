@@ -24,11 +24,14 @@ public:
 
     void OnReady() override { ccm_ = &emu_.Get<Imx31Ccm>(); }
 
-    uint64_t InputHz(FreescaleTimerUnit unit, FreescaleTimerInput input) const override {
-        if (ccm_->ClockGate0(GateIndex(unit)) == 0u) return 0u;
-        if (input == FreescaleTimerInput::kLowfreq)  return ccm_->CkilHz();
-        if (input == FreescaleTimerInput::kHighfreq) return ccm_->PerClkHz();
-        return ccm_->IpgClkHz();
+    GuestCycleClock::Rate InputRate(FreescaleTimerUnit unit,
+                                    FreescaleTimerInput input) const override {
+        if (ccm_->ClockGate0(GateIndex(unit)) == 0u) return GuestCycleClock::Rate{0u, 1u};
+        if (input == FreescaleTimerInput::kLowfreq) return GuestCycleClock::Rate{ccm_->CkilHz(), 1u};
+        if (input == FreescaleTimerInput::kHighfreq) {
+            return GuestCycleClock::Rate{ccm_->PerClkHz(), 1u};
+        }
+        return GuestCycleClock::Rate{ccm_->IpgClkHz(), 1u};
     }
 
     /* MCIMX31RM Table 3-30 transition 8 stops the PLLs; 33.6.1.1 and 34.4.1.1 keep

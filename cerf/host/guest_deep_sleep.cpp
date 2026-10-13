@@ -1,5 +1,6 @@
 #include "guest_deep_sleep.h"
 
+#include "../boot/guest_cold_boot.h"
 #include "../core/cerf_emulator.h"
 #include "../core/fatal.h"
 #include "../core/log.h"
@@ -19,24 +20,24 @@ namespace {
 constexpr int kResumeGraceMs = 100;
 }
 
+void GuestDeepSleep::RequireNoWakeShape(const char* shape) const {
+    if (waker_ == nullptr && clock_stop_ == nullptr && !power_on_wake_) return;
+    emu_.Get<Fatal>().Die("GuestDeepSleep: a %s wake registered beside another wake shape", shape);
+}
+
 void GuestDeepSleep::RegisterWaker(DeepSleepWaker* waker) {
-    if (clock_stop_ != nullptr) {
-        LOG(Caution, "GuestDeepSleep: a DeepSleepWaker and a DeepSleepClockStop are both "
-                "registered - sleep-exit is one shape or the other, so one SoC's wake "
-                "model is wrong\n");
-        CerfFatalExit(CERF_FATAL_RUNTIME_ERROR);
-    }
+    RequireNoWakeShape("reset");
     waker_ = waker;
 }
 
 void GuestDeepSleep::RegisterClockStopWaker(DeepSleepClockStop* waker) {
-    if (waker_ != nullptr) {
-        LOG(Caution, "GuestDeepSleep: a DeepSleepClockStop and a DeepSleepWaker are both "
-                "registered - sleep-exit is one shape or the other, so one SoC's wake "
-                "model is wrong\n");
-        CerfFatalExit(CERF_FATAL_RUNTIME_ERROR);
-    }
+    RequireNoWakeShape("clock-stop");
     clock_stop_ = waker;
+}
+
+void GuestDeepSleep::RegisterPowerOnWake() {
+    RequireNoWakeShape("power-on");
+    power_on_wake_ = true;
 }
 
 void GuestDeepSleep::RegisterPowerUpListener(std::function<void()> fn) {
@@ -195,6 +196,11 @@ void GuestDeepSleep::DeliverWake(ResumeSource src) {
         for (auto& fn : power_up_listeners_) fn();
         emu_.Get<GuestPowerNotifier>().NotifyResume(src);
         emu_.Get<GuestEngine>().ExitDeepSleep();
+        return;
+    }
+    if (power_on_wake_) {
+        emu_.Get<GuestPowerNotifier>().NotifyResume(src);
+        emu_.Get<GuestColdBoot>().RequestHardReset();
         return;
     }
     waker_->LatchSleepWakeCause();

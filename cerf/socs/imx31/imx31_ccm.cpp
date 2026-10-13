@@ -96,8 +96,7 @@ void Imx31Ccm::OnReady() {
     input_ = &emu_.Get<Imx31ClockInput>();
     LoadResetValues();
     plls_ = &emu_.Get<Imx31Plls>();
-    plls_->Attach(regs_[kCcmrSlot], PllControls());
-    plls_->RegisterChangeListener([this] { ApplyRates(); });
+    plls_->Settle(regs_[kCcmrSlot], PllControls());
     auto& reset = emu_.Get<GuestCpuReset>();
     reset.SetCauseLatch(this);
     reset.RegisterResetListener([this](ResetLineKind kind) { ResetRegisters(kind); });
@@ -342,7 +341,7 @@ void Imx31Ccm::WriteWord(uint32_t addr, uint32_t value) {
     for (uint32_t p = 0; p < Imx31Plls::kCount; ++p) {
         if (slot == kPllSlots[p]) plls_->OnControlWrite(p, old, value, regs_[kCcmrSlot]);
     }
-    if (slot == kCcmrSlot) plls_->OnCcmrWrite(old, value, regs_[kRcsrSlot], PllControls());
+    if (slot == kCcmrSlot) plls_->OnCcmrWrite(old, value, PllControls());
     const bool timing = slot == kCcmrSlot || slot == kPdr0Slot || slot == kPdr1Slot ||
                         slot == kMpctlSlot || slot == kUpctlSlot || slot == kSpctlSlot ||
                         slot == kCgr0Slot;
@@ -368,7 +367,6 @@ void Imx31Ccm::RestoreState(StateReader& r) {
 }
 
 void Imx31Ccm::PostRestore() {
-    plls_->PostRestore();
     ApplyRates();
     NotifyGates();
 }

@@ -17,9 +17,6 @@ public:
 
     bool ShouldRegister() override;
 
-    /* Internal 2D/VG register write (command-window funnel word2). A non-zero CONTROL
-       write kicks the stream walk (returns true when a submit retires); every other
-       write stores or dispatches the register. */
     bool WriteReg(uint32_t addr, uint32_t data);
 
     void SaveState(StateWriter& w) const;

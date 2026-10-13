@@ -1,7 +1,6 @@
 #include "pxa255_rtc.h"
 
 #include "../../core/cerf_emulator.h"
-#include "../../core/fatal.h"
 #include "../../boards/board_context.h"
 #include "pxa255_id.h"
 #include "pxa255_clock_manager.h"
@@ -32,10 +31,8 @@ constexpr uint64_t kOscCrystalHz = 32768u;
 constexpr uint64_t kOscDividedNum = 230400u;
 constexpr uint64_t kOscDividedDen = 7u;
 
-/* §4.3.2.3: the RCNR write is delayed "by approximately two 32 kHz clock cycles"; §4.3.2.2:
-   the RTAR write is delayed "by two 32 kHz clock cycles after the processor store". */
 constexpr IntelRtcCounter::Traits kTraits = {
-    "pxa255", kRttrLck | 0x03FFFFFFu, kRttrLck, true, true, false, 2u, 2u, 0u, 0u, 0u, false,
+    "pxa255", kRttrLck | 0x03FFFFFFu, kRttrLck, true, true, false,
 };
 
 }
@@ -60,28 +57,19 @@ void Pxa255Rtc::OnReady() {
     /* PXA255 Dev Man Table 3-9 WERTC: "Wake-up due to RTC alarm enabled."
        §4.3.2.4: "In Sleep mode, only AL events set the status bit". */
     auto& sleep = emu_.Get<GuestDeepSleep>();
-    sleep.RegisterSleepEntryListener([this] {
-        rtc_.RequireSettled("sleep entered");
-        alarm_mark_ = rtc_.AlarmEvents();
-        match_mark_ = rtc_.MatchEvents();
-    });
+    sleep.RegisterSleepEntryListener([this] { alarm_mark_ = rtc_.AlarmEvents(); });
     auto alarm_woke = [this] {
         return emu_.Get<Pxa255PowerManager>().RtcAlarmWakeEnabled() &&
                rtc_.AlarmEvents() != alarm_mark_;
     };
     sleep.RegisterParkClock([this, alarm_woke] {
-        if (alarm_woke()) {
-            emu_.Get<Pxa255PowerManager>().LatchRtcWakeEdge();
-        } else if (emu_.Get<Pxa255PowerManager>().RtcAlarmWakeEnabled() &&
-                   rtc_.MatchEvents() != match_mark_) {
-            emu_.Get<Fatal>().Die("Pxa255Rtc: RCNR reached RTAR %u in sleep with PWER.WERTC set "
-                                  "and RTSR.ALE clear (rtsr=0x%X); an RTC wake without ALE is "
-                                  "not modelled", rtc_.Rtar(), rtc_.Rtsr());
-        }
+        if (alarm_woke()) emu_.Get<Pxa255PowerManager>().LatchRtcWakeEdge();
     });
     sleep.RegisterParkWakeSource(alarm_woke);
+    /* §4.3.2.2: "If the two are equal and RTSR[ALE] is set, then RTSR[AL] is set." */
     sleep.RegisterParkWakeDue([this] {
-        if (!emu_.Get<Pxa255PowerManager>().RtcAlarmWakeEnabled()) {
+        if (!emu_.Get<Pxa255PowerManager>().RtcAlarmWakeEnabled() ||
+            (rtc_.Rtsr() & IntelRtcCounter::kRtsrAle) == 0u) {
             return GuestDeepSleep::kNoParkWake;
         }
         return rtc_.SleptNsAtEdge(rtc_.EdgesToMatch());

@@ -50,8 +50,10 @@ public:
     void     RegisterSuspendListener(std::function<void()> fn);
 
     void OnCpuStateRestored();
+    void OnCpuReset();
     bool ResumeIdle();
     void StopCpuAfterAccess();
+    void HaltCore();
 
     static void __fastcall StandbyInsnHelper(MipsInterruptChannel* channel, uint32_t next_pc);
     static void __fastcall SuspendInsnHelper(MipsInterruptChannel* channel, uint32_t next_pc);
@@ -61,7 +63,8 @@ private:
 
     bool WaitForInterrupt(uint32_t idle);
     bool InterruptPending(uint32_t idle) const;
-    void EnterIdle(const char* insn, uint32_t next_pc);
+    void EnterIdle(uint32_t next_pc);
+    void IdleAfterInsn(uint32_t kind);
     void OpenSuspendSpan();
     void CloseSuspendSpan();
 

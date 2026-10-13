@@ -24,11 +24,7 @@ constexpr uint32_t kIntcHzBit    = 1u << 30;
    oscillator." */
 constexpr uint64_t kOscHz = 32768u;
 
-/* SA-1110 Dev Man §9.3.1: RCNR writes are delayed "by up to one 32-kHz-clock (~ 30 us)
-   after the processor store is performed". */
-constexpr IntelRtcCounter::Traits kTraits = {
-    "sa11xx", 0x03FFFFFFu, 0u, false, false, true, 1u, 0u, 0u, 0u, 0u, true,
-};
+constexpr IntelRtcCounter::Traits kTraits = {"sa11xx", 0x03FFFFFFu, 0u, false, false, true};
 
 }
 
@@ -44,10 +40,7 @@ void Sa11xxRtc::OnReady() {
     rtc_.Attach(kOscHz, 1u);
     /* §9.5.3, second step of sleep shutdown: "All potential wake-up sources
        are cleared. This involves ... clearing the RTC alarm interrupt bit." */
-    emu_.Get<GuestDeepSleep>().RegisterSleepEntryListener([this] {
-        rtc_.RequireSettled("sleep entered");
-        rtc_.ClearAlarmStatus();
-    });
+    emu_.Get<GuestDeepSleep>().RegisterSleepEntryListener([this] { rtc_.ClearAlarmStatus(); });
     emu_.Get<GuestCpuReset>().RegisterResetListener([this](ResetLineKind kind) {
         OnResetLine(kind);
     });
@@ -70,8 +63,6 @@ int64_t Sa11xxRtc::AlarmWakeDueNs() {
     if ((rtc_.Rtsr() & IntelRtcCounter::kRtsrAle) == 0u) return GuestDeepSleep::kNoParkWake;
     return rtc_.SleptNsAtEdge(rtc_.EdgesToMatch());
 }
-
-void Sa11xxRtc::CreditCoreStop(uint64_t ns) { rtc_.CreditCoreStop(ns); }
 
 /* SA-1110 Dev Man §9.3.3: "The AL and HZ bits in this register are routed to the
    interrupt controller"; ALE "RTC alarm interrupt enable", HZE "1-Hz interrupt enable". */

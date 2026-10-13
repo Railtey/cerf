@@ -64,6 +64,7 @@ namespace MipsIdle {
     constexpr uint32_t kStandby = 1;
     constexpr uint32_t kSuspend = 2;
     constexpr uint32_t kStopCpu = 3;
+    constexpr uint32_t kHalt    = 4;
 }
 
 /* CP0 Cause.ExcCode values (MIPS Vol III Table; QEMU tlb_helper.c do_interrupt
@@ -215,6 +216,18 @@ struct MipsCpuState {
 static_assert(offsetof(MipsTlbEntry, pfn) == 24, "MipsTlbEntry layout");
 static_assert(sizeof(MipsTlbEntry) == 40, "MipsTlbEntry layout");
 static_assert(sizeof(MipsCpuState) == 5584, "MipsCpuState layout");
+
+inline void MipsResolvePendingBranch(MipsCpuState& s, uint32_t fallthrough) {
+    if (s.branch_state == MipsBranch::kCond) {
+        s.pc = s.bcond ? s.btarget : fallthrough;
+    } else if (s.branch_state == MipsBranch::kCondLikely) {
+        s.pc = s.btarget;
+    } else {
+        s.pc = s.btarget;
+        s.isa_mode = s.btarget_isa;
+    }
+    s.branch_state = MipsBranch::kNone;
+}
 
 /* CP0 register number -> byte offset of its field in MipsCpuState, or -1 for a
    register CERF does not model. Shared by the MFC0 (read) and MTC0 (write) place

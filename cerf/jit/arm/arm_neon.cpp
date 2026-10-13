@@ -43,6 +43,7 @@ uint32_t __cdecl ArmNeon::LoadAllLanesHelper(ArmNeon* neon, uint32_t pc,
         return 1;
     }
     uint8_t data[16]{};
+    bool    routed = false;
     for (uint32_t offset = 0; offset < length; offset += bytes) {
         uint32_t done = 0;
         if (!mmu.AccessPaged(state, base + offset, data + offset, bytes,
@@ -58,6 +59,7 @@ uint32_t __cdecl ArmNeon::LoadAllLanesHelper(ArmNeon* neon, uint32_t pc,
                 cpu.RaiseAbortDataException(pc);
                 return 1;
             }
+            routed = true;
         }
     }
     for (uint32_t r = 0; r < regs; ++r) {
@@ -66,7 +68,7 @@ uint32_t __cdecl ArmNeon::LoadAllLanesHelper(ArmNeon* neon, uint32_t pc,
             std::memcpy(dst + lane, data + (count == 1u ? 0u : r * bytes), bytes);
     }
     if (rm != 15u) state->gprs[rn] = base + (rm == 13u ? length : state->gprs[rm]);
-    return 0;
+    return (routed && neon->emu_.Get<ArmInterruptChannel>().LeaveAfterAccess(pc + 4u)) ? 1u : 0u;
 }
 
 bool ArmNeon::AlignmentFaults(ArmMmu& mmu, uint32_t base, uint32_t alignment,
@@ -140,6 +142,7 @@ uint32_t ArmNeon::HandleLoadStoreMultiple(uint32_t pc, uint32_t d_idx, uint32_t 
 
     uint8_t* vfp_base = reinterpret_cast<uint8_t*>(state->vfp_d);
     uint32_t addr = base;
+    bool     routed = false;
     for (uint32_t r = 0; r < regs; ++r) {
         uint8_t* dst  = vfp_base + (d_idx + r) * 8u;
         uint32_t done = 0;
@@ -148,6 +151,7 @@ uint32_t ArmNeon::HandleLoadStoreMultiple(uint32_t pc, uint32_t d_idx, uint32_t 
                 cpu.RaiseAbortDataException(pc);
                 return 1;
             }
+            routed = true;
             if (r == 0u && done == 0u &&
                 emu_.Get<ArmInterruptChannel>().BackOutForIrq(pc)) {
                 mmu.ClearIoPending();
@@ -174,7 +178,7 @@ uint32_t ArmNeon::HandleLoadStoreMultiple(uint32_t pc, uint32_t d_idx, uint32_t 
         state->gprs[rn_idx] =
             base + (rm_idx != 13u ? state->gprs[rm_idx] : 8u * regs);
     }
-    return 0;
+    return (routed && emu_.Get<ArmInterruptChannel>().LeaveAfterAccess(pc + 4u)) ? 1u : 0u;
 }
 
 uint32_t __cdecl ArmNeon::HandleLoadStoreMultipleHelper(ArmNeon* neon, uint32_t pc,
@@ -214,6 +218,7 @@ uint32_t ArmNeon::HandleLoadStoreInterleaved(uint32_t pc, uint32_t d_idx, uint32
        read/written in interleaved order. */
     uint8_t* vfp_base = reinterpret_cast<uint8_t*>(state->vfp_d);
     uint32_t addr = base;
+    bool     routed = false;
     for (uint32_t r = 0; r < regs; ++r) {
         for (uint32_t e = 0; e < elements; ++e) {
             for (uint32_t k = 0; k < nstreams; ++k) {
@@ -234,6 +239,7 @@ uint32_t ArmNeon::HandleLoadStoreInterleaved(uint32_t pc, uint32_t d_idx, uint32
                         cpu.RaiseAbortDataException(pc);
                         return 1;
                     }
+                    routed = true;
                 }
                 addr += ebytes;
             }
@@ -244,7 +250,7 @@ uint32_t ArmNeon::HandleLoadStoreInterleaved(uint32_t pc, uint32_t d_idx, uint32
         state->gprs[rn_idx] =
             base + (rm_idx != 13u ? state->gprs[rm_idx] : nstreams * 8u * regs);
     }
-    return 0;
+    return (routed && emu_.Get<ArmInterruptChannel>().LeaveAfterAccess(pc + 4u)) ? 1u : 0u;
 }
 
 uint32_t __cdecl ArmNeon::HandleLoadStoreInterleavedHelper(ArmNeon* neon, uint32_t pc,
@@ -281,6 +287,7 @@ uint32_t ArmNeon::HandleLoadStoreSingleLane(uint32_t pc, uint32_t d_idx, uint32_
     /* One element per register, at lane `index` of D[d + k*inc]. */
     uint8_t* vfp_base = reinterpret_cast<uint8_t*>(state->vfp_d);
     uint32_t addr = base;
+    bool     routed = false;
     for (uint32_t k = 0; k < nstreams; ++k) {
         uint8_t* lane = vfp_base + (d_idx + k * inc) * 8u + index * ebytes;
         uint32_t done = 0;
@@ -297,6 +304,7 @@ uint32_t ArmNeon::HandleLoadStoreSingleLane(uint32_t pc, uint32_t d_idx, uint32_
                 cpu.RaiseAbortDataException(pc);
                 return 1;
             }
+            routed = true;
         }
         addr += ebytes;
     }
@@ -305,7 +313,7 @@ uint32_t ArmNeon::HandleLoadStoreSingleLane(uint32_t pc, uint32_t d_idx, uint32_
         state->gprs[rn_idx] =
             base + (rm_idx != 13u ? state->gprs[rm_idx] : nstreams * ebytes);
     }
-    return 0;
+    return (routed && emu_.Get<ArmInterruptChannel>().LeaveAfterAccess(pc + 4u)) ? 1u : 0u;
 }
 
 uint32_t __cdecl ArmNeon::HandleLoadStoreSingleLaneHelper(ArmNeon* neon, uint32_t pc,

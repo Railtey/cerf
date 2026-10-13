@@ -71,6 +71,7 @@ public:
     void EnterDeepSleep() override;
     void ExitDeepSleep() override;
     void EnterIdleWait() override;
+    void SetCoreClockStopped(bool stopped) override;
     void SetInjectionBand(uint32_t va, uint32_t pa, uint32_t size) override;
     void SetDmaRegion(uint32_t pa, uint32_t size) override;
 

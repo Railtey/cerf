@@ -407,6 +407,7 @@ uint8_t* EmitHalfwordSignedTransfer(uint8_t*      cursor,
         if (!is_store) {
             EmitMovBaseDisp32Reg(cursor, kStateReg, GprDisp(d->rd), kEdx);
         }
+        cursor = EmitStopAfterIoAccess(cursor, d, ctx);
         done_labels[n_done++] = EmitJmpLabel32(cursor);
 
         FixupLabel32(real_fault_label, cursor);

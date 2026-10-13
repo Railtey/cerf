@@ -44,6 +44,7 @@ uint8_t* EmitIoIrqPreciseBackout(uint8_t* cursor, DecodedInsn* d,
 uint8_t* EmitIoIrqPreciseBackoutIfIo(uint8_t* cursor, DecodedInsn* d,
                                      BlockContext* ctx);
 uint8_t* EmitItStateStore(uint8_t* cursor, uint32_t itstate);
+uint8_t* EmitStopAfterIoAccess(uint8_t* cursor, DecodedInsn* d, BlockContext* ctx);
 uint8_t* EmitLoadedPcWrite(uint8_t* cursor, DecodedInsn* d, BlockContext* ctx);
 uint8_t* EmitMsrWriteTail(uint8_t* cursor, DecodedInsn* d, BlockContext* ctx);
 uint8_t* EmitNeonCoreToScalar(uint8_t* cursor, DecodedInsn* d, BlockContext* ctx);

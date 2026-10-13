@@ -98,7 +98,7 @@ constexpr void MipsCpu::VisitState(MipsCpuState& s, F& field) {
     field("isa_mode", s.isa_mode);
     field("btarget_isa", s.btarget_isa);
     field("branch_len", s.branch_len);
-    field("idle_wait", s.idle_wait);
+    field("idle_kind", s.idle_wait);
     field.Skip(s.idle_pad);
 }
 

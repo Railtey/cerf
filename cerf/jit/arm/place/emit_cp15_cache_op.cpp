@@ -3,7 +3,6 @@
 
 #include "../../../cpu/arm_processor_config.h"
 #include "../arm_emit_services.h"
-#include "../arm_interrupt_channel.h"
 #include "../arm_translation_cache.h"
 #include "../cpu_state.h"
 #include "../place_fns.h"
@@ -67,12 +66,7 @@ uint8_t* EmitCp15CacheOp(uint8_t* cursor, DecodedInsn* d, BlockContext* ctx) {
             /* CP15WFI c7,0,c0,4 (Table D15-23, p. D15-2631; Table D12-11,
                p. D12-2538); UNPREDICTABLE on ARMv7 (p. B3-1499). */
             if (d->cp == 4 && !v7) {
-                EmitMovRegImm32(cursor, kEcx,
-                    static_cast<uint32_t>(reinterpret_cast<uintptr_t>(
-                        emit->InterruptChannel())));
-                EmitCall(cursor,
-                    reinterpret_cast<void*>(&ArmInterruptChannel::WfiHelper));
-                return cursor;
+                return PlaceWfi(cursor, d, ctx);
             }
             /* SA-1110 Developer's Manual §5.2.8: six register 7 functions,
                none with CRm=c0; unlisted in ARM DDI 0100I Table B6-6

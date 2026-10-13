@@ -45,6 +45,7 @@ uint32_t ArmVfpMemory::HandleBlockTransfer(uint32_t pc, uint32_t pc_read,
 
     uint8_t* vfp_base = reinterpret_cast<uint8_t*>(state->vfp_d);
 
+    bool routed = false;
     for (uint32_t i = 0; i < n_regs; i++) {
         const uint32_t off = is_dp ? ((vd + i) * 8u) : ((vd + i) * 4u);
         uint32_t done = 0;
@@ -62,6 +63,7 @@ uint32_t ArmVfpMemory::HandleBlockTransfer(uint32_t pc, uint32_t pc_read,
                 cpu.RaiseAbortDataException(pc);
                 return 1;
             }
+            routed = true;
         }
         addr += bytes_per;
     }
@@ -72,7 +74,7 @@ uint32_t ArmVfpMemory::HandleBlockTransfer(uint32_t pc, uint32_t pc_read,
         state->gprs[rn_idx] =
             pre_decrement ? (rn_value - imm32) : (rn_value + imm32);
     }
-    return 0;
+    return (routed && emu_.Get<ArmInterruptChannel>().LeaveAfterAccess(pc + 4u)) ? 1u : 0u;
 }
 
 uint32_t __cdecl ArmVfpMemory::HandleBlockTransferHelper(ArmVfpMemory* vfp,
@@ -124,6 +126,7 @@ uint32_t ArmVfpMemory::HandleSingleTransfer(uint32_t pc, uint32_t pc_read,
             cpu.RaiseAbortDataException(pc);
             return 1;
         }
+        return emu_.Get<ArmInterruptChannel>().LeaveAfterAccess(pc + 4u) ? 1u : 0u;
     }
     return 0;
 }

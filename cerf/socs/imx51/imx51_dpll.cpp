@@ -8,6 +8,7 @@
 #include "../../state/state_stream.h"
 #include "../guest_cpu_reset.h"
 #include "imx51_ccm.h"
+#include "imx51_ccm_status.h"
 #include "imx51_clock_input.h"
 #include "imx51_id.h"
 
@@ -26,54 +27,45 @@ constexpr uint32_t kDpHfsMfdOff = 0x020u;
 constexpr uint32_t kDpTogcOff   = 0x028u;
 constexpr uint32_t kDpDestatOff = 0x02Cu;
 
-/* Table 22-1: the fields each register stores. */
+/* Figure 22-2: bit 11 is unimplemented; MUL_CTRL self-clears, HFSM and LRF are status bits.
+   Figure 22-3: only AREN and LDREQ are implemented; Table 22-3: the DPLL acknowledge clears LDREQ. */
 constexpr uint32_t kFieldMasks[] = {
-    0x00003F7Eu, 0x0000000Fu, 0x000000FFu, 0x07FFFFFFu, 0x07FFFFFFu, 0x07FFFFFFu,
-    0x07FFFFFFu, 0x000000FFu, 0x07FFFFFFu, 0x07FFFFFFu, 0x0003FFFFu,
+    0x0000177Eu, 0x00000002u, 0x000000FFu, 0x03FFFFFFu, 0x07FFFFFFu, 0x07FFFFFFu,
+    0x07FFFFFFu, 0x000000FFu, 0x03FFFFFFu, 0x07FFFFFFu, 0x0003FFFFu,
 };
 
 /* Table 22-10 TOG_DIS [17], TOG_EN [16]; Table 22-11: the desense logic runs when TOG_EN
-   is set and TOG_DIS is clear. */
+   is set and TOG_DIS is clear; Figure 22-11: TOG_DIS resets to 1. */
 constexpr uint32_t kTogcDis = 1u << 17;
 constexpr uint32_t kTogcEn  = 1u << 16;
 
 /* Figure 22-12: DP_DESTAT reset value; Table 22-12 TOG_SEL 0: desense logic inactive. */
 constexpr uint32_t kDestatInactive = 0x00020000u;
 
-constexpr uint32_t kCtlLrf        = 1u << 0;
-constexpr uint32_t kCtlPlm        = 1u << 2;
-constexpr uint32_t kCtlRcp        = 1u << 3;
-constexpr uint32_t kCtlRst        = 1u << 4;
-constexpr uint32_t kCtlUpen       = 1u << 5;
-constexpr uint32_t kCtlPre        = 1u << 6;
+constexpr uint32_t kCtlLrf         = 1u << 0;
+constexpr uint32_t kCtlRst         = 1u << 4;
+constexpr uint32_t kCtlUpen        = 1u << 5;
+constexpr uint32_t kCtlPre         = 1u << 6;
 constexpr uint32_t kCtlRefSelShift = 8;
-constexpr uint32_t kCtlRefDiv     = 1u << 10;
-constexpr uint32_t kCtlAde        = 1u << 11;
-constexpr uint32_t kCtlDpdck02En  = 1u << 12;
-constexpr uint32_t kCtlMulCtrl    = 1u << 13;
+constexpr uint32_t kCtlRefDiv      = 1u << 10;
+constexpr uint32_t kCtlDpdck02En   = 1u << 12;
+constexpr uint32_t kCtlMulCtrl     = 1u << 13;
 
-constexpr uint32_t kCfgLdreq  = 1u << 0;
-constexpr uint32_t kCfgAren   = 1u << 1;
-constexpr uint32_t kCfgSjcCe  = 1u << 2;
-constexpr uint32_t kCfgBistCe = 1u << 3;
+constexpr uint32_t kCfgLdreq = 1u << 0;
+constexpr uint32_t kCfgAren  = 1u << 1;
 
-/* Table 22-2 REF_CLK_SEL: clk 2 is COSC (internal oscillator), clk 3 is FPM. */
+/* Table 22-2 REF_CLK_SEL: clk 0 and clk 1 "is not connected", "clk 2 is COSC (internal
+   oscillator)", "clk 3 is FPM". */
 constexpr uint32_t kRefSelCosc = 2u;
+constexpr uint32_t kRefSelFpm  = 3u;
+
+/* MCIMX51RM §7.4.6.5 (page 7-83): "initial value of UPEN should be asserted 1"; §7.4.5: with
+   CLKSS = 0 "OSC output is used as reference clock for all three DPLL_IPs". */
+constexpr uint32_t kCtlReset = kCtlUpen | (kRefSelCosc << kCtlRefSelShift);
 
 constexpr uint32_t kMfnMask = 0x07FFFFFFu;
-constexpr uint32_t kMfdMask = 0x07FFFFFFu;
-
-/* Figure 22-15 and its NOTE: a register write asserts crstrt one reference clock later, the
-   port updates one clock after that and crstrt releases four clocks later; setting RST
-   asserts crstrt at once. */
-constexpr uint64_t kAutoRestartClocks = 6u;
-constexpr uint64_t kRstRestartClocks  = 5u;
-/* MCIMX51RM p.21-7 and Figure 21-4: "The DPLL starts after three reference clock periods". */
-constexpr uint64_t kStartClocks = 3u;
-/* IMX51CEC Table 48 note 4: at most 398 cycles of divided reference clock after a full reset;
-   MCIMX51RM p.21-7: a CRSTRT-only (partial) restart reduces the lock-in by 128 of them. */
-constexpr uint64_t kLockInFull    = 398u;
-constexpr uint64_t kLockInPartial = 398u - 128u;
+/* Table 22-5 (page 22-9) MFD[26:0]: "Note: Bit 26 is always 0." */
+constexpr uint32_t kMfdMask = 0x03FFFFFFu;
 
 }
 
@@ -83,13 +75,6 @@ bool Imx51Dpll::ShouldRegister() {
 }
 
 void Imx51Dpll::OnReady() {
-    clock_      = &emu_.Get<GuestCycleClock>();
-    lock_event_ = clock_->Add([this] { OnLock(); });
-    ref_.Attach(emu_.Get<Imx51ClockInput>().OscHz(), 1u);
-    clock_->RegisterRateListener([this] {
-        ref_.Rescale();
-        if (lock_ == Lock::kRelocking) ref_.ArmAt(lock_event_, lock_tick_);
-    });
     ResetRegisters();
     emu_.Get<GuestCpuReset>().RegisterResetListener([this](ResetLineKind) {
         ResetRegisters();
@@ -97,203 +82,229 @@ void Imx51Dpll::OnReady() {
     emu_.Get<PeripheralDispatcher>().Register(this);
 }
 
-/* Figure 22-3: DP_CONFIG resets with AREN set. MCIMX51RM Table 54-10: every reset
-   type asserts system_early_rst_b, which resets the CCM and the PLL-IPs. */
+/* MCIMX51RM Table 54-10: every reset type asserts system_early_rst_b, which resets the CCM and
+   the PLL-IPs; §7.4.6.5 (page 7-83): the ignition releases reset once all three PLLs lock. */
 void Imx51Dpll::ResetRegisters() {
     regs_.fill(0u);
+    regs_[kDpCtlOff >> 2]    = kCtlReset;
     regs_[kDpConfigOff >> 2] = kCfgAren;
-    output_known_ = false;
-    output_hz_    = 0u;
-    lock_         = Lock::kOff;
-    target_hz_    = 0u;
-    clock_->Disarm(lock_event_);
+    regs_[kDpTogcOff >> 2]   = kTogcDis;
+    port_         = Port{kCtlReset, 0u, 0u, 0u};
+    input_        = BootReferenceRate();
+    output_       = BootOutputRate();
+    target_       = output_;
+    lock_         = Lock::kLocked;
+    restarted_    = false;
+    load_wanted_  = false;
+}
+
+/* Table 22-13: dpllip_cpen is 0 with UPEN clear; Table 22-2 PRE "Asserts a hard reset to the
+   DPLL". */
+bool Imx51Dpll::Running() const {
+    const uint32_t ctl = regs_[kDpCtlOff >> 2];
+    return (ctl & kCtlUpen) != 0u && (ctl & kCtlPre) == 0u;
 }
 
 /* Table 22-2 LRF: a sticky bit, reset 0; a DP_CTL, DP_OP, DP_MFD, DP_HFS_OP or DP_HFS_MFD
    write, a hard reset or a DPLL enable breaks the lock. HFSM 0: LFS mode. */
 uint32_t Imx51Dpll::ReadWord(uint32_t addr) {
     const uint32_t off = addr - MmioBase();
+    if ((off & 0x3u) != 0u || off > kDpDestatOff) HaltUnsupportedAccess("ReadWord", addr, 0);
     if (off == kDpDestatOff) return kDestatInactive;
-    if ((off & 0x3u) != 0u || off > kDpTogcOff) HaltUnsupportedAccess("ReadWord", addr, 0);
     uint32_t v = regs_[off >> 2];
-    if (off == kDpCtlOff) {
-        if (lock_ == Lock::kBroken) {
-            emu_.Get<Fatal>().Die("Imx51Dpll %08X: DP_CTL read after a write broke the lock "
-                                  "with no restart; whether LRF sets again is not modeled",
-                                  MmioBase());
-        }
-        if (lock_ == Lock::kLocked) v |= kCtlLrf;
-    }
+    if (off == kDpCtlOff && lock_ == Lock::kLocked) v |= kCtlLrf;
+    if (off == kDpConfigOff && load_wanted_) v |= kCfgLdreq;
     return v;
 }
 
-/* Table 22-3 AREN: a write to DP_CTL, DP_OP or DP_MFD issues a restart; otherwise
-   DP_CTL RST restarts. */
+/* Table 22-3 AREN: a write to DP_CTL, DP_OP or DP_MFD issues a restart; otherwise DP_CTL RST
+   restarts. */
 void Imx51Dpll::WriteWord(uint32_t addr, uint32_t value) {
     const uint32_t off = addr - MmioBase();
+    if ((off & 0x3u) != 0u || off > kDpDestatOff) HaltUnsupportedAccess("WriteWord", addr, value);
     if (off == kDpDestatOff) return;
-    if ((off & 0x3u) != 0u || off > kDpTogcOff) HaltUnsupportedAccess("WriteWord", addr, value);
-    if (off == kDpCtlOff &&
-        (value & (kCtlMulCtrl | kCtlPre | kCtlAde | kCtlRcp | kCtlPlm)) != 0u) {
-        emu_.Get<Fatal>().Die("Imx51Dpll %08X: DP_CTL write 0x%08X sets MUL_CTRL, PRE, ADE, RCP "
-                              "or PLM", MmioBase(), value);
-    }
-    if (off == kDpConfigOff && (value & (kCfgBistCe | kCfgSjcCe)) != 0u) {
-        emu_.Get<Fatal>().Die("Imx51Dpll %08X: DP_CONFIG write 0x%08X sets BIST_CE or SJC_CE",
-                              MmioBase(), value);
-    }
-    if (off == kDpConfigOff && (value & kCfgLdreq) != 0u) {
-        emu_.Get<Fatal>().Die("Imx51Dpll %08X: DP_CONFIG write 0x%08X sets LDREQ; the MFN load "
-                              "handshake is not modeled", MmioBase(), value);
-    }
     if (off == kDpTogcOff && (value & kTogcEn) != 0u && (value & kTogcDis) == 0u) {
         emu_.Get<Fatal>().Die("Imx51Dpll %08X: DP_MFN_TOGC 0x%08X turns the desense logic on",
                               MmioBase(), value);
     }
+    if (off == kDpCtlOff) LOG(SocClkpwr, "Imx51Dpll %08X: DP_CTL <- 0x%08X\n", MmioBase(), value);
+    if (off == kDpCtlOff && (value & kCtlMulCtrl) != 0u) {
+        emu_.Get<Fatal>().Die("Imx51Dpll %08X: DP_CTL write 0x%08X sets MUL_CTRL", MmioBase(),
+                              value);
+    }
+    const bool was_running = Running();
+    regs_[off >> 2] = value & kFieldMasks[off >> 2];
+    if (off == kDpConfigOff) {
+        if ((value & kCfgLdreq) != 0u && !load_wanted_) {
+            load_wanted_ = true;
+            ScheduleLoad();
+        }
+        return;
+    }
+    if (off == kDpTogcOff) return;
     const bool hfs    = off == kDpHfsOpOff || off == kDpHfsMfdOff;
     const bool breaks = off == kDpCtlOff || off == kDpOpOff || off == kDpMfdOff || hfs;
-    if (breaks && lock_ == Lock::kRelocking) {
-        emu_.Get<Fatal>().Die("Imx51Dpll %08X: write 0x%08X to +0x%03X while the DPLL relocks",
-                              MmioBase(), value, off);
-    }
-    const uint32_t old_ctl = regs_[kDpCtlOff >> 2];
-    regs_[off >> 2] = value & kFieldMasks[off >> 2];
     if (!breaks) return;
-    const bool aren   = (regs_[kDpConfigOff >> 2] & kCfgAren) != 0u;
-    const bool by_rst = off == kDpCtlOff && (value & kCtlRst) != 0u;
-    if (by_rst || (aren && !hfs)) {
-        Restart((old_ctl & kCtlUpen) != 0u, by_rst);
+    if (!Running()) {
+        if (was_running) StopOutput();
         return;
     }
-    if (((old_ctl ^ regs_[kDpCtlOff >> 2]) & kCtlUpen) != 0u) {
-        emu_.Get<Fatal>().Die("Imx51Dpll %08X: DP_CTL write 0x%08X changes UPEN with no "
-                              "restart", MmioBase(), value);
+    const bool aren    = (regs_[kDpConfigOff >> 2] & kCfgAren) != 0u;
+    const bool by_rst  = off == kDpCtlOff && (value & kCtlRst) != 0u;
+    const bool restart = by_rst || (aren && !hfs);
+    if (restart || !was_running) {
+        Restart();
+    } else if (lock_ == Lock::kLocked) {
+        lock_ = Lock::kBroken;
     }
-    if (lock_ == Lock::kLocked) lock_ = Lock::kBroken;
 }
 
-void Imx51Dpll::Restart(bool was_enabled, bool by_rst) {
-    const uint32_t ctl = regs_[kDpCtlOff >> 2];
-    if ((ctl & kCtlUpen) == 0u) {
-        clock_->Disarm(lock_event_);
-        lock_ = Lock::kOff;
-        SetOutput(0u);
-        return;
-    }
-    const uint64_t pdf     = (regs_[kDpOpOff >> 2] & 0xFu) + 1u;
-    const uint64_t lock_in = was_enabled ? kLockInPartial : kLockInFull;
-    const uint64_t clocks  = (by_rst ? kRstRestartClocks : kAutoRestartClocks) + kStartClocks +
-                             lock_in * pdf;
-    target_hz_ = ComputeHz();
+/* §22.3.3.1: the restart sends the control bits to the DPLL; Figure 22-15: the port updates
+   with the restart. */
+void Imx51Dpll::Restart() {
+    port_ = Port{regs_[kDpCtlOff >> 2], regs_[kDpOpOff >> 2], regs_[kDpMfdOff >> 2],
+                 regs_[kDpMfnOff >> 2]};
+    FollowReference();
+    target_    = ComputeRate();
     lock_      = Lock::kRelocking;
-    lock_tick_ = ref_.Now() + clocks * ((ctl & kCtlRefDiv) != 0u ? 2u : 1u);
-    ref_.ArmAt(lock_event_, lock_tick_);
-    LOG(SocClkpwr, "Imx51Dpll %08X: restart, locks at %llu Hz in %llu reference clocks\n",
-        MmioBase(), static_cast<unsigned long long>(target_hz_),
-        static_cast<unsigned long long>(clocks));
+    restarted_ = true;
+    LOG(SocClkpwr, "Imx51Dpll %08X: restart at %llu/%llu Hz\n", MmioBase(),
+        static_cast<unsigned long long>(target_.num), static_cast<unsigned long long>(target_.den));
+    if (SelectedInputRate().num != 0u) {
+        OnLock();
+        return;
+    }
     emu_.Get<Imx51Ccm>().ApplyRates();
 }
 
+void Imx51Dpll::FollowReference() {
+    input_ = SelectedInputRate();
+}
+
+void Imx51Dpll::OnInputChange() {
+    const Rate input = SelectedInputRate();
+    if (input == input_) return;
+    FollowReference();
+    if (!Running() || lock_ == Lock::kOff) return;
+    target_ = ComputeRate();
+    if (lock_ != Lock::kRelocking) {
+        SetOutput(target_);
+        return;
+    }
+    if (input.num != 0u) OnLock();
+}
+
+void Imx51Dpll::StopOutput() {
+    lock_ = Lock::kOff;
+    SetOutput(Rate{0u, 1u});
+}
+
+/* MCIMX51RM Table 7-27 bits 2-0 lrf_pll3 / lrf_pll2 / lrf_pll1: "Interrupt ipi_int_2 generation
+   due to lock of pll1". */
 void Imx51Dpll::OnLock() {
-    lock_         = Lock::kLocked;
-    output_known_ = true;
-    output_hz_    = target_hz_;
-    LOG(SocClkpwr, "Imx51Dpll %08X: locked at %llu Hz\n", MmioBase(),
-        static_cast<unsigned long long>(output_hz_));
+    lock_   = Lock::kLocked;
+    output_ = target_;
+    LOG(SocClkpwr, "Imx51Dpll %08X: locked at %llu/%llu Hz\n", MmioBase(),
+        static_cast<unsigned long long>(output_.num), static_cast<unsigned long long>(output_.den));
+    emu_.Get<Imx51CcmStatus>().Raise(LockInterruptBit());
     emu_.Get<Imx51Ccm>().ApplyRates();
+    if (load_wanted_) ScheduleLoad();
 }
 
-void Imx51Dpll::SetOutput(uint64_t hz) {
-    const bool changed = !output_known_ || hz != output_hz_;
-    output_known_ = true;
-    output_hz_    = hz;
-    LOG(SocClkpwr, "Imx51Dpll %08X: output %llu Hz\n", MmioBase(),
-        static_cast<unsigned long long>(hz));
+/* §22.3.3.2: "The MFN bits (in register DP_MFN) are the only bits in the DPLL that can be changed
+   after the DPLL was locked without restart"; LDREQ "will remain at '1' until a load_ack pulse is
+   received". */
+void Imx51Dpll::ScheduleLoad() {
+    if (!Running() || lock_ == Lock::kOff) return;
+    load_wanted_ = false;
+    OnLoadAck();
+}
+
+void Imx51Dpll::OnLoadAck() {
+    port_.mfn = regs_[kDpMfnOff >> 2];
+    target_   = ComputeRate();
+    if (lock_ != Lock::kRelocking) SetOutput(target_);
+}
+
+void Imx51Dpll::SetOutput(Rate rate) {
+    const bool changed = rate != output_;
+    output_ = rate;
+    LOG(SocClkpwr, "Imx51Dpll %08X: output %llu/%llu Hz\n", MmioBase(),
+        static_cast<unsigned long long>(rate.num), static_cast<unsigned long long>(rate.den));
     if (changed) emu_.Get<Imx51Ccm>().ApplyRates();
 }
 
-uint64_t Imx51Dpll::ReferenceHz() const {
-    const uint32_t ctl = regs_[kDpCtlOff >> 2];
-    const uint32_t sel = (ctl >> kCtlRefSelShift) & 0x3u;
-    if (sel != kRefSelCosc) {
-        emu_.Get<Fatal>().Die("Imx51Dpll %08X: DP_CTL 0x%08X selects reference clock %u, "
-                              "only COSC is modeled", MmioBase(), ctl, sel);
+GuestCycleClock::Rate Imx51Dpll::BootReferenceRate() const {
+    return Rate{emu_.Get<Imx51ClockInput>().OscHz(), 1u};
+}
+
+GuestCycleClock::Rate Imx51Dpll::SelectedInputRate() const {
+    switch ((port_.ctl >> kCtlRefSelShift) & 0x3u) {
+        case kRefSelCosc: return emu_.Get<Imx51CcmStatus>().OscillatorRate();
+        case kRefSelFpm:  return emu_.Get<Imx51Ccm>().FpmRate();
+        default:          return Rate{0u, 1u};
     }
-    const uint64_t osc = emu_.Get<Imx51ClockInput>().OscHz();
-    if ((ctl & kCtlRefDiv) == 0u) return osc;
-    if (osc % 2u != 0u) {
-        emu_.Get<Fatal>().Die("Imx51Dpll %08X: REF_CLK_DIV halves a %llu Hz reference to a "
-                              "fraction of a Hz", MmioBase(), static_cast<unsigned long long>(osc));
-    }
-    return osc / 2u;
+}
+
+/* Figure 22-13: the selected clock, divided by 2 when REF_CLK_DIV is set. */
+GuestCycleClock::Rate Imx51Dpll::ReferenceRate() const {
+    const Rate in = SelectedInputRate();
+    return (port_.ctl & kCtlRefDiv) != 0u ? in.Scaled(1u, 2u) : in;
 }
 
 /* Eqn 22-1 with MF = MFI + MFN / (MFD + 1); Table 22-4 MFI below 5 reads as 5.
    Linux i.MX PLLv2 clock driver __clk_pllv2_recalc_rate: 2 x the reference,
    doubled again with DPDCK0_2_EN, MFN sign-extended from bit 26. */
-uint64_t Imx51Dpll::ComputeHz() const {
-    const uint32_t ctl = regs_[kDpCtlOff >> 2];
-    const uint32_t op  = regs_[kDpOpOff >> 2];
-    int64_t mfi = (op >> 4) & 0xFu;
+GuestCycleClock::Rate Imx51Dpll::ComputeRate() const {
+    int64_t mfi = (port_.op >> 4) & 0xFu;
     if (mfi < 5) mfi = 5;
-    const int64_t pdf = static_cast<int64_t>(op & 0xFu) + 1;
-    const int64_t mfd = static_cast<int64_t>(regs_[kDpMfdOff >> 2] & kMfdMask) + 1;
-    int64_t mfn = static_cast<int64_t>(regs_[kDpMfnOff >> 2] & kMfnMask);
+    const int64_t pdf = static_cast<int64_t>(port_.op & 0xFu) + 1;
+    const int64_t mfd = static_cast<int64_t>(port_.mfd & kMfdMask) + 1;
+    int64_t mfn = static_cast<int64_t>(port_.mfn & kMfnMask);
     if ((mfn & 0x04000000) != 0) mfn -= 0x08000000;
-    const int64_t ref = static_cast<int64_t>(ReferenceHz()) *
-                        ((ctl & kCtlDpdck02En) != 0u ? 4 : 2);
-    const int64_t num = ref * (mfi * mfd + mfn);
-    const int64_t den = mfd * pdf;
-    if (num <= 0 || num % den != 0) {
-        emu_.Get<Fatal>().Die("Imx51Dpll %08X: DP_OP 0x%08X DP_MFD 0x%08X DP_MFN 0x%08X on the "
-                              "%llu Hz reference is not a whole number of Hz", MmioBase(), op,
-                              regs_[kDpMfdOff >> 2], regs_[kDpMfnOff >> 2],
-                              static_cast<unsigned long long>(ReferenceHz()));
-    }
-    return static_cast<uint64_t>(num / den);
-}
-
-uint64_t Imx51Dpll::OutputHz() const {
-    if (lock_ == Lock::kRelocking) {
-        emu_.Get<Fatal>().Die("Imx51Dpll %08X: output read while the DPLL relocks after a "
-                              "restart; its output during lock-in is not modeled", MmioBase());
-    }
-    if (!output_known_) {
-        emu_.Get<Fatal>().Die("Imx51Dpll %08X: output read before the guest restarted "
-                              "the DPLL; the boot ROM configuration is not modeled",
-                              MmioBase());
-    }
-    return output_hz_;
+    const int64_t mf = mfi * mfd + mfn;
+    const Rate    ref = ReferenceRate();
+    if (mf <= 0 || ref.num == 0u) return Rate{0u, 1u};
+    uint64_t num = ref.num * ((port_.ctl & kCtlDpdck02En) != 0u ? 4u : 2u) *
+                   static_cast<uint64_t>(mf);
+    uint64_t den = ref.den * static_cast<uint64_t>(mfd) * static_cast<uint64_t>(pdf);
+    return Rate{num, den}.Reduced();
 }
 
 void Imx51Dpll::SaveState(StateWriter& w) {
     w.WriteBytes("regs", regs_.data(), sizeof(regs_));
-    w.Write<uint8_t>("output_known", output_known_ ? 1u : 0u);
-    w.Write<uint64_t>("output_hz", output_hz_);
-    ref_.Save(w);
+    w.Write<uint32_t>("port_ctl", port_.ctl);
+    w.Write<uint32_t>("port_op", port_.op);
+    w.Write<uint32_t>("port_mfd", port_.mfd);
+    w.Write<uint32_t>("port_mfn", port_.mfn);
+    w.Write<uint64_t>("output_num", output_.num);
+    w.Write<uint64_t>("output_den", output_.den);
+    w.Write<uint64_t>("target_num", target_.num);
+    w.Write<uint64_t>("target_den", target_.den);
+    w.Write<uint64_t>("input_num", input_.num);
+    w.Write<uint64_t>("input_den", input_.den);
     w.Write<uint8_t>("lock_state", static_cast<uint8_t>(lock_));
-    w.Write<uint64_t>("lock_target_hz", target_hz_);
-    w.Write<uint64_t>("lock_ticks_left",
-                      lock_ == Lock::kRelocking ? lock_tick_ - ref_.Now() : 0u);
+    w.Write<uint8_t>("restarted", restarted_ ? 1u : 0u);
+    w.Write<uint8_t>("load_wanted", load_wanted_ ? 1u : 0u);
 }
 
 void Imx51Dpll::RestoreState(StateReader& r) {
     r.ReadBytes("regs", regs_.data(), sizeof(regs_));
-    uint8_t known = 0;
-    r.Read("output_known", known);
-    output_known_ = known != 0u;
-    r.Read("output_hz", output_hz_);
-    ref_.Restore(r);
-    uint8_t  lock = 0;
-    uint64_t left = 0;
+    r.Read("port_ctl", port_.ctl);
+    r.Read("port_op", port_.op);
+    r.Read("port_mfd", port_.mfd);
+    r.Read("port_mfn", port_.mfn);
+    r.Read("output_num", output_.num);
+    r.Read("output_den", output_.den);
+    r.Read("target_num", target_.num);
+    r.Read("target_den", target_.den);
+    r.Read("input_num", input_.num);
+    r.Read("input_den", input_.den);
+    uint8_t lock = 0, restarted = 0, wanted = 0;
     r.Read("lock_state", lock);
-    r.Read("lock_target_hz", target_hz_);
-    r.Read("lock_ticks_left", left);
-    lock_      = static_cast<Lock>(lock);
-    lock_tick_ = ref_.Now() + left;
-    clock_->Disarm(lock_event_);
-}
-
-void Imx51Dpll::PostRestore() {
-    if (lock_ == Lock::kRelocking) ref_.ArmAt(lock_event_, lock_tick_);
+    r.Read("restarted", restarted);
+    r.Read("load_wanted", wanted);
+    lock_        = static_cast<Lock>(lock);
+    restarted_   = restarted != 0u;
+    load_wanted_ = wanted != 0u;
 }

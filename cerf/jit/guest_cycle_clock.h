@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <numeric>
 #include <vector>
 
 #include "../core/service.h"
@@ -32,6 +33,17 @@ public:
     struct Rate {
         uint64_t num = 0;
         uint64_t den = 1;
+
+        bool operator==(const Rate&) const = default;
+
+        bool ScaleFits(uint64_t mul, uint64_t div) const {
+            return (mul == 0u || num <= UINT64_MAX / mul) && den <= UINT64_MAX / div;
+        }
+        Rate Scaled(uint64_t mul, uint64_t div) const { return Rate{num * mul, den * div}; }
+        Rate Reduced() const {
+            const uint64_t g = std::gcd(num, den);
+            return Rate{num / g, den / g};
+        }
     };
 
     void OnReady() override;
@@ -55,6 +67,7 @@ public:
 
     void OnDispatch();
     void IdleStep(void* wake_event);
+    void WaitStep(void* wake_event);
     void ExitIdle();
     bool InIdle() const { return in_idle_; }
     void OnCyclesRestored();

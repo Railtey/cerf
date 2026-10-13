@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <functional>
 #include <mutex>
+#include <vector>
 
 namespace cerf_freescale_gpio_detail {
 
@@ -76,9 +77,20 @@ public:
             SetLevelBit(pin, level);
             DetectEdgeLocked(pin, prev, ((input_level_ & input_mask_) >> pin) & 1u);
             RecomputeIrqLocked();
+            NotifyInputLocked(pin);
         } else {
+            driven_mask_ |= (1u << pin);
             SetLevelBit(pin, level);
+            NotifyInputLocked(pin);
         }
+    }
+
+    void RegisterInputListener(std::function<void(uint32_t, bool)> fn) {
+        input_listeners_.push_back(std::move(fn));
+    }
+    bool PinDriven(uint32_t pin) const { return ((driven_mask_ >> pin) & 1u) != 0u; }
+    bool PinPadLevel(uint32_t pin) const {
+        return (((input_level_ & input_mask_) >> pin) & 1u) != 0u;
     }
 
     /* A board device that bit-bangs a protocol over GPIO pins (Ford SYNC2's
@@ -160,12 +172,14 @@ public:
         w.Write("dr", dr_);   w.Write("gdir", gdir_); w.Write("icr1", icr1_);
         w.Write("icr2", icr2_); w.Write("imr", imr_);  w.Write("isr", isr_);
         w.Write("input_level", input_level_);
+        w.Write("driven_mask", driven_mask_);
         if constexpr (kSoc == SocId::Imx51) w.Write("edge_sel", edge_sel_);
     }
     void RestoreState(StateReader& r) override {
         r.Read("dr", dr_);   r.Read("gdir", gdir_); r.Read("icr1", icr1_);
         r.Read("icr2", icr2_); r.Read("imr", imr_);  r.Read("isr", isr_);
         r.Read("input_level", input_level_);
+        r.Read("driven_mask", driven_mask_);
         if constexpr (kSoc == SocId::Imx51) r.Read("edge_sel", edge_sel_);
     }
 
@@ -186,20 +200,28 @@ private:
             std::lock_guard<std::mutex> lk(irq_mu_);
             const uint32_t before = input_level_ & input_mask_;
             RefreshPadMasks();
-            const uint32_t moved = (before ^ (input_level_ & input_mask_)) & driven_mask_;
+            const uint32_t after = input_level_ & input_mask_;
+            const uint32_t moved = (before ^ after) & driven_mask_;
             for (uint32_t pin = 0u; pin < 32u; ++pin) {
                 if (((moved >> pin) & 1u) == 0u) continue;
-                const uint32_t cfg = IcrCfg(pin);
-                if (((edge_sel_ >> pin) & 1u) != 0u || cfg == 0b10u || cfg == 0b11u) {
-                    emu_.Get<Fatal>().Die("FreescaleGpio 0x%08X: an IOMUXC mux change moves pin "
-                                          "%u with edge detection on; that edge is not modeled",
-                                          kBase, pin);
-                }
+                DetectEdgeLocked(pin, ((before >> pin) & 1u) != 0u, ((after >> pin) & 1u) != 0u);
             }
             RecomputeIrqLocked();
+            for (uint32_t pin = 0u; pin < 32u; ++pin) {
+                if (((moved >> pin) & 1u) != 0u) NotifyInputLocked(pin);
+            }
         } else {
+            const uint32_t before = input_level_ & input_mask_;
             RefreshPadMasks();
+            const uint32_t moved = (before ^ (input_level_ & input_mask_)) & driven_mask_;
+            for (uint32_t pin = 0u; pin < 32u; ++pin) {
+                if (((moved >> pin) & 1u) != 0u) NotifyInputLocked(pin);
+            }
         }
+    }
+
+    void NotifyInputLocked(uint32_t pin) {
+        for (auto& fn : input_listeners_) fn(pin, PinPadLevel(pin));
     }
 
     void SetLevelBit(uint32_t pin, bool level) {
@@ -298,6 +320,7 @@ private:
     uint32_t output_mask_ = 0xFFFFFFFFu;
     Imx51Iomuxc* iomuxc_  = nullptr;
     std::function<void()> write_obs_;  /* fired on DR/GDIR write (bit-bang observers) */
+    std::vector<std::function<void(uint32_t, bool)>> input_listeners_;
     std::mutex irq_mu_;
     bool irq_low_asserted_  = false;
     bool irq_high_asserted_ = false;

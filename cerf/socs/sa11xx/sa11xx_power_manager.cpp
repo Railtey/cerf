@@ -31,11 +31,6 @@ constexpr uint32_t kIcprRtcAlarm = 1u << 31;
 constexpr uint32_t kPssrDh = 1u << 3;
 constexpr uint32_t kPssrPh = 1u << 4;
 
-/* SA-1110 Dev Man §8.2.1 (printed 8-3), SA-1100 TRM §8.2.1 (printed 8-2): "an
-   interruption in operation for approximately 150 microseconds after the PPCR is
-   written"; the power management and RTC "do not see any interruption". */
-constexpr uint64_t kPllStopNs = 150000u;
-
 /* SA-1110 Power Manager - Dev Man §9.5.7-9.5.8. PSSR (+0x4) bits 4:0
    are W1C; POSR (+0x1C) bit 0 OOK (32-kHz oscillator stable) reads 1 -
    the emulated oscillator is stable from reset. */
@@ -165,10 +160,7 @@ void Sa11xxPowerManager::WriteReg(uint32_t off, uint32_t value) {
         case 0x08: pspr_ = value; break;
         case 0x0C: pwer_ = value & kPwerWritable; break;  /* §9.5.7.4: reserved bits ignored */
         case 0x10: pcfr_ = value; break;
-        case 0x14:
-            ApplyPpcr(value);
-            emu_.Get<Sa11xxRtc>().CreditCoreStop(kPllStopNs);
-            break;
+        case 0x14: ApplyPpcr(value); break;
         case 0x18: pgsr_ = value & 0x0FFFFFFFu; break;
         default:
             emu_.Get<Fatal>().Die("Sa11xxPowerManager: write 0x%08X to +0x%02X, which has no "

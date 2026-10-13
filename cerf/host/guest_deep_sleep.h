@@ -60,6 +60,8 @@ public:
        with a DeepSleepWaker. */
     void RegisterClockStopWaker(DeepSleepClockStop* waker);
 
+    void RegisterPowerOnWake();
+
     /* OnReady-time only. Listeners model silicon on a power rail the Suspend State
        cuts (TMPR3911 §12.2.3, p.12-7: "VSTANDBY and VCCDRAM are powered but VCC3 is
        not powered"): they lose power with the CPU clock and re-initialise on the
@@ -98,6 +100,7 @@ public:
 
 private:
     void Recover();      /* UI thread: run the prompt and act on the choice. */
+    void RequireNoWakeShape(const char* shape) const;
     void ConsumeSleepSpan();
     void DeliverWake(ResumeSource src);
     void TearDownPromptForHardwareWake();
@@ -116,6 +119,7 @@ private:
     DeepSleepClockStop*        clock_stop_             = nullptr;
     DeepSleepWaker*            waker_                  = nullptr;
     SleepResumeVectorProvider* resume_vector_provider_ = nullptr;
+    bool                       power_on_wake_          = false;
     std::atomic<bool>          active_{false};
     std::atomic<bool>          asleep_{false};
     std::atomic<bool>          hw_resumed_{false};

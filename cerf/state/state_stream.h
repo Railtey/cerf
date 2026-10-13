@@ -158,7 +158,7 @@ private:
     uint64_t           file_size_  = 0;
     std::vector<Frame> frames_;
     uint32_t           fields_     = 0;
-    const char*        field_name_ = "";
+    std::string        field_name_;
     std::string        error_;
     bool               ok_         = false;
 };

@@ -103,8 +103,6 @@ bool MipsJit::ResetPending() const { return channel_->ResetRequested(); }
 void MipsJit::SetHostChainExit(bool requested) { channel_->SetHostExit(requested); }
 
 void MipsJit::Run() {
-    if (cpu_state_->idle_wait != MipsIdle::kNone && !channel_->ResumeIdle()) return;
-
     if (channel_->DispatchRequests() != 0u) {
         const uint32_t req = channel_->TakeDispatchRequests();
         if (req & MipsInterruptChannel::kDispatchHostClock) host_requests_->ServiceRequests();
@@ -113,6 +111,8 @@ void MipsJit::Run() {
             return;
         }
     }
+
+    if (cpu_state_->idle_wait != MipsIdle::kNone && !channel_->ResumeIdle()) return;
 
     mem_access_->DeliverDueClockEvents();
 
@@ -144,6 +144,7 @@ void MipsJit::Run() {
 
 void MipsJit::DeliverReset() {
     emu_.Get<GuestCpuReset>().OnResetDelivered();
+    channel_->OnCpuReset();
     cpu_->ResetState();
     cp0_ops_->OnCpuReset();
     cache_->ContextSwitchFlush();
@@ -169,6 +170,10 @@ void MipsJit::ExitDeepSleep() {
 }
 
 void MipsJit::EnterIdleWait() { channel_->StopCpuAfterAccess(); }
+
+void MipsJit::SetCoreClockStopped(bool stopped) {
+    emu_.Get<Fatal>().Die("MipsJit: a core clock %s request is not modeled", stopped ? "stop" : "restart");
+}
 
 void MipsJit::SaveCpuState(StateWriter& w) {
     cpu_state_->reset_pending = channel_->ResetRequested() ? 1u : 0u;

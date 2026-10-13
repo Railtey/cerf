@@ -49,10 +49,8 @@ constexpr int64_t kSecPerDay = 86400;
 
 constexpr uint32_t kRycrFromShadow = 0x80000000u;
 
-/* §21.5 (page 21-16): "writes to these registers are controlled by a hardware mechanism
-   which delays the actual write until the data can be properly synchronized". */
 constexpr IntelRtcCounter::Traits kTraits = {
-    "pxa27x", kRttrLck | 0x03FFFFFFu, kRttrLck, true, true, true, 1u, 1u, 1u, 1u, 1u, false,
+    "pxa27x", kRttrLck | 0x03FFFFFFu, kRttrLck, true, true, true,
 };
 
 int64_t FloorDiv(int64_t a, int64_t b) {
@@ -98,13 +96,8 @@ public:
         /* §21.5.2 (page 21-17): in sleep "the alarm-detect bit in the RTSR is updated if
            an RTC alarm is detected and the corresponding alarm-enable bit in the RTSR is set". */
         sleep.RegisterSleepEntryListener([this] {
-            rtc_.RequireSettled("sleep entered");
             match_mark_ = rtc_.MatchEvents();
             ww_mark_    = ww_matches_;
-            if ((rtc_.Rtsr() & IntelRtcCounter::kRtsrHze) != 0u) {
-                emu_.Get<Fatal>().Die("Pxa27xRtc: sleep entered with RTSR.HZE set; whether the "
-                                      "1-Hz edge sets HZ in sleep is not modelled");
-            }
         });
         /* §21.4.6.2 (page 21-15): with PWER[WERTC] set, wake-up on "a match
            between RCNR and RTAR ... regardless of the state of the RTSR[ALE]
@@ -361,16 +354,6 @@ void Pxa27xRtc::RestoreState(StateReader& r) {
     rycr_pending_ = pending != 0u;
     wom_tracks_   = tracks != 0u;
     SetWristwatch(ww_live);
-    uint32_t rdcr = 0, shadow = 0;
-    for (uint8_t i = 0; rtc_.PendingExt(i, rdcr, shadow); ++i) {
-        const bool from_shadow = (shadow & kRycrFromShadow) != 0u;
-        if ((rdcr & ~kRdcrMask) != 0u || (shadow & ~(kRycrFromShadow | kRycrMask)) != 0u ||
-            (!from_shadow && shadow != 0u) ||
-            !WristwatchDataValid(rdcr, from_shadow ? (shadow & kRycrMask) : ReadRycr())) {
-            r.Reject("Pxa27xRtc: restored pending wristwatch write RDCR 0x%08X RYCR 0x%08X holds "
-                     "data the register write halts on", rdcr, shadow);
-        }
-    }
     dow_     = dow;
     dow_day_ = FloorDiv(ww_live, kSecPerDay);
 }

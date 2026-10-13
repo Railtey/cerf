@@ -2,7 +2,6 @@
 
 #include "../../jit/guest_cycle_clock.h"
 #include "../../peripherals/peripheral_base.h"
-#include "../oscillator_ticks.h"
 
 #include <array>
 #include <cstdint>
@@ -21,30 +20,49 @@ public:
 
     void SaveState(StateWriter& w) override;
     void RestoreState(StateReader& r) override;
-    void PostRestore() override;
 
-    uint64_t OutputHz() const;
-    bool     OutputKnown() const { return output_known_ || lock_ == Lock::kRelocking; }
+    GuestCycleClock::Rate OutputRate() const { return output_; }
+    GuestCycleClock::Rate ReferenceRate() const;
+    bool                  Restarted() const { return restarted_; }
+    void                  OnInputChange();
+
+protected:
+    virtual uint32_t              LockInterruptBit() const = 0;
+    virtual GuestCycleClock::Rate BootOutputRate() const = 0;
+    GuestCycleClock::Rate         BootReferenceRate() const;
 
 private:
+    using Rate = GuestCycleClock::Rate;
+
     static constexpr uint32_t kSize = 0x00001000u;
 
     enum class Lock : uint8_t { kOff, kRelocking, kLocked, kBroken };
 
+    struct Port {
+        uint32_t ctl = 0;
+        uint32_t op  = 0;
+        uint32_t mfd = 0;
+        uint32_t mfn = 0;
+    };
+
+    bool     Running() const;
     void     ResetRegisters();
-    void     Restart(bool was_enabled, bool by_rst);
+    void     Restart();
+    void     StopOutput();
     void     OnLock();
-    void     SetOutput(uint64_t hz);
-    uint64_t ReferenceHz() const;
-    uint64_t ComputeHz() const;
+    void     OnLoadAck();
+    void     SetOutput(Rate rate);
+    void     ScheduleLoad();
+    Rate     ComputeRate() const;
+    Rate     SelectedInputRate() const;
+    void     FollowReference();
 
     std::array<uint32_t, kSize / 4> regs_{};
-    bool                    output_known_ = false;
-    uint64_t                output_hz_    = 0;
-    Lock                    lock_         = Lock::kOff;
-    uint64_t                target_hz_    = 0;
-    uint64_t                lock_tick_    = 0;
-    GuestCycleClock*        clock_        = nullptr;
-    GuestCycleClock::Event* lock_event_   = nullptr;
-    OscillatorTicks         ref_{emu_, false};
+    Port port_;
+    Rate output_{0u, 1u};
+    Rate target_{0u, 1u};
+    Rate input_{0u, 1u};
+    Lock lock_        = Lock::kOff;
+    bool restarted_   = false;
+    bool load_wanted_ = false;
 };

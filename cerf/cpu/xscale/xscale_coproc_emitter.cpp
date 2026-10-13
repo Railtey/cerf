@@ -9,7 +9,6 @@
 #include "../../core/cerf_emulator.h"
 #include "../../jit/arm/arm_cpu.h"
 #include "../../jit/arm/arm_emit_services.h"
-#include "../../jit/arm/arm_interrupt_channel.h"
 #include "../../jit/arm/cpu_state.h"
 #include "../../jit/arm/place_fns.h"
 #include "../../jit/x86_emit.h"
@@ -46,11 +45,7 @@ protected:
         cursor = EmitCoprocUnimplementedFatal(cursor, d, ctx);
 
         FixupLabel32(is_idle, cursor);
-        EmitMovRegImm32(cursor, kEcx,
-            static_cast<uint32_t>(reinterpret_cast<uintptr_t>(
-                ctx->emit->InterruptChannel())));
-        EmitCall(cursor,
-            reinterpret_cast<void*>(&ArmInterruptChannel::WfiHelper));
+        cursor = PlaceWfi(cursor, d, ctx);
         uint8_t* idle_done = EmitJmpLabel32(cursor);
 
         FixupLabel32(is_sleep, cursor);

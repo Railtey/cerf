@@ -31,11 +31,11 @@ wakes (`DeliverWake`), OK exits (with an optional save). The recovery dialog is
 **no-timeout** by design - a countdown can auto-exit and discard live guest RAM
 while the user is away.
 
-## Two wake shapes - read the SoC before picking one
+## Wake shapes - read the SoC and the board before picking one
 
-Sleep-exit is silicon behavior, and it takes one of two forms. Which one a SoC
-implements is a fact to establish from its manual and its guest's own resume code,
-never assumed:
+Sleep-exit is silicon behavior, and it takes one of two forms. A board can also cut the
+power of the CPU, and that is a third shape. Which one applies is a fact to establish
+from the manuals and the guest's own resume code, never assumed:
 
 - **Reset-on-wake.** The power-up applies an internal CPU reset. The core
   re-enters at the reset/boot vector, reads the reset-cause register to
@@ -50,6 +50,12 @@ never assumed:
   execution from where it stopped."* CERF models it with `DeepSleepClockStop` +
   `GuestEngine::ExitDeepSleep()`: `DeliverWake()` applies what the silicon asserts
   on the power-up edge and un-halts the CPU at its halted PC.
+- **Power-off, cold boot on wake.** A power-management part removes the power of the
+  CPU and its memory. The next turn-on is a power-on reset, and RAM loses its
+  contents. The MC13783 is this shape. In its On mode, *"the WDI pin has to be high and remain
+  high. If not, the part will transition to Off mode"* (MC13783 Technical Data
+  Table 8). CERF models it with `GuestDeepSleep::RegisterPowerOnWake()`:
+  `DeliverWake()` requests a hard reset.
 
 **The SoC manual settles which shape a SoC has. The guest binary corroborates it.** Read
 the power-down section first. It says either that the part stops the clock and holds state
@@ -98,9 +104,9 @@ On wake the deep-sleep decider banners `GuestPowerNotifier::NotifyResume(ResumeS
 
 ## Per-SoC / per-board wiring contract
 
-Do these steps to implement deep sleep on a new SoC or board. A SoC takes one wake
-shape or the other, never both. A step that names a shape applies to that shape only.
-Every other step applies to every SoC.
+Do these steps to implement deep sleep on a new SoC or board. A board takes exactly one
+wake shape. A step that names a shape applies to that shape only. Every other step
+applies to every board.
 
 1. **Detect the power-down write** in the SoC peripheral that owns it (for example a
    power-manager force-sleep bit, a CP power-mode write, or a simultaneous
@@ -162,9 +168,14 @@ Every other step applies to every SoC.
    that input, for example the power button pin. The callback runs only for a user
    wake. It runs while the SoC is still asleep, so the SoC records the input as the
    wake-up event.
+10. **On a power-off board**, the part that removes the power registers via
+    `GuestDeepSleep::RegisterPowerOnWake`. It calls `Enter()` when it turns the power
+    off. It turns itself on in a `GuestCpuReset` release listener. Every reset delivered
+    while the part is off is its turn-on: the wake, a host reset, or a reset that was
+    pending when the power went off.
 
-Suspend/resume serializes nothing - RAM stays live the whole time. The CPU is
-only parked.
+Suspend/resume serializes nothing. RAM stays live the whole time, except on the
+power-off shape, where the wake wipes it. The CPU is only parked.
 
 ## Resume mechanism: SoC baseline, OEM specifics
 

@@ -1,11 +1,7 @@
 #include "rated_tick_count.h"
 
 bool RatedTickCount::SetRate(GuestCycleClock::Rate core, GuestCycleClock::Rate tick) {
-    if (core.num == 0u || core.den == 0u || tick.num == 0u || tick.den == 0u ||
-        core.num > UINT64_MAX / tick.den || core.den > UINT64_MAX / tick.num) {
-        return false;
-    }
-    return ctr_.SetRatio(core.num * tick.den, core.den * tick.num);
+    return ctr_.SetRate(core, tick);
 }
 
 void RatedTickCount::Start(uint64_t cycle) {

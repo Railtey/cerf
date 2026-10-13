@@ -138,10 +138,9 @@ protected:
     virtual uint16_t WcrWritable() const = 0;
     virtual uint16_t WcrWriteOnce() const = 0;
     virtual uint16_t WcrWriteOneOnce() const = 0;
-    virtual void     OnWriteOnceChange(uint16_t value) = 0;
     virtual bool     SuspendedIn(FreescaleLowPowerMode mode) const = 0;
     virtual bool     SuspendStopsPrescaler() const = 0;
-    virtual void     OnWdaChange() = 0;
+    virtual void     OnWcrChange() = 0;
     virtual void     OnCounterTimeout() = 0;
     virtual void     OnPowerOn(uint64_t now) = 0;
     virtual void     ResetRegisters(ResetLineKind kind, WdogResetSource source,
@@ -149,7 +148,7 @@ protected:
 
     virtual bool ReadExtra(uint32_t, uint16_t&) { return false; }
     virtual bool WriteExtra(uint32_t, uint16_t) { return false; }
-    virtual void OnReload(uint64_t) {}
+    virtual void OnLoad(uint64_t) {}
     virtual void RearmExtra(uint64_t) {}
     virtual void SaveExtra(StateWriter&) {}
     virtual void RestoreExtra(StateReader&) {}
@@ -165,6 +164,7 @@ protected:
     }
 
     uint32_t CountAt(uint64_t now) const { return ckil_.CountAt(now); }
+    bool     Suspended() const { return suspended_; }
 
     GuestCycleClock* clock_  = nullptr;
     uint16_t         wcr_    = kWcrReset;
@@ -191,7 +191,7 @@ private:
         switch (off) {
             case kWcr: WriteWcr(value); return;
             case kWsr: WriteWsr(value); return;
-            case kWrsr: break;
+            case kWrsr: return;
             default:
                 if (WriteExtra(off, value)) return;
                 break;
@@ -200,22 +200,16 @@ private:
     }
 
     void WriteWcr(uint16_t value) {
-        if ((value & ~WcrWritable()) != 0u) {
-            emu_.Get<Fatal>().Die("FreescaleWdog %08X: WCR write 0x%04X sets a reserved bit",
-                                  kBase, value);
-        }
+        value = static_cast<uint16_t>(value & WcrWritable());
         const uint16_t once = WcrWriteOnce();
         uint16_t next = value;
-        if (wcr_written_ && ((value ^ wcr_) & once) != 0u) {
-            OnWriteOnceChange(value);
-            next = static_cast<uint16_t>((next & ~once) | (wcr_ & once));
-        }
+        if (wcr_written_) next = static_cast<uint16_t>((next & ~once) | (wcr_ & once));
         next = static_cast<uint16_t>(next | (wcr_ & WcrWriteOneOnce()) | kWcrSrs);
-        const bool enable   = (next & kWcrWde) != 0u && (wcr_ & kWcrWde) == 0u;
-        const bool wda_edge = ((next ^ wcr_) & kWcrWda) != 0u;
+        const bool enable  = (next & kWcrWde) != 0u && (wcr_ & kWcrWde) == 0u;
+        const bool changed = next != wcr_;
         wcr_         = next;
         wcr_written_ = true;
-        if (wda_edge) OnWdaChange();
+        if (changed) OnWcrChange();
         if (enable) Load(clock_->Cycles());
         if ((value & kWcrSrs) == 0u) RaiseReset(WdogResetSource::kSoftware);
     }
@@ -232,7 +226,6 @@ private:
             const uint64_t now = clock_->Cycles();
             if (clock_->IsDue(timeout_event_, now)) return;
             Load(now);
-            OnReload(now);
         }
     }
 
@@ -243,6 +236,7 @@ private:
                         prescaler_lag_;
         counting_     = true;
         clock_->Arm(timeout_event_, CycleOfCount(timeout_tick_, now));
+        OnLoad(now);
     }
 
     void OnTimeout() {
@@ -261,6 +255,7 @@ private:
         suspended_     = true;
         suspend_count_ = CountAt(now);
         clock_->Disarm(timeout_event_);
+        RearmExtra(now);
     }
 
     void OnIdleExit() {
@@ -300,20 +295,23 @@ private:
     }
 
     void SetRatio() {
-        if (!ckil_.SetRatio(clock_->CpuHz(), CkilHz())) {
-            emu_.Get<Fatal>().Die("FreescaleWdog %08X: %llu Hz CKIL against the %llu Hz core "
+        const GuestCycleClock::Rate core = clock_->ClockRate();
+        if (!ckil_.SetRate(core, GuestCycleClock::Rate{CkilHz(), 1u})) {
+            emu_.Get<Fatal>().Die("FreescaleWdog %08X: %llu Hz CKIL against the %llu/%llu Hz core "
                                   "clock overflows", kBase,
                                   static_cast<unsigned long long>(CkilHz()),
-                                  static_cast<unsigned long long>(clock_->CpuHz()));
+                                  static_cast<unsigned long long>(core.num),
+                                  static_cast<unsigned long long>(core.den));
         }
     }
 
     void Retime() {
-        const uint64_t now = clock_->Cycles();
-        if (!ckil_.Rescale(now, clock_->CpuHz(), CkilHz())) {
-            emu_.Get<Fatal>().Die("FreescaleWdog %08X: CKIL rescale to the %llu Hz core clock "
-                                  "overflows", kBase,
-                                  static_cast<unsigned long long>(clock_->CpuHz()));
+        const uint64_t              now  = clock_->Cycles();
+        const GuestCycleClock::Rate core = clock_->ClockRate();
+        if (!ckil_.RescaleRate(now, core, GuestCycleClock::Rate{CkilHz(), 1u})) {
+            emu_.Get<Fatal>().Die("FreescaleWdog %08X: CKIL rescale to the %llu/%llu Hz core clock "
+                                  "overflows", kBase, static_cast<unsigned long long>(core.num),
+                                  static_cast<unsigned long long>(core.den));
         }
         Rearm(now);
     }

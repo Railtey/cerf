@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../../jit/guest_cycle_clock.h"
 #include "../../peripherals/peripheral_base.h"
 #include "../freescale_timer_clocks.h"
 
@@ -9,6 +10,8 @@
 #include <vector>
 
 class Imx51ClockInput;
+class Imx51CcmDvfs;
+class Imx51CcmStatus;
 class Imx51CortexA8Platform;
 
 class Imx51Ccm : public Peripheral {
@@ -28,8 +31,9 @@ public:
     void RestoreState(StateReader& r) override;
     void PostRestore() override;
 
-    uint64_t PerclkRootHz() const;
-    uint64_t IpgClkHz() const;
+    GuestCycleClock::Rate PerclkRootRate() const;
+    GuestCycleClock::Rate IpgClkRate() const;
+    GuestCycleClock::Rate FpmRate() const;
     uint32_t ClockGate(uint32_t ccgr, uint32_t index) const;
     bool     ClockRunsIn(uint32_t ccgr, uint32_t index, FreescaleLowPowerMode mode) const;
     uint32_t WfiLowPowerMode() const;
@@ -39,25 +43,32 @@ public:
     void ApplyRates();
 
 private:
+    using Rate = GuestCycleClock::Rate;
+
     static constexpr uint32_t kSize = 0x00001000u;
 
     uint32_t Reg(uint32_t off) const { return regs_[off >> 2]; }
 
-    void     ResetRegisters();
-    void     NotifyGates();
-    uint64_t ArmClkHz() const;
-    uint64_t LpApmHz() const;
-    uint64_t StepClkHz() const;
-    uint64_t Pll1SwClkHz() const;
-    uint64_t Pll2SwClkHz() const;
-    uint64_t Pll3SwClkHz() const;
-    uint64_t PeriphApmClkHz() const;
-    uint64_t MainBusClkHz() const;
-    uint64_t DividedHz(uint64_t hz, uint64_t divider, const char* clock) const;
+    void ResetRegisters();
+    void NotifyGates();
+    void RaiseDividerLoads(uint32_t old, uint32_t now);
+    Rate ArmClkRate() const;
+    Rate LpApmRate() const;
+    Rate BypassClkRate() const;
+    Rate StepClkRate() const;
+    Rate Pll1SwClkRate() const;
+    Rate Pll2SwClkRate() const;
+    Rate Pll3SwClkRate() const;
+    Rate PeriphApmClkRate() const;
+    Rate PeriphClkRate() const;
+    Rate MainBusClkRate() const;
 
-    const Imx51ClockInput*             input_ = nullptr;
+    const Imx51ClockInput*             input_    = nullptr;
     const Imx51CortexA8Platform*       platform_ = nullptr;
-    uint64_t                           applied_hz_ = 0u;
+    Imx51CcmStatus*                    status_   = nullptr;
+    Imx51CcmDvfs*                      dvfs_     = nullptr;
+    Rate                               applied_{0u, 1u};
+    bool                               core_stopped_ = false;
     std::vector<std::function<void()>> listeners_;
     std::vector<std::function<void()>> gate_listeners_;
     std::array<uint32_t, kSize / 4>    regs_{};

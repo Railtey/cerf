@@ -8,6 +8,8 @@
 #include "../../core/service.h"
 
 struct ArmCpuState;
+struct BlockContext;
+struct DecodedInsn;
 
 class GuestCycleClock;
 class HostRequestChannel;
@@ -47,11 +49,25 @@ public:
     void RequestHostService();
     bool TakeHostRequest();
 
-    void WaitForInterrupt();
+    void EnterIdle();
+    void ResumeIdle();
+    bool LeaveAfterAccess(uint32_t next_pc);
 
-    static void __fastcall WfiHelper(ArmInterruptChannel* channel);
+    void SetClockStopped(bool stopped) { clock_stopped_ = stopped; }
+    void WaitForClock();
 
 private:
+    friend uint8_t* PlaceWfi(uint8_t* cursor, DecodedInsn* d, BlockContext* ctx);
+    friend uint8_t* EmitStopAfterIoAccess(uint8_t* cursor, DecodedInsn* d, BlockContext* ctx);
+
+    bool WaitForInterrupt();
+    bool ExitPending();
+    void StopAfterInsn(uint32_t next_pc);
+
+    static uint32_t __fastcall WfiHelper(ArmInterruptChannel* channel, uint32_t next_pc);
+    static void __fastcall StopAfterInsnHelper(ArmInterruptChannel* channel, uint32_t next_pc);
+
+    bool                  clock_stopped_ = false;
     std::atomic<uint32_t> irq_line_{0};
     std::atomic<uint32_t> idle_wake_line_{0};
     std::atomic<uint32_t> host_request_{0};

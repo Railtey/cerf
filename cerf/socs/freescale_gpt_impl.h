@@ -56,6 +56,7 @@ public:
 
     void SaveState(StateWriter& w) override {
         const uint64_t now = clock_->Cycles();
+        SettleStatus(now);
         w.Write<uint32_t>("gptcr", cr_);
         w.Write<uint32_t>("gptpr", pr_);
         w.Write<uint32_t>("gptsr", sr_);
@@ -83,6 +84,7 @@ public:
         counting_   = false;
         suspended_  = false;
         pending_sr_ = 0u;
+        next_hit_   = kNoHit;
         cr_         = cr;
         pr_         = pr;
         sr_         = sr;
@@ -117,7 +119,7 @@ private:
         switch (off) {
             case kOffGptcr:   return cr_;
             case kOffGptpr:   return pr_;
-            case kOffGptsr:   return sr_;
+            case kOffGptsr:   SettleStatus(clock_->Cycles()); return sr_;
             case kOffGptir:   return ir_;
             case kOffGptocr1: return ocr_[0];
             case kOffGptocr2: return ocr_[1];
@@ -160,14 +162,7 @@ private:
         return counting_ ? Sequence().ValueAt(TicksAt(now)) : base_value_;
     }
 
-    /* MCIMX31RM Table 34-6 / MCIMX51RM Table 36-5 ENMOD: the field value says the
-       counter resets when disabled, the field text says it resets on enabling. */
     uint32_t ReadCount() {
-        if ((cr_ & (kGptcrEn | kGptcrEnmod)) == kGptcrEnmod && base_value_ != 0u) {
-            emu_.Get<Fatal>().Die("GPT %08X: GPTCNT read while disabled with ENMOD set and "
-                                  "0x%08X frozen; the value is not established", kBase,
-                                  base_value_);
-        }
         return Count(clock_->Cycles());
     }
 
@@ -184,17 +179,17 @@ private:
         return bits;
     }
 
-    bool NextEvent(uint64_t after, uint64_t& at) const {
+    bool NextEvent(uint64_t after, uint32_t sources, uint64_t& at) const {
         const GptCountSequence seq = Sequence();
-        const uint32_t seen = sr_ | pending_sr_;
+        const uint32_t open = sources & ~(sr_ | pending_sr_);
         bool     found = false;
         uint64_t hit   = 0u;
         for (int n = 0; n < 3; ++n) {
-            if ((seen & (kGptOf1 << n)) != 0u || !seq.NextCompare(ocr_[n], after, hit)) continue;
+            if ((open & (kGptOf1 << n)) == 0u || !seq.NextCompare(ocr_[n], after, hit)) continue;
             if (!found || hit < at) at = hit;
             found = true;
         }
-        if ((seen & kGptRov) == 0u && seq.NextRollover(after, hit)) {
+        if ((open & kGptRov) != 0u && seq.NextRollover(after, hit)) {
             if (!found || hit < at) at = hit;
             found = true;
         }
@@ -204,16 +199,25 @@ private:
     void CaptureDue(uint64_t now) {
         if (!counting_) return;
         const uint64_t t = TicksAt(now);
-        if (clock_->IsDue(event_, now)) pending_sr_ |= HitsIn(last_eval_, t);
+        if (now >= next_hit_) pending_sr_ |= HitsIn(last_eval_, t);
         last_eval_ = t;
+    }
+
+    void SettleStatus(uint64_t now) {
+        CaptureDue(now);
+        if ((pending_sr_ & ~ir_) != 0u) Arm(now);
     }
 
     void Arm(uint64_t now) {
         uint64_t at = 0u;
-        if (pending_sr_ != 0u)                         clock_->Arm(event_, now);
-        else if (counting_ && NextEvent(last_eval_, at)) clock_->Arm(event_,
-                                                             counter_.CycleOfTick(base_tick_ + at));
-        else                                           clock_->Disarm(event_);
+        sr_         |= pending_sr_ & ~ir_;
+        pending_sr_ &= ir_;
+        next_hit_ = counting_ && NextEvent(last_eval_, kGptStatusMask, at)
+                        ? counter_.CycleOfTick(base_tick_ + at) : kNoHit;
+        if (pending_sr_ != 0u)                                clock_->Arm(event_, now);
+        else if (counting_ && NextEvent(last_eval_, ir_, at)) clock_->Arm(event_,
+                                                                  counter_.CycleOfTick(base_tick_ + at));
+        else                                                  clock_->Disarm(event_);
     }
 
     void OnEvent() {
@@ -242,22 +246,29 @@ private:
         }
     }
 
-    uint64_t EnabledInputHz() const {
+    GuestCycleClock::Rate EnabledInputRate() const {
         if (suspended_ || (cr_ & kGptcrEn) == 0u ||
             Traits::Clksrc(Clksrc(cr_)) == GptClockInput::kNone) {
-            return 0u;
+            return GuestCycleClock::Rate{0u, 1u};
         }
-        return clocks_->InputHz(FreescaleTimerUnit::kGpt, Input());
+        return clocks_->InputRate(FreescaleTimerUnit::kGpt, Input());
     }
 
-    uint64_t RatioCycles() const { return clock_->CpuHz() * (uint64_t{pr_} + 1u); }
+    GuestCycleClock::Rate TickRate(GuestCycleClock::Rate input) const {
+        GuestCycleClock::Rate tick;
+        RequireScale(FreescaleTimerClocks::PrescaledRate(input, pr_, tick), input);
+        return tick;
+    }
 
-    void RequireScale(bool ok, uint64_t input_hz) const {
+    void RequireScale(bool ok, GuestCycleClock::Rate input) const {
         if (!ok) {
-            emu_.Get<Fatal>().Die("GPT %08X: %llu Hz input / %u against the %llu Hz core "
+            const GuestCycleClock::Rate core = clock_->ClockRate();
+            emu_.Get<Fatal>().Die("GPT %08X: %llu/%llu Hz input / %u against the %llu/%llu Hz core "
                                   "overflows the 64-bit scale", kBase,
-                                  static_cast<unsigned long long>(input_hz), pr_ + 1u,
-                                  static_cast<unsigned long long>(clock_->CpuHz()));
+                                  static_cast<unsigned long long>(input.num),
+                                  static_cast<unsigned long long>(input.den), pr_ + 1u,
+                                  static_cast<unsigned long long>(core.num),
+                                  static_cast<unsigned long long>(core.den));
         }
     }
 
@@ -286,31 +297,37 @@ private:
         phase_den_ = uint64_t{pr_} + 1u;
     }
 
-    void Resume(uint64_t now, uint64_t input_hz) {
-        RequireScale(counter_.SetRatio(RatioCycles(), input_hz), input_hz);
-        RequireScale(counter_.AnchorAtPhase(now, 0u, phase_, phase_den_), input_hz);
-        base_tick_    = 0u;
-        last_eval_    = 0u;
-        ratio_cycles_ = RatioCycles();
-        ratio_ticks_  = input_hz;
-        counting_     = true;
+    void Resume(uint64_t now, GuestCycleClock::Rate input) {
+        const GuestCycleClock::Rate core = clock_->ClockRate();
+        const GuestCycleClock::Rate tick = TickRate(input);
+        RequireScale(counter_.SetRate(core, tick), input);
+        RequireScale(counter_.AnchorAtPhase(now, 0u, phase_, phase_den_), input);
+        base_tick_  = 0u;
+        last_eval_  = 0u;
+        ratio_core_ = core;
+        ratio_tick_ = tick;
+        counting_   = true;
     }
 
     void Retime() {
-        const uint64_t now      = clock_->Cycles();
-        const uint64_t input_hz = EnabledInputHz();
+        const uint64_t              now   = clock_->Cycles();
+        const GuestCycleClock::Rate input = EnabledInputRate();
         CaptureDue(now);
         if (!counting_) {
-            if (input_hz != 0u) Resume(now, input_hz);
-        } else if (input_hz == 0u) {
+            if (input.num != 0u) Resume(now, input);
+        } else if (input.num == 0u) {
             Freeze(now, true);
-        } else if (input_hz != ratio_ticks_ || RatioCycles() != ratio_cycles_) {
-            base_value_ = Count(now);
-            RequireScale(counter_.Rescale(now, RatioCycles(), input_hz), input_hz);
-            base_tick_    = counter_.TicksSince(now);
-            last_eval_    = 0u;
-            ratio_cycles_ = RatioCycles();
-            ratio_ticks_  = input_hz;
+        } else {
+            const GuestCycleClock::Rate core = clock_->ClockRate();
+            const GuestCycleClock::Rate tick = TickRate(input);
+            if (tick != ratio_tick_ || core != ratio_core_) {
+                base_value_ = Count(now);
+                RequireScale(counter_.RescaleRate(now, core, tick), input);
+                base_tick_  = counter_.TicksSince(now);
+                last_eval_  = 0u;
+                ratio_core_ = core;
+                ratio_tick_ = tick;
+            }
         }
         Arm(now);
     }
@@ -340,25 +357,11 @@ private:
         Retime();
     }
 
-    void RequireNoMatchAt(uint32_t count, const char* what) const {
-        for (int n = 0; n < 3; ++n) {
-            if (ocr_[n] == count) {
-                emu_.Get<Fatal>().Die("GPT %08X: %s leaves GPTCNT 0x%08X equal to GPTOCR%d; "
-                                      "whether OF%d sets is not established", kBase, what,
-                                      count, n + 1, n + 1);
-            }
-        }
-    }
-
     void WriteCr(uint32_t value) {
         LOG(SocTimer, "GPT %08X: CR <- %08X (was %08X)\n", kBase, value, cr_);
         const uint64_t now = clock_->Cycles();
         CaptureDue(now);
         if ((value & kGptcrSwr) != 0u) {
-            if (value != kGptcrSwr) {
-                emu_.Get<Fatal>().Die("GPT %08X: SWR write 0x%08X carries other bits; the "
-                                      "value those bits take is not modeled", kBase, value);
-            }
             ResetRegisters(cr_ & Traits::kCrSwrKeep);
             return;
         }
@@ -370,16 +373,14 @@ private:
         const uint32_t      next  = value & kGptcrStored;
         const GptClockInput input = Traits::Clksrc(Clksrc(next));
         if (input == GptClockInput::kPad || input == GptClockInput::kUndefined) {
-            emu_.Get<Fatal>().Die("GPT %08X: GPTCR 0x%08X selects CLKSRC %u, which is not a "
-                                  "modeled clock", kBase, value, Clksrc(next));
+            emu_.Get<Fatal>().Die("GPT %08X: GPTCR 0x%08X selects CLKSRC %u (%s), which is not a "
+                                  "modeled clock", kBase, value,
+                                  Clksrc(next), input == GptClockInput::kPad
+                                                    ? "the external pad clock"
+                                                    : "an undefined code");
         }
         const bool was_en = (cr_ & kGptcrEn) != 0u;
         const bool now_en = (next & kGptcrEn) != 0u;
-        if (was_en && Clksrc(cr_) != Clksrc(next)) {
-            emu_.Get<Fatal>().Die("GPT %08X: GPTCR 0x%08X changes CLKSRC of the enabled timer "
-                                  "(was 0x%08X); the result is unpredictable", kBase, value,
-                                  cr_);
-        }
         if (counting_) {
             if (now_en) Rebase(now);
             else        Freeze(now, Traits::kPrescalerHoldsWhenDisabled);
@@ -387,12 +388,13 @@ private:
             ResetPrescaler();
         }
         cr_ = next;
-        if (!was_en && now_en) {
-            if ((next & kGptcrEnmod) != 0u) {
-                base_value_ = 0u;
-                ResetPrescaler();
-            }
-            RequireNoMatchAt(base_value_, "enabling the timer");
+        /* MCIMX31RM section 34.4.1 (page 34-20): disabled, "the counter freezes at its current value or is reset
+           to 0 according to the setting of the ENMOD bit"; MCIMX51RM section 36.5 (page 36-19) step 7: "Set
+           ENMOD=1 in GPTCR, to bring GPT counter to 0x00000000". */
+        if (!now_en && (next & kGptcrEnmod) != 0u) base_value_ = 0u;
+        if (!was_en && now_en && (next & kGptcrEnmod) != 0u) {
+            base_value_ = 0u;
+            ResetPrescaler();
         }
         Retime();
         RefreshIrq();
@@ -400,23 +402,24 @@ private:
 
     void WritePr(uint32_t value) {
         if ((value & kGptprMask) == pr_) return;
-        const uint64_t now = clock_->Cycles();
+        const uint64_t now  = clock_->Cycles();
+        const uint32_t next = value & kGptprMask;
         CaptureDue(now);
-        uint64_t edge_part = 0u;
-        uint64_t edge_den  = 1u;
+        uint64_t phase = next;
+        uint64_t den   = uint64_t{next} + 1u;
         if (counting_) {
-            edge_den = counter_.PhaseDenominator();
-            if (edge_den > UINT64_MAX / (uint64_t{kGptprMask} + 1u)) {
+            if (!counter_.DivideChangePhase(now, uint64_t{pr_} + 1u, uint64_t{next} + 1u, phase,
+                                            den)) {
                 emu_.Get<Fatal>().Die("GPT %08X: prescaler phase denominator %llu overflows the "
                                       "GPTPR write", kBase,
-                                      static_cast<unsigned long long>(edge_den));
+                                      static_cast<unsigned long long>(
+                                          counter_.PhaseDenominator()));
             }
-            edge_part = counter_.PhaseAt(now) * (uint64_t{pr_} + 1u) % edge_den;
             Freeze(now, false);
         }
-        pr_        = value & kGptprMask;
-        phase_     = uint64_t{pr_} * edge_den + edge_part;
-        phase_den_ = (uint64_t{pr_} + 1u) * edge_den;
+        pr_        = next;
+        phase_     = phase;
+        phase_den_ = den;
         Retime();
     }
 
@@ -431,7 +434,10 @@ private:
     }
 
     void WriteIr(uint32_t value) {
+        const uint64_t now = clock_->Cycles();
+        CaptureDue(now);
         ir_ = value & kGptStatusMask;
+        Arm(now);
         RefreshIrq();
     }
 
@@ -442,15 +448,6 @@ private:
         if (counting_) Rebase(now);
         if (restart) base_value_ = 0u;
         ocr_[n] = value;
-        if ((cr_ & kGptcrEn) != 0u) {
-            if (restart) {
-                RequireNoMatchAt(0u, "the GPTOCR1 restart-mode counter reset");
-            } else if (Count(now) == value) {
-                emu_.Get<Fatal>().Die("GPT %08X: GPTOCR%d write 0x%08X equals GPTCNT; whether "
-                                      "OF%d sets is not established", kBase, n + 1, value,
-                                      n + 1);
-            }
-        }
         Arm(now);
     }
 
@@ -459,6 +456,7 @@ private:
         counting_   = false;
         suspended_  = false;
         pending_sr_ = 0u;
+        next_hit_   = kNoHit;
         cr_         = cr;
         pr_         = 0u;
         sr_         = 0u;
@@ -469,6 +467,8 @@ private:
         Retime();
         RefreshIrq();
     }
+
+    static constexpr uint64_t kNoHit = UINT64_MAX;
 
     GuestCycleClock*        clock_  = nullptr;
     FreescaleTimerClocks*   clocks_ = nullptr;
@@ -484,13 +484,15 @@ private:
     bool     counting_     = false;
     bool     suspended_    = false;
     uint32_t pending_sr_   = 0u;
+    uint64_t next_hit_     = kNoHit;
     uint32_t base_value_   = 0u;
     uint64_t base_tick_    = 0u;
     uint64_t last_eval_    = 0u;
     uint64_t phase_        = 0u;
     uint64_t phase_den_    = 1u;
-    uint64_t ratio_cycles_ = 0u;
-    uint64_t ratio_ticks_  = 0u;
+
+    GuestCycleClock::Rate ratio_core_{0u, 1u};
+    GuestCycleClock::Rate ratio_tick_{0u, 1u};
 };
 
 }

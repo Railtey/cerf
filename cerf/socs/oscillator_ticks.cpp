@@ -5,6 +5,8 @@
 #include "../host/guest_deep_sleep.h"
 #include "../state/state_stream.h"
 
+#include <string>
+
 namespace {
 
 constexpr uint64_t kNsPerSec  = 1000000000u;
@@ -68,11 +70,6 @@ void OscillatorTicks::DrainPark() {
     slept_seen_       = total;
     if (ClockStopped()) return;
     park_ticks_ += CreditNs(ns);
-}
-
-void OscillatorTicks::CreditAwakeNs(uint64_t ns) {
-    DrainPark();
-    CreditNs(ns);
 }
 
 uint64_t OscillatorTicks::Now() {
@@ -155,21 +152,23 @@ void OscillatorTicks::Rebase() {
     slept_seen_ = sleep_->SleptNs();
 }
 
-void OscillatorTicks::Save(StateWriter& w) {
+void OscillatorTicks::Save(StateWriter& w, const char* prefix) {
     DrainPark();
+    const std::string              p(prefix);
     const RatedTickCount::Position at = ticks_.PositionAt(ClockCycles());
-    w.Write<uint64_t>("osc_num", osc_num_);
-    w.Write<uint64_t>("osc_den", osc_den_);
-    w.Write<uint64_t>("osc_ticks", at.ticks);
-    w.Write<uint64_t>("osc_phase", at.phase);
-    w.Write<uint64_t>("osc_phase_den", at.phase_den);
-    w.Write<uint64_t>("osc_credit_rem", credit_rem_);
+    w.Write<uint64_t>((p + "osc_num").c_str(), osc_num_);
+    w.Write<uint64_t>((p + "osc_den").c_str(), osc_den_);
+    w.Write<uint64_t>((p + "osc_ticks").c_str(), at.ticks);
+    w.Write<uint64_t>((p + "osc_phase").c_str(), at.phase);
+    w.Write<uint64_t>((p + "osc_phase_den").c_str(), at.phase_den);
+    w.Write<uint64_t>((p + "osc_credit_rem").c_str(), credit_rem_);
 }
 
-void OscillatorTicks::Restore(StateReader& r) {
+void OscillatorTicks::Restore(StateReader& r, const char* prefix) {
+    const std::string p(prefix);
     uint64_t osc_num = 0, osc_den = 0, ticks = 0, phase = 0, phase_den = 0, rem = 0;
-    r.Read("osc_num", osc_num);
-    r.Read("osc_den", osc_den);
+    r.Read((p + "osc_num").c_str(), osc_num);
+    r.Read((p + "osc_den").c_str(), osc_den);
     if (!RateFits(osc_num, osc_den)) {
         r.Reject("OscillatorTicks: restored oscillator rate %llu/%llu Hz",
                  static_cast<unsigned long long>(osc_num),
@@ -177,10 +176,10 @@ void OscillatorTicks::Restore(StateReader& r) {
     }
     osc_num_ = osc_num;
     osc_den_ = osc_den;
-    r.Read("osc_ticks", ticks);
-    r.Read("osc_phase", phase);
-    r.Read("osc_phase_den", phase_den);
-    r.Read("osc_credit_rem", rem);
+    r.Read((p + "osc_ticks").c_str(), ticks);
+    r.Read((p + "osc_phase").c_str(), phase);
+    r.Read((p + "osc_phase_den").c_str(), phase_den);
+    r.Read((p + "osc_credit_rem").c_str(), rem);
     if (phase_den == 0u || phase >= phase_den || rem >= Scale()) {
         r.Reject("OscillatorTicks: restored phase %llu/%llu credit remainder %llu out of range",
                  static_cast<unsigned long long>(phase),
@@ -211,16 +210,16 @@ void StoppableOscillatorTicks::SetCounting(bool counting) {
     stopped_ = !counting;
 }
 
-void StoppableOscillatorTicks::Save(StateWriter& w) {
-    w.Write<uint8_t>("osc_counting", stopped_ ? 0u : 1u);
-    OscillatorTicks::Save(w);
+void StoppableOscillatorTicks::Save(StateWriter& w, const char* prefix) {
+    w.Write<uint8_t>((std::string(prefix) + "osc_counting").c_str(), stopped_ ? 0u : 1u);
+    OscillatorTicks::Save(w, prefix);
 }
 
-void StoppableOscillatorTicks::Restore(StateReader& r) {
+void StoppableOscillatorTicks::Restore(StateReader& r, const char* prefix) {
     uint8_t counting = 1u;
-    r.Read("osc_counting", counting);
+    r.Read((std::string(prefix) + "osc_counting").c_str(), counting);
     stopped_      = counting == 0u;
     stopped_at_   = clock_->Cycles();
     stopped_span_ = 0u;
-    OscillatorTicks::Restore(r);
+    OscillatorTicks::Restore(r, prefix);
 }

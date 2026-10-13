@@ -31,5 +31,4 @@ private:
 
     IntelRtcCounter rtc_;
     uint64_t        alarm_mark_ = 0;
-    uint64_t        match_mark_ = 0;
 };

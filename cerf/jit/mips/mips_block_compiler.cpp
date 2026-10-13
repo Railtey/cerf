@@ -55,17 +55,7 @@ int __fastcall MipsBlockCompiler::ResolveBranchHelper(uint32_t fallthrough,
     if (s.branch_state == MipsBranch::kNone) {
         return 0;
     }
-    if (s.branch_state == MipsBranch::kCond) {
-        s.pc = s.bcond ? s.btarget : fallthrough;      /* gen_branch BC */
-    } else if (s.branch_state == MipsBranch::kCondLikely) {
-        s.pc = s.btarget;                              /* gen_branch BL-taken */
-    } else {
-        s.pc = s.btarget;                              /* gen_branch B / BR */
-        /* "Only the JALX, JR, and JALR instructions change the ISA mode bit"
-           (U15509EJ2V0UM 3.4.1). */
-        s.isa_mode = s.btarget_isa;
-    }
-    s.branch_state = MipsBranch::kNone;
+    MipsResolvePendingBranch(s, fallthrough);
     return 1;
 }
 

@@ -24,7 +24,6 @@ public:
     void PostRestore() override;
 
     int64_t AlarmWakeDueNs();
-    void    CreditCoreStop(uint64_t ns);
 
 private:
     void     PushLevel();

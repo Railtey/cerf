@@ -155,7 +155,13 @@ void ArmJit::Run() {
        cpu->exit_request." */
     {
         std::atomic_ref<uint32_t> word(cpu_state_->chain_exit_request);
-        if ((word.load(std::memory_order_acquire) & kChainExitIrq) != 0u) {
+        const uint32_t            exits = word.load(std::memory_order_acquire);
+        if ((exits & (kChainExitClock | kChainExitIdle)) != 0u) {
+            if ((exits & kChainExitClock) != 0u) channel_->WaitForClock();
+            else                                 channel_->ResumeIdle();
+            return;
+        }
+        if ((exits & kChainExitIrq) != 0u) {
             word.fetch_and(~kChainExitIrq, std::memory_order_acq_rel);
         }
     }
@@ -209,7 +215,17 @@ void ArmJit::ExitDeepSleep() {
     channel_->Wake();
 }
 
-void ArmJit::EnterIdleWait() { channel_->WaitForInterrupt(); }
+void ArmJit::EnterIdleWait() { channel_->EnterIdle(); }
+
+void ArmJit::SetCoreClockStopped(bool stopped) {
+    channel_->SetClockStopped(stopped);
+    std::atomic_ref<uint32_t> word(cpu_state_->chain_exit_request);
+    if (stopped) {
+        word.fetch_or(kChainExitClock, std::memory_order_acq_rel);
+    } else {
+        word.fetch_and(~kChainExitClock, std::memory_order_acq_rel);
+    }
+}
 
 void ArmJit::SetResetPending(bool is_resume) {
     emu_.Get<GuestCpuReset>().SetPendingResume(is_resume);

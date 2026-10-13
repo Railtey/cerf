@@ -182,7 +182,7 @@ void StateReader::Reject(const char* fmt, ...) {
         where += id;
     }
     char field[96];
-    snprintf(field, sizeof(field), " field %u '%s'", fields_, field_name_);
+    snprintf(field, sizeof(field), " field %u '%s'", fields_, field_name_.c_str());
     throw StateImageRejected(where + field + ": " + reason);
 }
 

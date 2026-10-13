@@ -413,6 +413,7 @@ uint8_t* PlaceSingleDataTransfer(uint8_t*      cursor,
             cursor = EmitLoadedPcWrite(cursor, d, ctx);
         } else {
             EmitMovBaseDisp32Reg(cursor, kStateReg, GprDisp(d->rd), kEdx);
+            cursor = EmitStopAfterIoAccess(cursor, d, ctx);
             done_labels[n_done++] = EmitJmpLabel32(cursor);
         }
     } else {
@@ -433,6 +434,7 @@ uint8_t* PlaceSingleDataTransfer(uint8_t*      cursor,
         if (wback) {
             EmitWritebackRecomputed(cursor, d, ctx);
         }
+        cursor = EmitStopAfterIoAccess(cursor, d, ctx);
         done_labels[n_done++] = EmitJmpLabel32(cursor);
     }
 

@@ -29,12 +29,11 @@ public:
     void     SetOscRate(uint64_t osc_num, uint64_t osc_den);
     void     Rescale();
     void     Rebase();
-    void     CreditAwakeNs(uint64_t ns);
 
     GuestCycleClock::Rate OscRate() const { return GuestCycleClock::Rate{osc_num_, osc_den_}; }
 
-    virtual void Save(StateWriter& w);
-    virtual void Restore(StateReader& r);
+    virtual void Save(StateWriter& w, const char* prefix = "");
+    virtual void Restore(StateReader& r, const char* prefix = "");
 
 protected:
     virtual uint64_t ClockCycles();
@@ -68,8 +67,8 @@ public:
 
     void SetCounting(bool counting);
 
-    void Save(StateWriter& w) override;
-    void Restore(StateReader& r) override;
+    void Save(StateWriter& w, const char* prefix = "") override;
+    void Restore(StateReader& r, const char* prefix = "") override;
 
 protected:
     uint64_t ClockCycles() override;

@@ -2,12 +2,14 @@
 
 #include "../../boards/board_context.h"
 #include "../../core/cerf_emulator.h"
-#include "../../core/fatal.h"
 #include "../../core/log.h"
 #include "../../jit/guest_cycle_clock.h"
+#include "../../jit/guest_engine.h"
 #include "../../peripherals/peripheral_dispatcher.h"
 #include "../../state/state_stream.h"
 #include "../guest_cpu_reset.h"
+#include "imx51_ccm_dvfs.h"
+#include "imx51_ccm_status.h"
 #include "imx51_clock_input.h"
 #include "imx51_cortex_a8_platform.h"
 #include "imx51_dpll1.h"
@@ -27,7 +29,6 @@ constexpr uint32_t kCacrr  = 0x10u;
 constexpr uint32_t kCbcdr  = 0x14u;
 constexpr uint32_t kCbcmr  = 0x18u;
 constexpr uint32_t kCdcdr  = 0x30u;
-constexpr uint32_t kChscdr = 0x34u;
 constexpr uint32_t kCwdr   = 0x44u;
 constexpr uint32_t kCdhipr = 0x48u;
 constexpr uint32_t kCdcr   = 0x4Cu;
@@ -36,38 +37,30 @@ constexpr uint32_t kClpcr  = 0x54u;
 constexpr uint32_t kCisr   = 0x58u;
 constexpr uint32_t kCimr   = 0x5Cu;
 constexpr uint32_t kCmeor  = 0x84u;
-constexpr uint32_t kCgpr   = 0x64u;
 constexpr uint32_t kCcgr0  = 0x68u;
 constexpr uint32_t kCcgr2  = 0x70u;
 constexpr uint32_t kCcgr6  = 0x80u;
 
-/* Table 7-10 CACRR arm_podf [2:0]; Table 7-24 CDCR arm_freq_shift_divider [2];
-   Table 7-30 CGPR arm_async_ref_en [23]. */
-constexpr uint32_t kCacrrArmPodfMask       = 0x7u;
-constexpr uint32_t kCdcrArmFreqShiftDivider = 1u << 2;
-constexpr uint32_t kCgprArmAsyncRefEn      = 1u << 23;
-
-/* Table 9-2 BT_LPB "00 LPBM disabled", BT_LPB_FREQ "111 Normal boot frequency (400 MHz)";
-   §54.2.2.2: SBMR "contains bits that reflect the status of Boot Mode Pins", BT_LPB [24:23]. */
-constexpr uint64_t kBootRomArmHz = 400000000u;
+/* Table 7-10 CACRR arm_podf [2:0]. */
+constexpr uint32_t kCacrrArmPodfMask = 0x7u;
 
 struct CcmReset { uint32_t off; uint32_t val; };
 constexpr CcmReset kResets[] = {
     /* CCR cosc_en [12] set: sync_2 SBOOT nk.exe sub_80051DBC 0x80051FD8 `tst r3, #0x1000`
        records the 24 MHz oscillator rate on it. */
     {0x00, 0x00001EFFu},
-    {0x08, 0x00000010u}, {0x14, 0x19239145u}, {0x18, 0x000020C0u},
+    {0x14, 0x19239145u}, {0x18, 0x000020C0u},
     {0x1C, 0xA6A2A020u}, {0x20, 0x02A5A88Au}, {0x24, 0x00C30318u},
     {0x28, 0x00860041u}, {0x2C, 0x00860041u}, {0x30, 0x04320DD2u},
     {0x38, 0x02090241u}, {0x3C, 0x00010241u}, {0x40, 0x00010241u},
-    {0x4C, 0x00000001u}, {0x54, 0x00000079u}, {0x5C, 0xFFFFFFFFu},
+    {0x54, 0x00000079u},
     {0x60, 0x000A0001u}, {0x64, 0x0000FE62u}, {0x68, 0xFFFFFFFFu},
     {0x6C, 0xFFFFFFFFu}, {0x70, 0xFFFFFFFFu}, {0x74, 0xFFFFFFFFu},
     {0x78, 0xFFFFFFFFu}, {0x7C, 0xFFFFFFFFu}, {0x80, 0xFFFFFFFFu},
     {0x84, 0xFFFFFFFFu},
 };
 
-/* Table 7-9 CCSR, Table 7-11 CBCDR, Table 7-12 CBCMR, Table 7-24 CDCR. */
+/* Table 7-9 CCSR, Table 7-11 CBCDR, Table 7-12 CBCMR. */
 constexpr uint32_t kCcsrPll3SwSel  = 1u << 0;
 constexpr uint32_t kCcsrPll2SwSel  = 1u << 1;
 constexpr uint32_t kCcsrPll1SwSel  = 1u << 2;
@@ -75,12 +68,31 @@ constexpr uint32_t kCcsrLpApm      = 1u << 9;
 constexpr uint32_t kCbcdrPeriphSel = 1u << 25;
 constexpr uint32_t kCbcmrPerIpg    = 1u << 0;
 constexpr uint32_t kCbcmrPerLpApm  = 1u << 1;
-constexpr uint32_t kCdcrSwDvfsReq  = 1u << 6;
-constexpr uint32_t kCdcrSwDvfsEn   = 1u << 5;
 
-/* Figure 7-35 CMEOR: every bit resets to 1, bits 31-24, 11 and 1 are read-only; Table 7-40:
-   1 = "override module enable signal". */
-constexpr uint32_t kCmeorOverrides = 0x00FFF7FDu;
+/* Table 7-6 CCR: bits 31-13 read 0, FPM_MULT [11] "0 FPM multiply by 512, 1 FPM multiply by
+   1024". */
+constexpr uint32_t kCcrWritable = 0x00001FFFu;
+constexpr uint32_t kCcrFpmMult  = 1u << 11;
+
+/* Figure 7-15 CDCDR: bits 31 and 15 read 0; Figure 7-22 CTOR: bits 31-14 read 0; Figure 7-35
+   CMEOR: bits 31-24, 11 and 1 read 1. */
+constexpr uint32_t kCdcdrWritable = 0x7FFF7FFFu;
+constexpr uint32_t kCtorWritable  = 0x00003FFFu;
+constexpr uint32_t kCmeorWritable = 0x00FFF7FDu;
+
+/* Figure 7-8 CBCDR fields and Table 7-27 CISR bits 25-16: dividers_loaded [16] covers axi_a_podf,
+   axi_b_podf, emi_slow_podf, ahb_podf, nfc_podf, periph_clk_sel and emi_clk_sel. */
+struct DividerLoad { uint32_t field; uint32_t cisr; bool group; };
+constexpr DividerLoad kDividerLoads[] = {
+    {0x7u << 16, 1u << 17, true},  {0x7u << 19, 1u << 18, true},  {0x7u << 22, 1u << 19, true},
+    {0x7u << 10, 1u << 20, true},  {0x7u << 13, 1u << 21, true},  {1u << 25, 1u << 22, true},
+    {1u << 26, 1u << 23, true},    {0x7u << 27, 1u << 24, false}, {1u << 30, 1u << 25, false},
+};
+constexpr uint32_t kCisrDividersLoaded = 1u << 16;
+
+/* MCIMX51RM Table 7-3 (pages 7-5 / 7-6): CCR 73FD_4000 through CMEOR 73FD_4084; +0x34 is CHSCDR
+   per the Linux i.MX5 CCM register map, MXC_CCM_CHSCDR. */
+bool IsCcmRegister(uint32_t off) { return (off & 0x3u) == 0u && off <= kCmeor; }
 
 }
 
@@ -92,6 +104,9 @@ bool Imx51Ccm::ShouldRegister() {
 void Imx51Ccm::OnReady() {
     input_    = &emu_.Get<Imx51ClockInput>();
     platform_ = &emu_.Get<Imx51CortexA8Platform>();
+    status_   = &emu_.Get<Imx51CcmStatus>();
+    dvfs_     = &emu_.Get<Imx51CcmDvfs>();
+    dvfs_->SetRateListener([this] { ApplyRates(); });
     ResetRegisters();
     auto& reset = emu_.Get<GuestCpuReset>();
     reset.RegisterResetListener([this](ResetLineKind) { ResetRegisters(); });
@@ -108,64 +123,81 @@ void Imx51Ccm::OnReady() {
 void Imx51Ccm::ResetRegisters() {
     regs_.fill(0u);
     for (const auto& r : kResets) regs_[r.off >> 2] = r.val;
-}
-
-/* Table 7-3: the CCM registers run from CCR at +0x00 to CMEOR at +0x84; +0x34 is CHSCDR per
-   the Linux i.MX5 CCM register map, MXC_CCM_CHSCDR. */
-static bool IsCcmRegister(uint32_t off) {
-    return (off & 0x3u) == 0u && off <= kCmeor;
+    dvfs_->Reset();
+    status_->Reset(Reg(kCcr), Reg(kClpcr));
 }
 
 uint32_t Imx51Ccm::ReadWord(uint32_t addr) {
     const uint32_t off = addr - MmioBase();
     if (!IsCcmRegister(off)) HaltUnsupportedAccess("ReadWord", addr, 0);
-    if (off == kCisr) {
-        emu_.Get<Fatal>().Die("Imx51Ccm: CISR read; the lock and divider-load status events "
-                              "are not modeled");
+    switch (off) {
+        case kCsr:    return status_->Csr(Reg(kClpcr));
+        case kCisr:   return status_->Cisr();
+        case kCimr:   return status_->Cimr();
+        case kCwdr:   return status_->Cwdr();
+        case kCdcr:   return dvfs_->Cdcr();
+        case kCdhipr: return dvfs_->Cdhipr();
+        default:      return regs_[off >> 2];
     }
-    return regs_[off >> 2];
 }
 
 /* Table 7-3: CSR and CDHIPR are read-only, CISR is write-1-to-clear. */
 void Imx51Ccm::WriteWord(uint32_t addr, uint32_t value) {
     const uint32_t off = addr - MmioBase();
     if (!IsCcmRegister(off)) HaltUnsupportedAccess("WriteWord", addr, value);
-    if (off == kCsr || off == kCdhipr) return;
-    if (off == kCisr) {
-        regs_[off >> 2] &= ~value;
-        return;
+    switch (off) {
+        case kCsr:  case kCdhipr: return;
+        case kCisr: status_->WriteCisr(value); return;
+        case kCimr: status_->WriteCimr(value); return;
+        case kCwdr: status_->WriteCwdr(value); return;
+        case kCdcr: dvfs_->WriteCdcr(value); return;
+        default:    break;
     }
-    if (off == kCmeor) {
-        if ((value & kCmeorOverrides) != kCmeorOverrides) {
-            emu_.Get<Fatal>().Die("Imx51Ccm: CMEOR 0x%08X clears a module enable override; "
-                                  "the module clock enable gating is not modeled", value);
-        }
-        return;
-    }
-    if (off == kCcr || off == kCdcdr || off == kChscdr || off == kCwdr || off == kCtor ||
-        off == kCimr) {
-        emu_.Get<Fatal>().Die("Imx51Ccm: write 0x%08X to +0x%02X; the effect of this "
-                              "register is not modeled", value, off);
-    }
+    uint32_t stored = value;
+    if (off == kCcr)   stored = value & kCcrWritable;
+    if (off == kCdcdr) stored = value & kCdcdrWritable;
+    if (off == kCtor)  stored = value & kCtorWritable;
+    if (off == kCmeor) stored = (value & kCmeorWritable) | ~kCmeorWritable;
     const uint32_t old = regs_[off >> 2];
-    if (off == kCacrr && ((old ^ value) & kCacrrArmPodfMask) != 0u &&
-        (Reg(kCdcr) & kCdcrArmFreqShiftDivider) != 0u) {
-        emu_.Get<Fatal>().Die("Imx51Ccm: CACRR 0x%08X changes arm_podf with CDCR 0x%08X "
-                              "arm_freq_shift_divider set; the arm_clk_switch_req hold is "
-                              "not modeled", value, Reg(kCdcr));
+    regs_[off >> 2] = stored;
+    if (off == kCcr || off == kClpcr) status_->OnControl(Reg(kCcr), Reg(kClpcr));
+    if (off == kCbcdr) RaiseDividerLoads(old, stored);
+    const bool timing = off == kCcr || off == kCcsr || off == kCbcdr || off == kCbcmr ||
+                        off == kClpcr || off == kCcgr2;
+    if (off == kCacrr) {
+        if (dvfs_->WriteArmPodf(stored & kCacrrArmPodfMask)) ApplyRates();
+    } else if (timing && old != stored) {
+        ApplyRates();
     }
-    regs_[off >> 2] = value;
-    const bool timing = off == kCcsr || off == kCacrr || off == kCbcdr || off == kCbcmr ||
-                        off == kCdcr || off == kClpcr || off == kCgpr || off == kCcgr2;
-    if (timing && old != value) ApplyRates();
-    if (off >= kCcgr0 && off <= kCcgr6 && old != value) NotifyGates();
+    if (off >= kCcgr0 && off <= kCcgr6 && old != stored) NotifyGates();
 }
 
-void Imx51Ccm::SaveState(StateWriter& w) { w.WriteBytes("regs", regs_.data(), sizeof(regs_)); }
+/* MCIMX51RM Table 7-27 bits 25-16: ipi_int_1 "due to frequency change" or "due to update" of each
+   field; page 7-46: the CDHIPR handshake dividers and muxes are the same fields. */
+void Imx51Ccm::RaiseDividerLoads(uint32_t old, uint32_t now) {
+    uint32_t bits = 0u;
+    for (const auto& d : kDividerLoads) {
+        if (((old ^ now) & d.field) == 0u) continue;
+        bits |= d.cisr;
+        if (d.group) bits |= kCisrDividersLoaded;
+    }
+    if (bits != 0u) status_->Raise(bits);
+}
 
-void Imx51Ccm::RestoreState(StateReader& r) { r.ReadBytes("regs", regs_.data(), sizeof(regs_)); }
+void Imx51Ccm::SaveState(StateWriter& w) {
+    w.WriteBytes("regs", regs_.data(), sizeof(regs_));
+    status_->SaveState(w);
+    dvfs_->SaveState(w);
+}
+
+void Imx51Ccm::RestoreState(StateReader& r) {
+    r.ReadBytes("regs", regs_.data(), sizeof(regs_));
+    status_->RestoreState(r);
+    dvfs_->RestoreState(r);
+}
 
 void Imx51Ccm::PostRestore() {
+    status_->PostRestore();
     ApplyRates();
     NotifyGates();
 }
@@ -183,136 +215,119 @@ void Imx51Ccm::NotifyGates() {
 }
 
 void Imx51Ccm::ApplyRates() {
-    auto& clock = emu_.Get<GuestCycleClock>();
-    clock.SetClockHz(ArmClkHz());
-    const uint64_t hz = clock.CpuHz();
-    if (hz != applied_hz_) {
-        LOG(SocClkpwr, "Imx51Ccm: ARM clock %llu -> %llu Hz (CCSR %08X CACRR %08X DPLL1 %s)\n",
-            static_cast<unsigned long long>(applied_hz_), static_cast<unsigned long long>(hz),
+    emu_.Get<Imx51Dpll1>().OnInputChange();
+    emu_.Get<Imx51Dpll2>().OnInputChange();
+    emu_.Get<Imx51Dpll3>().OnInputChange();
+    auto&      clock = emu_.Get<GuestCycleClock>();
+    const Rate arm   = ArmClkRate();
+    const bool stopped = arm.num == 0u;
+    if (!stopped) clock.SetClockRate(arm);
+    emu_.Get<GuestEngine>().SetCoreClockStopped(stopped);
+    if (stopped != core_stopped_) {
+        LOG(SocClkpwr, "Imx51Ccm: ARM clock root %s (CCSR %08X CACRR %08X)\n",
+            stopped ? "0 Hz, core stopped" : "back, core running", Reg(kCcsr), Reg(kCacrr));
+        core_stopped_ = stopped;
+    }
+    const Rate rate = clock.ClockRate();
+    if (rate != applied_) {
+        LOG(SocClkpwr, "Imx51Ccm: ARM clock %llu/%llu -> %llu/%llu Hz (CCSR %08X CACRR %08X "
+            "DPLL1 %s)\n", static_cast<unsigned long long>(applied_.num),
+            static_cast<unsigned long long>(applied_.den),
+            static_cast<unsigned long long>(rate.num), static_cast<unsigned long long>(rate.den),
             Reg(kCcsr), Reg(kCacrr),
-            emu_.Get<Imx51Dpll1>().OutputKnown() ? "restarted" : "boot ROM state");
-        applied_hz_ = hz;
+            emu_.Get<Imx51Dpll1>().Restarted() ? "restarted" : "boot ROM state");
+        applied_ = rate;
     }
     for (auto& fn : listeners_) fn();
 }
 
-/* Figure 7-39: ARM_CLK_ROOT is pll1_sw_clk through the arm_podf divider, value + 1.
-   Table 7-30: arm_async_ref_en moves ARM_CLK_ROOT to the async reference circuit. */
-uint64_t Imx51Ccm::ArmClkHz() const {
-    if ((Reg(kCgpr) & kCgprArmAsyncRefEn) != 0u) {
-        emu_.Get<Fatal>().Die("Imx51Ccm: CGPR 0x%08X enables the ARM async reference circuit",
-                              Reg(kCgpr));
-    }
-    const uint32_t podf = Reg(kCacrr) & kCacrrArmPodfMask;
-    if ((Reg(kCcsr) & kCcsrPll1SwSel) == 0u && !emu_.Get<Imx51Dpll1>().OutputKnown()) {
-        if (podf != 0u) {
-            emu_.Get<Fatal>().Die("Imx51Ccm: CACRR arm_podf %u before the first DPLL1 "
-                                  "restart; the boot ROM divider is not modeled", podf);
-        }
-        return kBootRomArmHz;
-    }
-    return DividedHz(Pll1SwClkHz(), podf + 1u, "ARM_CLK_ROOT");
+/* Figure 7-39: ARM_CLK_ROOT is pll1_sw_clk through the arm_podf divider, value + 1. */
+GuestCycleClock::Rate Imx51Ccm::ArmClkRate() const {
+    return Pll1SwClkRate().Scaled(1u, uint64_t{dvfs_->ArmPodf()} + 1u);
 }
 
-uint64_t Imx51Ccm::DividedHz(uint64_t hz, uint64_t divider, const char* clock) const {
-    if (hz % divider != 0u) {
-        emu_.Get<Fatal>().Die("Imx51Ccm: %s = %llu Hz / %llu is not a whole number of Hz", clock,
-                              static_cast<unsigned long long>(hz),
-                              static_cast<unsigned long long>(divider));
-    }
-    return hz / divider;
+GuestCycleClock::Rate Imx51Ccm::FpmRate() const {
+    if (!status_->FpmOn()) return Rate{0u, 1u};
+    return Rate{input_->CkilHz() * ((Reg(kCcr) & kCcrFpmMult) != 0u ? 1024u : 512u), 1u};
 }
 
 /* Table 7-9 lp_apm [9]: 0 on-chip oscillator clock output, 1 FPM clock output. */
-uint64_t Imx51Ccm::LpApmHz() const {
-    if ((Reg(kCcsr) & kCcsrLpApm) != 0u) {
-        emu_.Get<Fatal>().Die("Imx51Ccm: CCSR 0x%08X selects the FPM as lp_apm", Reg(kCcsr));
-    }
-    return input_->OscHz();
+GuestCycleClock::Rate Imx51Ccm::LpApmRate() const {
+    if ((Reg(kCcsr) & kCcsrLpApm) != 0u) return FpmRate();
+    return status_->OscillatorRate();
+}
+
+GuestCycleClock::Rate Imx51Ccm::BypassClkRate() const {
+    return emu_.Get<Imx51Dpll1>().ReferenceRate();
 }
 
 /* Table 7-9 step_sel [8:7]: 00 lp_apm, 01 pll1 bypass clock, 10 pll2 divided by
    pll2_div_podf [6:5] + 1, 11 pll3 divided by pll3_div_podf [4:3] + 1. */
-uint64_t Imx51Ccm::StepClkHz() const {
+GuestCycleClock::Rate Imx51Ccm::StepClkRate() const {
     const uint32_t ccsr = Reg(kCcsr);
     switch ((ccsr >> 7) & 0x3u) {
-        case 0u: return LpApmHz();
-        case 2u:
-            return DividedHz(emu_.Get<Imx51Dpll2>().OutputHz(), ((ccsr >> 5) & 0x3u) + 1u,
-                             "step_clk");
-        case 3u:
-            return DividedHz(emu_.Get<Imx51Dpll3>().OutputHz(), ((ccsr >> 3) & 0x3u) + 1u,
-                             "step_clk");
-        default: break;
+        case 0u: return LpApmRate();
+        case 1u: return BypassClkRate();
+        case 2u: return emu_.Get<Imx51Dpll2>().OutputRate().Scaled(1u, ((ccsr >> 5) & 0x3u) + 1u);
+        default: return emu_.Get<Imx51Dpll3>().OutputRate().Scaled(1u, ((ccsr >> 3) & 0x3u) + 1u);
     }
-    emu_.Get<Fatal>().Die("Imx51Ccm: CCSR 0x%08X selects the pll1 bypass clock as step_clk",
-                          ccsr);
 }
 
 /* Table 7-9 pll1_sw_clk_sel [2]: 0 pll1_main_clk, 1 step_clk. */
-uint64_t Imx51Ccm::Pll1SwClkHz() const {
-    if ((Reg(kCcsr) & kCcsrPll1SwSel) != 0u) return StepClkHz();
-    return emu_.Get<Imx51Dpll1>().OutputHz();
+GuestCycleClock::Rate Imx51Ccm::Pll1SwClkRate() const {
+    if ((Reg(kCcsr) & kCcsrPll1SwSel) != 0u) return StepClkRate();
+    return emu_.Get<Imx51Dpll1>().OutputRate();
 }
 
 /* Table 7-9 pll2_sw_clk_sel [1] / pll3_sw_clk_sel [0]: 1 selects the bypass clock. */
-uint64_t Imx51Ccm::Pll2SwClkHz() const {
-    if ((Reg(kCcsr) & kCcsrPll2SwSel) != 0u) {
-        emu_.Get<Fatal>().Die("Imx51Ccm: CCSR 0x%08X selects the pll2 bypass clock",
-                              Reg(kCcsr));
-    }
-    return emu_.Get<Imx51Dpll2>().OutputHz();
+GuestCycleClock::Rate Imx51Ccm::Pll2SwClkRate() const {
+    if ((Reg(kCcsr) & kCcsrPll2SwSel) != 0u) return BypassClkRate();
+    return emu_.Get<Imx51Dpll2>().OutputRate();
 }
 
-uint64_t Imx51Ccm::Pll3SwClkHz() const {
-    if ((Reg(kCcsr) & kCcsrPll3SwSel) != 0u) {
-        emu_.Get<Fatal>().Die("Imx51Ccm: CCSR 0x%08X selects the pll3 bypass clock",
-                              Reg(kCcsr));
-    }
-    return emu_.Get<Imx51Dpll3>().OutputHz();
+GuestCycleClock::Rate Imx51Ccm::Pll3SwClkRate() const {
+    if ((Reg(kCcsr) & kCcsrPll3SwSel) != 0u) return BypassClkRate();
+    return emu_.Get<Imx51Dpll3>().OutputRate();
 }
 
 /* Table 7-12 periph_apm_sel [13:12]: 00 pll1_sw_clk, 01 pll3_sw_clk, 10 lp_apm. */
-uint64_t Imx51Ccm::PeriphApmClkHz() const {
+GuestCycleClock::Rate Imx51Ccm::PeriphApmClkRate() const {
     switch ((Reg(kCbcmr) >> 12) & 0x3u) {
-        case 0u: return Pll1SwClkHz();
-        case 1u: return Pll3SwClkHz();
-        case 2u: return LpApmHz();
-        default: break;
+        case 0u: return Pll1SwClkRate();
+        case 1u: return Pll3SwClkRate();
+        case 2u: return LpApmRate();
+        default: return Rate{0u, 1u};
     }
-    emu_.Get<Fatal>().Die("Imx51Ccm: CBCMR 0x%08X selects the reserved periph_apm source",
-                          Reg(kCbcmr));
 }
 
-/* Table 7-11 periph_clk_sel [25]: 0 pll2_sw_clk, 1 periph_apm_clk. Table 7-24:
-   software_DVFS_en with sw_periph_clk_div_req divides by periph_clk_DVFS_podf. */
-uint64_t Imx51Ccm::MainBusClkHz() const {
-    const uint32_t cdcr = Reg(kCdcr);
-    if ((cdcr & kCdcrSwDvfsEn) != 0u && (cdcr & kCdcrSwDvfsReq) != 0u) {
-        emu_.Get<Fatal>().Die("Imx51Ccm: CDCR 0x%08X requests the software DVFS periph "
-                              "divider", cdcr);
-    }
-    if ((Reg(kCbcdr) & kCbcdrPeriphSel) != 0u) return PeriphApmClkHz();
-    return Pll2SwClkHz();
+/* Table 7-11 periph_clk_sel [25]: 0 pll2_sw_clk, 1 periph_apm_clk. */
+GuestCycleClock::Rate Imx51Ccm::PeriphClkRate() const {
+    return (Reg(kCbcdr) & kCbcdrPeriphSel) != 0u ? PeriphApmClkRate() : Pll2SwClkRate();
+}
+
+/* Figure 7-40: main_bus_clk leaves the DVFS divider; §7.4.7.2 (page 7-103): it divides "the root
+   of bus clocks (ahb, axi, ipg, int_mem, ddr_clk, nfc_clk)". */
+GuestCycleClock::Rate Imx51Ccm::MainBusClkRate() const {
+    return PeriphClkRate().Scaled(1u, dvfs_->BusDivider());
 }
 
 /* Table 7-11: ahb_podf [12:10] and ipg_podf [9:8], each value + 1. */
-uint64_t Imx51Ccm::IpgClkHz() const {
+GuestCycleClock::Rate Imx51Ccm::IpgClkRate() const {
     const uint32_t cbcdr = Reg(kCbcdr);
-    return DividedHz(DividedHz(MainBusClkHz(), ((cbcdr >> 10) & 0x7u) + 1u, "AHB_CLK_ROOT"),
-                     ((cbcdr >> 8) & 0x3u) + 1u, "IPG_CLK_ROOT");
+    return MainBusClkRate().Scaled(
+        1u, uint64_t{((cbcdr >> 10) & 0x7u) + 1u} * (((cbcdr >> 8) & 0x3u) + 1u));
 }
 
 /* Table 7-12 perclk_ipg_sel [0] and perclk_lp_apm_sel [1]; Table 7-11
-   perclk_pred1 [7:6], perclk_pred2 [5:3], perclk_podf [2:0], each value + 1. */
-uint64_t Imx51Ccm::PerclkRootHz() const {
+   perclk_pred1 [7:6], perclk_pred2 [5:3], perclk_podf [2:0], each value + 1.
+   Figure 7-40: perclk_lp_apm_sel 0 takes the periph_clk_sel output ahead of the DVFS divider. */
+GuestCycleClock::Rate Imx51Ccm::PerclkRootRate() const {
     const uint32_t cbcmr = Reg(kCbcmr);
-    if ((cbcmr & kCbcmrPerIpg) != 0u) return IpgClkHz();
-    const uint64_t src = (cbcmr & kCbcmrPerLpApm) != 0u ? LpApmHz() : MainBusClkHz();
+    if ((cbcmr & kCbcmrPerIpg) != 0u) return IpgClkRate();
+    const Rate     src   = (cbcmr & kCbcmrPerLpApm) != 0u ? LpApmRate() : PeriphClkRate();
     const uint32_t cbcdr = Reg(kCbcdr);
-    const uint64_t pred1 = DividedHz(src, ((cbcdr >> 6) & 0x3u) + 1u, "perclk_pred1");
-    const uint64_t pred2 = DividedHz(pred1, ((cbcdr >> 3) & 0x7u) + 1u, "perclk_pred2");
-    return DividedHz(pred2, (cbcdr & 0x7u) + 1u, "PERCLK_ROOT");
+    return src.Scaled(1u, uint64_t{((cbcdr >> 6) & 0x3u) + 1u} * (((cbcdr >> 3) & 0x7u) + 1u) *
+                              ((cbcdr & 0x7u) + 1u));
 }
 
 /* Table 7-3: CCGR0..CCGR6 at 0x68..0x80; Table 7-32: two CG bits per clock. */
@@ -324,9 +339,7 @@ uint32_t Imx51Ccm::ClockGate(uint32_t ccgr, uint32_t index) const {
    modes except STOP; 10: reserved. */
 bool Imx51Ccm::ClockRunsIn(uint32_t ccgr, uint32_t index, FreescaleLowPowerMode mode) const {
     const uint32_t cg = ClockGate(ccgr, index);
-    if (cg == 2u) {
-        emu_.Get<Fatal>().Die("Imx51Ccm: CCGR%u CG%u holds the reserved value 10", ccgr, index);
-    }
+    if (cg == 2u) return true;
     switch (mode) {
         case FreescaleLowPowerMode::kRun:  return cg != 0u;
         case FreescaleLowPowerMode::kWait: return cg == 3u;

@@ -35,8 +35,7 @@ GuestCycleClock::Rate GuestCycleClock::Normalized(Rate rate) const {
                               static_cast<unsigned long long>(rate.num),
                               static_cast<unsigned long long>(rate.den));
     }
-    const uint64_t g = std::gcd(rate.num, rate.den);
-    return Rate{rate.num / g, rate.den / g};
+    return rate.Reduced();
 }
 
 uint64_t GuestCycleClock::CpuHz() const {
@@ -59,7 +58,7 @@ void GuestCycleClock::SetUnits(Rate rate) {
 void GuestCycleClock::SetClockRate(Rate rate) {
     const Rate     r       = Normalized(rate);
     const uint64_t request = ++rate_requests_;
-    if (r.num == rate_.num && r.den == rate_.den) return;
+    if (r == rate_) return;
     const uint64_t now = CyclesNow();
     RunDue(now);
     if (rate_requests_ != request) return;
@@ -223,6 +222,10 @@ void GuestCycleClock::OnThrottle() {
 void GuestCycleClock::IdleStep(void* wake_event) {
     in_idle_ = true;
     for (auto& fn : idle_listeners_) fn();
+    WaitStep(wake_event);
+}
+
+void GuestCycleClock::WaitStep(void* wake_event) {
     const uint64_t now  = CyclesNow();
     const uint64_t next = NextArmed();
     if (next == kNever) {

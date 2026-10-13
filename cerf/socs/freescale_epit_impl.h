@@ -95,6 +95,7 @@ public:
 
     void SaveState(StateWriter& w) override {
         const uint64_t now = clock_->Cycles();
+        SettleOcif(now);
         w.Write<uint32_t>("cr", cr_);
         w.Write<uint32_t>("sr", sr_);
         w.Write<uint32_t>("lr", lr_);
@@ -117,6 +118,7 @@ public:
         r.Read("prescale_phase_den", den);
         clock_->Disarm(event_);
         ocif_pending_    = false;
+        next_ocif_       = kNoOcif;
         counting_        = false;
         suspended_       = false;
         cr_              = cr;
@@ -155,7 +157,7 @@ private:
         if (width != 4u) HaltUnsupportedAccess("FastRead", kBase + off, 0);
         switch (off) {
             case kOffCr:   return cr_;
-            case kOffSr:   return sr_;
+            case kOffSr:   SettleOcif(clock_->Cycles()); return sr_;
             case kOffLr:   return lr_;
             case kOffCmpr: return cmpr_;
             case kOffCnt:  return Count(clock_->Cycles());
@@ -212,20 +214,29 @@ private:
     /* MCIMX31RM Figure 33-10 / MCIMX51RM Figure 29-9: OCIF sets on the counter
        clock edge that moves the counter off the compare value. */
     void CaptureDue(uint64_t now) {
-        if (clock_->IsDue(event_, now)) ocif_pending_ = true;
+        if (now >= next_ocif_) ocif_pending_ = true;
+    }
+
+    void SettleOcif(uint64_t now) {
+        CaptureDue(now);
+        if (ocif_pending_ && (cr_ & kCrOcien) == 0u) Arm(now);
     }
 
     void Arm(uint64_t now) {
-        uint64_t e = 0;
+        uint64_t   e      = 0;
+        const bool irq_on = (cr_ & kCrOcien) != 0u;
+        if (ocif_pending_ && !irq_on) sr_ |= kSrOcif;
+        ocif_pending_ = ocif_pending_ && irq_on;
+        next_ocif_    = kNoOcif;
         if (ocif_pending_) {
             clock_->Arm(event_, now);
             return;
         }
-        if (!counting_ || (sr_ & kSrOcif) != 0u || !NextCompareIndex(TicksAt(now), e)) {
-            clock_->Disarm(event_);
-            return;
+        if (counting_ && (sr_ & kSrOcif) == 0u && NextCompareIndex(TicksAt(now), e)) {
+            next_ocif_ = counter_.CycleOfTick(base_tick_ + e + 1u);
         }
-        clock_->Arm(event_, counter_.CycleOfTick(base_tick_ + e + 1u));
+        if (irq_on && next_ocif_ != kNoOcif) clock_->Arm(event_, next_ocif_);
+        else                                 clock_->Disarm(event_);
     }
 
     void OnCompare() {
@@ -234,6 +245,7 @@ private:
                                   "stopped", kBase);
         }
         ocif_pending_ = false;
+        next_ocif_    = kNoOcif;
         sr_ |= kSrOcif;
         RefreshIrq();
         Arm(clock_->Cycles());
@@ -253,23 +265,30 @@ private:
     }
 
     /* MCIMX31RM Table 33-6 / MCIMX51RM Table 29-5 CLKSRC 00: clock is off. */
-    uint64_t EnabledInputHz() const {
-        if (suspended_ || (cr_ & kCrEn) == 0u || Clksrc(cr_) == 0u) return 0u;
-        return clocks_->InputHz(kUnit, Input());
+    GuestCycleClock::Rate EnabledInputRate() const {
+        if (suspended_ || (cr_ & kCrEn) == 0u || Clksrc(cr_) == 0u) {
+            return GuestCycleClock::Rate{0u, 1u};
+        }
+        return clocks_->InputRate(kUnit, Input());
     }
 
-    void RequireScale(bool ok, uint64_t input_hz) const {
+    void RequireScale(bool ok, GuestCycleClock::Rate input) const {
         if (!ok) {
-            emu_.Get<Fatal>().Die("EPIT %08X: %llu Hz input / %u against the %llu Hz core "
-                                  "overflows the 64-bit scale", kBase,
-                                  static_cast<unsigned long long>(input_hz),
+            const GuestCycleClock::Rate core = clock_->ClockRate();
+            emu_.Get<Fatal>().Die("EPIT %08X: %llu/%llu Hz input / %u against the %llu/%llu Hz "
+                                  "core overflows the 64-bit scale", kBase,
+                                  static_cast<unsigned long long>(input.num),
+                                  static_cast<unsigned long long>(input.den),
                                   Prescaler(cr_) + 1u,
-                                  static_cast<unsigned long long>(clock_->CpuHz()));
+                                  static_cast<unsigned long long>(core.num),
+                                  static_cast<unsigned long long>(core.den));
         }
     }
 
-    uint64_t RatioCycles() const {
-        return clock_->CpuHz() * (uint64_t{Prescaler(cr_)} + 1u);
+    GuestCycleClock::Rate TickRate(GuestCycleClock::Rate input) const {
+        GuestCycleClock::Rate tick;
+        RequireScale(FreescaleTimerClocks::PrescaledRate(input, Prescaler(cr_), tick), input);
+        return tick;
     }
 
     void Rebase(uint64_t now) {
@@ -293,29 +312,35 @@ private:
         phase_den_ = uint64_t{Prescaler(cr_)} + 1u;
     }
 
-    void Resume(uint64_t now, uint64_t input_hz) {
-        RequireScale(counter_.SetRatio(RatioCycles(), input_hz), input_hz);
-        RequireScale(counter_.AnchorAtPhase(now, 0u, phase_, phase_den_), input_hz);
-        base_tick_     = 0u;
-        ratio_cycles_  = RatioCycles();
-        ratio_ticks_   = input_hz;
-        counting_      = true;
+    void Resume(uint64_t now, GuestCycleClock::Rate input) {
+        const GuestCycleClock::Rate core = clock_->ClockRate();
+        const GuestCycleClock::Rate tick = TickRate(input);
+        RequireScale(counter_.SetRate(core, tick), input);
+        RequireScale(counter_.AnchorAtPhase(now, 0u, phase_, phase_den_), input);
+        base_tick_  = 0u;
+        ratio_core_ = core;
+        ratio_tick_ = tick;
+        counting_   = true;
     }
 
     void Retime() {
-        const uint64_t now      = clock_->Cycles();
-        const uint64_t input_hz = EnabledInputHz();
+        const uint64_t              now   = clock_->Cycles();
+        const GuestCycleClock::Rate input = EnabledInputRate();
         CaptureDue(now);
         if (!counting_) {
-            if (input_hz != 0u) Resume(now, input_hz);
-        } else if (input_hz == 0u) {
+            if (input.num != 0u) Resume(now, input);
+        } else if (input.num == 0u) {
             Freeze(now);
-        } else if (input_hz != ratio_ticks_ || RatioCycles() != ratio_cycles_) {
-            base_value_ = Count(now);
-            RequireScale(counter_.Rescale(now, RatioCycles(), input_hz), input_hz);
-            base_tick_    = counter_.TicksSince(now);
-            ratio_cycles_ = RatioCycles();
-            ratio_ticks_  = input_hz;
+        } else {
+            const GuestCycleClock::Rate core = clock_->ClockRate();
+            const GuestCycleClock::Rate tick = TickRate(input);
+            if (tick != ratio_tick_ || core != ratio_core_) {
+                base_value_ = Count(now);
+                RequireScale(counter_.RescaleRate(now, core, tick), input);
+                base_tick_  = counter_.TicksSince(now);
+                ratio_core_ = core;
+                ratio_tick_ = tick;
+            }
         }
         Arm(now);
     }
@@ -345,11 +370,6 @@ private:
     void WriteCr(uint32_t value) {
         LOG(SocTimer, "EPIT %08X: CR <- %08X (was %08X)\n", kBase, value, cr_);
         if ((value & kCrSwr) != 0u) {
-            if (value != kCrSwr) {
-                emu_.Get<Fatal>().Die("EPIT %08X: SWR write 0x%08X carries other bits; "
-                                      "the value those bits take is not modeled", kBase,
-                                      value);
-            }
             ResetRegisters(cr_ & kCrSwrKeep);
             return;
         }
@@ -358,25 +378,38 @@ private:
             emu_.Get<Fatal>().Die("EPIT %08X: EPITCR 0x%08X drives the ipp_do_epito "
                                   "output pin, which is not modeled", kBase, value);
         }
-        const uint32_t old    = cr_;
-        const bool     was_en = (old & kCrEn) != 0u;
-        const bool     now_en = (value & kCrEn) != 0u;
-        if (was_en && now_en &&
-            (Clksrc(old) != Clksrc(value) || Prescaler(old) != Prescaler(value))) {
-            emu_.Get<Fatal>().Die("EPIT %08X: EPITCR 0x%08X changes CLKSRC or PRESCALER of "
-                                  "the enabled timer (was 0x%08X); not modeled", kBase,
-                                  value, old);
-        }
+        const uint32_t old       = cr_;
+        const bool     was_en    = (old & kCrEn) != 0u;
+        const bool     now_en    = (value & kCrEn) != 0u;
+        const bool     new_scale = Prescaler(old) != Prescaler(value);
         const uint64_t now = clock_->Cycles();
         CaptureDue(now);
-        if (counting_) {
+        uint64_t phase = 0u;
+        uint64_t den   = 0u;
+        if (counting_ && now_en && new_scale) {
+            if (!counter_.DivideChangePhase(now, uint64_t{Prescaler(old)} + 1u,
+                                            uint64_t{Prescaler(value)} + 1u, phase, den)) {
+                emu_.Get<Fatal>().Die("EPIT %08X: prescaler phase denominator %llu overflows the "
+                                      "PRESCALER write", kBase,
+                                      static_cast<unsigned long long>(
+                                          counter_.PhaseDenominator()));
+            }
+            Freeze(now);
+        } else if (counting_) {
             if (now_en) Rebase(now);
             else        Freeze(now);
         }
         cr_ = value;
         /* MCIMX31RM §33.6.1.1 with Figure 33-9: "A change in the value of the PRESCALER
            field is immediately reflected on its output clock frequency." */
-        if (Prescaler(old) != Prescaler(value)) ResetPrescaler();
+        if (new_scale) {
+            if (den != 0u) {
+                phase_     = phase;
+                phase_den_ = den;
+            } else {
+                ResetPrescaler();
+            }
+        }
         if (!was_en && now_en && (value & kCrEnmod) != 0u) {
             base_value_ = (value & kCrRld) != 0u ? lr_ : kCntReset;
             ResetPrescaler();
@@ -388,6 +421,7 @@ private:
     void WriteSr(uint32_t value) {
         if ((value & kSrOcif) == 0u) return;
         ocif_pending_ = false;
+        next_ocif_    = kNoOcif;
         sr_ &= ~kSrOcif;
         clock_->Disarm(event_);
         RefreshIrq();
@@ -421,6 +455,7 @@ private:
     void ResetRegisters(uint32_t cr) {
         clock_->Disarm(event_);
         ocif_pending_    = false;
+        next_ocif_       = kNoOcif;
         counting_        = false;
         suspended_       = false;
         cr_              = cr;
@@ -435,6 +470,8 @@ private:
 
     void HardwareReset() { ResetRegisters(0u); }
 
+    static constexpr uint64_t kNoOcif = UINT64_MAX;
+
     GuestCycleClock*        clock_  = nullptr;
     FreescaleTimerClocks*   clocks_ = nullptr;
     GuestCycleClock::Event* event_  = nullptr;
@@ -448,12 +485,14 @@ private:
     bool     counting_        = false;
     bool     suspended_       = false;
     bool     ocif_pending_    = false;
+    uint64_t next_ocif_       = kNoOcif;
     uint32_t base_value_      = kCntReset;
     uint64_t base_tick_       = 0u;
     uint64_t phase_           = 0u;
     uint64_t phase_den_       = 1u;
-    uint64_t ratio_cycles_    = 0u;
-    uint64_t ratio_ticks_     = 0u;
+
+    GuestCycleClock::Rate ratio_core_{0u, 1u};
+    GuestCycleClock::Rate ratio_tick_{0u, 1u};
 };
 
 }

@@ -177,26 +177,6 @@ uint64_t IntelRtcCounter::Core::TicksToInterrupt() const {
     return TicksToEdge(hz_rises ? 1u : EdgesToMatch());
 }
 
-uint8_t IntelRtcCounter::SyncOf(Reg reg) const {
-    switch (reg) {
-        case kRegRcnr:  return traits_.rcnr_sync;
-        case kRegRtar:  return traits_.rtar_sync;
-        case kRegRtsr:  return traits_.rtsr_sync;
-        case kRegRttr:  return traits_.rttr_sync;
-        case kRegExt:   return traits_.ext_sync;
-        case kRegCount: break;
-    }
-    emu_.Get<Fatal>().Die("%s: SyncOf reached register %u", traits_.name, reg);
-}
-
-uint64_t IntelRtcCounter::NextLanding() const {
-    uint64_t next = kNever;
-    for (uint8_t r = 0; r < kRegCount; ++r) {
-        if (pend_n_[r] != 0u && pend_[r][0].land < next) next = pend_[r][0].land;
-    }
-    return next;
-}
-
 bool IntelRtcCounter::CreditSpan(uint64_t ticks, uint64_t& slept, bool& park_start) {
     const uint64_t s = ticks < slept ? ticks : slept;
     slept -= s;
@@ -212,32 +192,12 @@ bool IntelRtcCounter::CreditSpan(uint64_t ticks, uint64_t& slept, bool& park_sta
     return edges;
 }
 
-void IntelRtcCounter::LandDue(uint64_t land) {
-    for (uint8_t r = 0; r < kRegCount; ++r) {
-        if (pend_n_[r] == 0u || pend_[r][0].land != land) continue;
-        const Pending p = pend_[r][0];
-        pend_[r][0] = pend_[r][1];
-        pend_[r][1] = Pending{};
-        --pend_n_[r];
-        if (r == kRegExt) ext_land_(p.a, p.b);
-        else              core_.Land(static_cast<Reg>(r), p.a);
-    }
-}
-
 void IntelRtcCounter::Advance() {
     const OscillatorTicks::Reading now = osc_.Sample();
     const uint64_t slept = now.park - park_seen_;
     uint64_t slept_left  = slept;
     bool     park_start  = slept != 0u && park_ticks_ == 0u;
-    uint64_t pos         = total_seen_;
-    bool     changed     = false;
-    for (uint64_t land = NextLanding(); land <= now.total; land = NextLanding()) {
-        changed = CreditSpan(land - pos, slept_left, park_start) || changed;
-        pos = land;
-        LandDue(land);
-        changed = true;
-    }
-    changed = CreditSpan(now.total - pos, slept_left, park_start) || changed;
+    const bool changed   = CreditSpan(now.total - total_seen_, slept_left, park_start);
     total_seen_ = now.total;
     park_seen_  = now.park;
     park_ticks_ += slept;
@@ -253,33 +213,9 @@ void IntelRtcCounter::Advance() {
 
 void IntelRtcCounter::Rearm() {
     Advance();
-    GuestCycleClock& clk    = emu_.Get<GuestCycleClock>();
-    const bool       asleep = emu_.Get<GuestEngine>().DeepSleep();
-    Core     v    = core_;
-    uint64_t pos  = total_seen_;
-    uint8_t  next[kRegCount] = {};
-    for (;;) {
-        const uint64_t t    = v.TicksToInterrupt();
-        uint64_t       land = kNever;
-        for (uint8_t r = 0; r < kRegCount; ++r) {
-            if (next[r] < pend_n_[r] && pend_[r][next[r]].land < land) land = pend_[r][next[r]].land;
-        }
-        if (t != kNever && (land == kNever || pos + t <= land)) {
-            osc_.ArmAt(edge_ev_, pos + t);
-            return;
-        }
-        if (land == kNever) {
-            clk.Disarm(edge_ev_);
-            return;
-        }
-        v.Credit(land - pos, asleep);
-        pos = land;
-        for (uint8_t r = 0; r < kRegCount; ++r) {
-            if (next[r] >= pend_n_[r] || pend_[r][next[r]].land != land) continue;
-            if (r != kRegExt) v.Land(static_cast<Reg>(r), pend_[r][next[r]].a);
-            ++next[r];
-        }
-    }
+    const uint64_t t = core_.TicksToInterrupt();
+    if (t == kNever) emu_.Get<GuestCycleClock>().Disarm(edge_ev_);
+    else             osc_.ArmAt(edge_ev_, total_seen_ + t);
 }
 
 int64_t IntelRtcCounter::SleptNsAtEdge(uint64_t edges) {
@@ -288,76 +224,30 @@ int64_t IntelRtcCounter::SleptNsAtEdge(uint64_t edges) {
     return osc_.SleptNsAtTick(total_seen_ + core_.TicksToEdge(edges));
 }
 
-void IntelRtcCounter::RequireSettled(const char* when) {
-    Advance();
-    if (NextLanding() == kNever) return;
-    emu_.Get<Fatal>().Die("%s: %s with an RTC register write still in its 32 kHz "
-                          "synchronization window", traits_.name, when);
-}
-
-bool IntelRtcCounter::PendingExt(uint8_t i, uint32_t& a, uint32_t& b) const {
-    if (i >= pend_n_[kRegExt]) return false;
-    a = pend_[kRegExt][i].a;
-    b = pend_[kRegExt][i].b;
-    return true;
-}
-
 void IntelRtcCounter::OnRateChange() {
     Advance();
     osc_.Rescale();
     Rearm();
 }
 
-/* SA-1110 Dev Man §9.3.1: "After the processor writes to the RCNR, all other writes to
-   this register location are ignored until the new value is actually loaded into the
-   counter." */
-void IntelRtcCounter::Schedule(Reg reg, uint32_t a, uint32_t b) {
+void IntelRtcCounter::Write(Reg reg, uint32_t a, uint32_t b) {
     Advance();
-    const uint8_t sync = SyncOf(reg);
-    if (sync == 0u) {
-        if (reg == kRegExt) ext_land_(a, b);
-        else                core_.Land(reg, a);
-        Rearm();
-        on_status_();
-        return;
-    }
-    Pending*       q    = pend_[reg];
-    uint8_t&       n    = pend_n_[reg];
-    const uint64_t land = total_seen_ + sync;
-    if (reg == kRegRcnr && traits_.rcnr_busy_ignores && n != 0u) {
-        LOG(SocTimer, "[RTC] %s RCNR <- 0x%08X ignored: 0x%08X lands at tick %llu (now %llu)\n",
-            traits_.name, a, q[0].a, static_cast<unsigned long long>(q[0].land),
-            static_cast<unsigned long long>(total_seen_));
-        return;
-    }
-    if (n != 0u && q[n - 1u].land == land) {
-        q[n - 1u].a = reg == kRegRtsr ? (((q[n - 1u].a | a) & kRtsrStatus) | (a & kRtsrEnables)) : a;
-        q[n - 1u].b = b;
-    } else {
-        if (n == kPendMax) {
-            emu_.Get<Fatal>().Die("%s: register %u written a third time inside its %u-tick "
-                                  "synchronization window", traits_.name, reg, sync);
-        }
-        q[n++] = Pending{land, a, b};
-    }
+    if (reg == kRegExt) ext_land_(a, b);
+    else                core_.Land(reg, a);
     Rearm();
+    on_status_();
 }
 
-void IntelRtcCounter::WriteRcnr(uint32_t v) { Schedule(kRegRcnr, v, 0u); }
-void IntelRtcCounter::WriteRtar(uint32_t v) { Schedule(kRegRtar, v, 0u); }
-void IntelRtcCounter::WriteRttr(uint32_t v) { Schedule(kRegRttr, v, 0u); }
-void IntelRtcCounter::WriteRtsr(uint32_t v) { Schedule(kRegRtsr, v, 0u); }
-void IntelRtcCounter::WriteExt(uint32_t a, uint32_t b) { Schedule(kRegExt, a, b); }
+void IntelRtcCounter::WriteRcnr(uint32_t v) { Write(kRegRcnr, v, 0u); }
+void IntelRtcCounter::WriteRtar(uint32_t v) { Write(kRegRtar, v, 0u); }
+void IntelRtcCounter::WriteRttr(uint32_t v) { Write(kRegRttr, v, 0u); }
+void IntelRtcCounter::WriteRtsr(uint32_t v) { Write(kRegRtsr, v, 0u); }
+void IntelRtcCounter::WriteExt(uint32_t a, uint32_t b) { Write(kRegExt, a, b); }
 
 /* PXA255 Dev Man §4.3.2.1: "A write to the RTTC will increment the RTC Count
    Register (RCNR) by one." */
 void IntelRtcCounter::IncrementRcnr() {
     Advance();
-    if (pend_n_[kRegRcnr] != 0u) {
-        emu_.Get<Fatal>().Die("%s: an RTTR write while an RCNR load is pending; whether the "
-                              "increment lands before or after the load is not modelled",
-                              traits_.name);
-    }
     ++core_.rcnr;
     Rearm();
     on_status_();
@@ -377,24 +267,8 @@ void IntelRtcCounter::SetOscRate(uint64_t osc_num, uint64_t osc_den) {
     Rearm();
 }
 
-void IntelRtcCounter::CreditCoreStop(uint64_t ns) {
-    Advance();
-    osc_.CreditAwakeNs(ns);
-    Rearm();
-}
-
-void IntelRtcCounter::DropPending(Reg reg) {
-    pend_n_[reg]  = 0u;
-    pend_[reg][0] = Pending{};
-    pend_[reg][1] = Pending{};
-}
-
 void IntelRtcCounter::ResetCounter() {
     Advance();
-    DropPending(kRegRcnr);
-    DropPending(kRegRtar);
-    DropPending(kRegRtsr);
-    DropPending(kRegExt);
     core_.rcnr = 0u;
     core_.rtar = 0u;
     core_.rtsr = 0u;
@@ -404,7 +278,6 @@ void IntelRtcCounter::ResetCounter() {
 
 void IntelRtcCounter::ResetRttr(uint32_t rttr) {
     Advance();
-    DropPending(kRegRttr);
     core_.SetRttr(rttr);
     Rearm();
 }
@@ -414,18 +287,6 @@ void IntelRtcCounter::Save(StateWriter& w) {
     w.Write("rtar", core_.rtar);  w.Write("rcnr", core_.rcnr);
     w.Write("rttr", core_.rttr);  w.Write("rtsr", core_.rtsr);
     w.Write("cycle_ticks", core_.cycle_ticks);  w.Write("lead_ticks", core_.lead_ticks);
-    uint64_t in[kRegCount][kPendMax] = {};
-    uint32_t a[kRegCount][kPendMax]  = {};
-    uint32_t b[kRegCount][kPendMax]  = {};
-    for (uint8_t r = 0; r < kRegCount; ++r) {
-        for (uint8_t i = 0; i < pend_n_[r]; ++i) {
-            in[r][i] = pend_[r][i].land - total_seen_;
-            a[r][i]  = pend_[r][i].a;
-            b[r][i]  = pend_[r][i].b;
-        }
-    }
-    w.Write("pend_n", pend_n_);  w.Write("pend_in", in);
-    w.Write("pend_a", a);        w.Write("pend_b", b);
     osc_.Save(w);
 }
 
@@ -438,36 +299,9 @@ void IntelRtcCounter::Restore(StateReader& r) {
         r.Reject("%s: RTC counter state out of range (rttr 0x%X rtsr 0x%X)",
                  traits_.name, core_.rttr, core_.rtsr);
     }
-    uint8_t  n[kRegCount]            = {};
-    uint64_t in[kRegCount][kPendMax] = {};
-    uint32_t a[kRegCount][kPendMax]  = {};
-    uint32_t b[kRegCount][kPendMax]  = {};
-    r.Read("pend_n", n);  r.Read("pend_in", in);
-    r.Read("pend_a", a);  r.Read("pend_b", b);
-    for (uint8_t reg = 0; reg < kRegCount; ++reg) {
-        const uint8_t sync  = SyncOf(static_cast<Reg>(reg));
-        const uint8_t limit = reg == kRegRcnr && traits_.rcnr_busy_ignores ? 1u : kPendMax;
-        bool bad = n[reg] > limit || (sync == 0u && n[reg] != 0u);
-        for (uint8_t i = 0; i < n[reg] && !bad; ++i) {
-            bad = in[reg][i] == 0u || in[reg][i] > sync || (i != 0u && in[reg][i] <= in[reg][0]) ||
-                  (reg == kRegRtsr && (a[reg][i] & ~kRtsrMask) != 0u) ||
-                  (reg == kRegRttr && (a[reg][i] & ~traits_.rttr_mask) != 0u);
-        }
-        if (bad) {
-            r.Reject("%s: pending write state of register %u out of range (count %u)",
-                     traits_.name, reg, n[reg]);
-        }
-    }
     osc_.Restore(r);
     const OscillatorTicks::Reading now = osc_.Sample();
     total_seen_ = now.total;
     park_seen_  = now.park;
     park_ticks_ = 0u;
-    for (uint8_t reg = 0; reg < kRegCount; ++reg) {
-        pend_n_[reg] = n[reg];
-        for (uint8_t i = 0; i < kPendMax; ++i) {
-            pend_[reg][i] = i < n[reg] ? Pending{total_seen_ + in[reg][i], a[reg][i], b[reg][i]}
-                                       : Pending{};
-        }
-    }
 }

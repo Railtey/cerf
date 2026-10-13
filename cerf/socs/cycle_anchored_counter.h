@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../core/tick_scale.h"
+#include "../jit/guest_cycle_clock.h"
 
 #include <cstdint>
 
@@ -8,7 +9,13 @@ class CycleAnchoredCounter {
 public:
     bool SetRatio(uint64_t cycles, uint64_t ticks);
     bool Rescale(uint64_t cycle, uint64_t cycles, uint64_t ticks);
+    bool SetRate(GuestCycleClock::Rate core, GuestCycleClock::Rate tick);
+    bool RescaleRate(uint64_t cycle, GuestCycleClock::Rate core, GuestCycleClock::Rate tick);
     bool AnchorAtPhase(uint64_t cycle, uint32_t count, uint64_t phase, uint64_t denominator);
+    /* MCIMX51RM Figure 29-8 (page 29-11), MCIMX31RM Figure 33-9 (page 33-14): after a
+       prescaler value change the next prescaled pulse comes on the next input clock edge. */
+    bool DivideChangePhase(uint64_t cycle, uint64_t old_divide, uint64_t new_divide,
+                           uint64_t& phase, uint64_t& denominator) const;
 
     void Anchor(uint64_t cycle, uint32_t count) {
         anchor_cycle_ = cycle;
@@ -50,6 +57,8 @@ private:
     static constexpr uint64_t kCounterWrapTicks = 0x100000000ull;
 
     static bool ReduceRatio(uint64_t cycles, uint64_t ticks, uint64_t& cyc, uint64_t& tk);
+    static bool RateRatio(GuestCycleClock::Rate core, GuestCycleClock::Rate tick, uint64_t& cycles,
+                          uint64_t& ticks);
 
     void PlaceAnchor(uint64_t cycle, uint32_t count, uint64_t phase, uint64_t denominator);
 

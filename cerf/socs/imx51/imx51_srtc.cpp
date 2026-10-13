@@ -13,7 +13,6 @@
 #include "imx51_clock_input.h"
 #include "imx51_id.h"
 
-#include <array>
 #include <cstdint>
 
 namespace {
@@ -43,11 +42,7 @@ constexpr uint32_t kLpcrEnLp = 1u << 3;
 constexpr uint32_t kLpcrAlp  = 1u << 7;
 constexpr uint32_t kLpsrAlp  = 1u << 3;
 
-/* Genesi i.MX5 Linux rtc-mxc_v2.c rtc_write_sync_lp: "all writes from the IP domain will be
-   synchronized to the CKIL domain", "Wait for 3 CKIL cycles". */
-constexpr uint64_t kSyncEdges  = 3u;
-constexpr uint32_t kPendingMax = 5u;
-constexpr uint64_t kNever      = ~0ull;
+constexpr uint64_t kNever = ~0ull;
 
 class Imx51Srtc : public Peripheral {
 public:
@@ -118,81 +113,45 @@ public:
                 emu_.Get<Fatal>().Die("Imx51Srtc: write 0x%08X to +0x%03X is not modeled",
                                       value, off);
         }
-        Schedule(off, value);
+        Land(off, value);
         Update();
     }
 
     void SaveState(StateWriter& w) override {
         CatchUp();
         ckil_.Save(w);
-        const uint64_t now = ckil_.Now();
-        std::array<uint32_t, kPendingMax> off{};
-        std::array<uint32_t, kPendingMax> value{};
-        std::array<uint64_t, kPendingMax> left{};
-        for (uint32_t i = 0; i < pending_n_; ++i) {
-            off[i]   = pending_[i].off;
-            value[i] = pending_[i].value;
-            left[i]  = pending_[i].land - now;
-        }
         w.Write<uint64_t>("lp_count", Count());
         w.Write<uint32_t>("lpcr", lpcr_);
         w.Write<uint32_t>("lpsar", lpsar_);
         w.Write<uint8_t>("alp", alp_ ? 1u : 0u);
-        w.Write<uint8_t>("alp_unknown", alp_unknown_ ? 1u : 0u);
-        w.WriteBytes("lp_sync_off", off.data(), sizeof(off));
-        w.WriteBytes("lp_sync_value", value.data(), sizeof(value));
-        w.WriteBytes("lp_sync_ticks_left", left.data(), sizeof(left));
     }
 
     void RestoreState(StateReader& r) override {
         uint64_t count = 0;
         uint32_t lpcr = 0, lpsar = 0;
-        uint8_t  alp = 0, alp_unknown = 0;
-        std::array<uint32_t, kPendingMax> off{};
-        std::array<uint32_t, kPendingMax> value{};
-        std::array<uint64_t, kPendingMax> left{};
+        uint8_t  alp = 0;
         ckil_.Restore(r);
         r.Read("lp_count", count);
         r.Read("lpcr", lpcr);
         r.Read("lpsar", lpsar);
         r.Read("alp", alp);
-        r.Read("alp_unknown", alp_unknown);
-        r.ReadBytes("lp_sync_off", off.data(), sizeof(off));
-        r.ReadBytes("lp_sync_value", value.data(), sizeof(value));
-        r.ReadBytes("lp_sync_ticks_left", left.data(), sizeof(left));
-        const uint64_t now = ckil_.Now();
         count_at_set_ = count;
-        ckil_at_set_  = now;
+        ckil_at_set_  = ckil_.Now();
         lpcr_         = lpcr;
         lpsar_        = lpsar;
         alp_          = alp != 0u;
-        alp_unknown_  = alp_unknown != 0u;
-        pending_n_    = 0u;
-        while (pending_n_ < kPendingMax && left[pending_n_] != 0u) {
-            pending_[pending_n_] = Pending{off[pending_n_], value[pending_n_],
-                                           now + left[pending_n_]};
-            ++pending_n_;
-        }
         clock_->Disarm(event_);
     }
 
     void PostRestore() override { Update(); }
 
 private:
-    struct Pending {
-        uint32_t off;
-        uint32_t value;
-        uint64_t land;
-    };
-
     /* MCIMX51RM Table 54-10: only the POR and jtag_rst_b rows assert srtc_rst_b. */
     void PowerOnReset() {
         SetCountAt(ckil_.Now(), 0u);
-        lpcr_        = 0u;
-        lpsar_       = 0u;
-        alp_         = false;
-        alp_unknown_ = false;
-        pending_n_   = 0u;
+        lpcr_  = 0u;
+        lpsar_ = 0u;
+        alp_   = false;
         clock_->Disarm(event_);
         DriveIrq();
     }
@@ -229,82 +188,41 @@ private:
         return ckil_at_set_ + (AlarmCount() - count_at_set_);
     }
 
-    /* sync_2 nk.exe sub_80103590: LPSCLR = 0 at 0x80103638, LPSCMR at 0x8010363C, then three
-       passes that wait for LPSCLR to change (0x80103640-0x80103654). */
-    void Schedule(uint32_t off, uint32_t value) {
-        for (uint32_t i = 0; i < pending_n_; ++i) {
-            if (pending_[i].off != off) continue;
-            emu_.Get<Fatal>().Die("Imx51Srtc: write 0x%08X to +0x%03X while its write 0x%08X is "
-                                  "still in its %llu-edge CKIL synchronization window", value,
-                                  off, pending_[i].value,
-                                  static_cast<unsigned long long>(kSyncEdges));
-        }
-        pending_[pending_n_++] = Pending{off, value, ckil_.Now() + kSyncEdges};
-    }
-
-    void Land(const Pending& p) {
-        SetCountAt(p.land, CountAt(p.land));
-        switch (p.off) {
+    void Land(uint32_t off, uint32_t value) {
+        const uint64_t now = ckil_.Now();
+        SetCountAt(now, CountAt(now));
+        switch (off) {
             case kOffLpscmr:
-                count_at_set_ = (static_cast<uint64_t>(p.value) << kFractionBits) |
+                count_at_set_ = (static_cast<uint64_t>(value) << kFractionBits) |
                                 (count_at_set_ & kFractionMask);
                 return;
             case kOffLpsclr:
-                count_at_set_ = (count_at_set_ & ~kFractionMask) | (p.value >> kLpsclrShift);
+                count_at_set_ = (count_at_set_ & ~kFractionMask) | (value >> kLpsclrShift);
                 return;
             case kOffLpsar:
-                lpsar_ = p.value;
+                lpsar_ = value;
                 return;
             case kOffLpcr:
-                lpcr_ = p.value;
+                lpcr_ = value;
                 return;
             default:
-                if ((p.value & kLpsrAlp) != 0u) {
-                    alp_         = false;
-                    alp_unknown_ = false;
-                }
+                if ((value & kLpsrAlp) != 0u) alp_ = false;
                 return;
         }
     }
 
     void CatchUp() {
-        const uint64_t now = ckil_.Now();
-        for (;;) {
-            const uint64_t land  = pending_n_ != 0u ? pending_[0].land : kNever;
-            const uint64_t match = MatchTick();
-            const uint64_t next  = land < match ? land : match;
-            if (next > now) return;
-            if (land == match) {
-                emu_.Get<Fatal>().Die("Imx51Srtc: a write to +0x%03X lands on the CKIL edge where "
-                                      "LPSAR 0x%08X matches; their order is not modeled",
-                                      pending_[0].off, lpsar_);
-            }
-            if (match < land) {
-                alp_ = true;
-                continue;
-            }
-            Land(pending_[0]);
-            for (uint32_t i = 1; i < pending_n_; ++i) pending_[i - 1u] = pending_[i];
-            --pending_n_;
-        }
+        if (MatchTick() <= ckil_.Now()) alp_ = true;
     }
 
     void Update() {
         CatchUp();
-        if (!alp_ && lpsar_ == (Count() >> kFractionBits)) alp_unknown_ = true;
-        if (alp_unknown_ && (lpcr_ & kLpcrAlp) != 0u) {
-            emu_.Get<Fatal>().Die("Imx51Srtc: LPCR.ALP is set while LPSAR 0x%08X equals the "
-                                  "current second and LPSR.ALP is clear; whether a match inside "
-                                  "that second sets LPSR.ALP is not modeled", lpsar_);
-        }
         DriveIrq();
-        const uint64_t land  = pending_n_ != 0u ? pending_[0].land : kNever;
         const uint64_t match = MatchTick();
-        const uint64_t next  = land < match ? land : match;
-        if (next == kNever) {
+        if (match == kNever || (lpcr_ & kLpcrAlp) == 0u) {
             clock_->Disarm(event_);
         } else {
-            ckil_.ArmAt(event_, next);
+            ckil_.ArmAt(event_, match);
         }
     }
 
@@ -327,9 +245,6 @@ private:
     uint32_t                         lpcr_         = 0u;
     uint32_t                         lpsar_        = 0u;
     bool                             alp_          = false;
-    bool                             alp_unknown_  = false;
-    std::array<Pending, kPendingMax> pending_{};
-    uint32_t                         pending_n_    = 0u;
 };
 
 }

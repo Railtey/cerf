@@ -7,6 +7,8 @@
 #include "../../core/fatal.h"
 #include "../../jit/mips/mips_cpu.h"
 #include "../../jit/mips/mips_cpu_state.h"
+#include "../../jit/mips/mips_exception_delivery.h"
+#include "../../jit/mips/mips_interrupt_channel.h"
 #include "../../socs/pr31x00/pr31500_id.h"
 #include "../../socs/pr31x00/pr31700_id.h"
 
@@ -58,12 +60,21 @@ void Tx39ConfigRegister::RegisterReducedFrequencyListener(std::function<void()> 
 void __fastcall Tx39ConfigRegister::Mtc0Helper(uint32_t value, Tx39ConfigRegister* reg) {
     MipsCpuState& s = *reg->cpu_state_;
     if ((s.cp0_config & kLock) != 0u) return;
-    if ((value & (kDoze | kHalt)) != 0u) {
-        reg->emu_.Get<Fatal>().Die("Tx39ConfigRegister: Config write 0x%08X sets Doze or Halt; "
-                                   "the core stall is not modeled", value);
+    /* TMPR39xx-um Figure 6-10 (p63): "Operation is undefined when both Doze bit and Halt bit
+       are set to 1." */
+    if ((value & (kDoze | kHalt)) == (kDoze | kHalt)) {
+        reg->emu_.Get<Fatal>().Die("Tx39ConfigRegister: Config write 0x%08X sets Doze and Halt",
+                                   value);
     }
     const uint32_t old_rf = reg->ReducedFrequency();
-    s.cp0_config = (s.cp0_config & kReadOnly) | (value & kWritable);
-    if (reg->ReducedFrequency() == old_rf) return;
-    for (auto& fn : reg->rf_listeners_) fn();
+    s.cp0_config = (s.cp0_config & kReadOnly) | (value & kWritable & ~(kDoze | kHalt));
+    if (reg->ReducedFrequency() != old_rf) {
+        for (auto& fn : reg->rf_listeners_) fn();
+    }
+    if ((value & (kDoze | kHalt)) == 0u) return;
+    /* TMPR39xx-um §5.1 (p.231): Halt mode will "stall the pipeline in holding current status";
+       the processor "can be returned from Halt mode to Active mode, and the Halt bit cleared to 0,
+       by asserting the INT[5:0], NMI or RESET signals". */
+    reg->emu_.Get<MipsInterruptChannel>().HaltCore();
+    reg->emu_.Get<MipsExceptionDelivery>().LeaveBlock();
 }

@@ -94,28 +94,28 @@ bool MipsInterruptChannel::InterruptPending(uint32_t idle) const {
 
 bool MipsInterruptChannel::WaitForInterrupt(uint32_t idle) {
     const MipsCpuState& s = *cpu_state_;
-    bool woke = true;
+    bool woke = false;
     for (;;) {
-        if (ResetRequested() || s.deep_sleep) break;
-        if (host_exit_.load(std::memory_order_acquire)) {
-            woke = false;
-            break;
-        }
+        if (ResetRequested() || s.deep_sleep || host_exit_.load(std::memory_order_acquire)) break;
         if (TakeHostRequest()) host_requests_->ServiceRequests();
-        if (InterruptPending(idle)) break;
+        woke = InterruptPending(idle);
+        if (woke) break;
         clock_->IdleStep(idle_event_);
     }
     clock_->ExitIdle();
     return woke;
 }
 
-void MipsInterruptChannel::EnterIdle(const char* insn, uint32_t next_pc) {
+void MipsInterruptChannel::OnCpuReset() {
+    if (suspended_) CloseSuspendSpan();
+}
+
+/* VR4102 UM p.643: "When the STANDBY instruction finishes the WB stage ... the internal clocks
+   will shut down, thus freezing the pipeline." */
+void MipsInterruptChannel::EnterIdle(uint32_t next_pc) {
     MipsCpuState& s = *cpu_state_;
-    if (s.branch_state != MipsBranch::kNone) {
-        emu_.Get<Fatal>().Die("MipsInterruptChannel: %s at 0x%08X in a branch delay slot is not "
-                              "modeled", insn, s.pc);
-    }
-    s.pc = next_pc;
+    if (s.branch_state != MipsBranch::kNone) MipsResolvePendingBranch(s, next_pc);
+    else                                     s.pc = next_pc;
 }
 
 /* Suspend stops TClock and every internal peripheral clock but the RTC/ICU/PMU ones, while
@@ -135,7 +135,7 @@ void MipsInterruptChannel::CloseSuspendSpan() {
 
 void __fastcall MipsInterruptChannel::StandbyInsnHelper(MipsInterruptChannel* channel,
                                                         uint32_t next_pc) {
-    channel->EnterIdle("STANDBY", next_pc);
+    channel->EnterIdle(next_pc);
     if (!channel->WaitForInterrupt(MipsIdle::kStandby)) {
         channel->cpu_state_->idle_wait = MipsIdle::kStandby;
     }
@@ -143,7 +143,7 @@ void __fastcall MipsInterruptChannel::StandbyInsnHelper(MipsInterruptChannel* ch
 
 void __fastcall MipsInterruptChannel::SuspendInsnHelper(MipsInterruptChannel* channel,
                                                         uint32_t next_pc) {
-    channel->EnterIdle("SUSPEND", next_pc);
+    channel->EnterIdle(next_pc);
     channel->OpenSuspendSpan();
     if (channel->WaitForInterrupt(MipsIdle::kSuspend)) {
         channel->CloseSuspendSpan();
@@ -160,16 +160,23 @@ bool MipsInterruptChannel::ResumeIdle() {
     return true;
 }
 
+/* TMPR39xx-um §5.1 (p.231): Halt mode stalls the pipeline; "The Status register IntMask field has no
+   effect on the return to Active mode"; §5.3 (p.234) Doze stops internal operations the same way. */
+void MipsInterruptChannel::HaltCore() { IdleAfterInsn(MipsIdle::kHalt); }
+
+void MipsInterruptChannel::IdleAfterInsn(uint32_t kind) {
+    EnterIdle(cpu_state_->pc + 4u);
+    cpu_state_->idle_wait = kind;
+}
+
 /* STOPCPU "will cause the clock to the CPU core to be disabled"; "The bit is cleared whenever an
    enabled interrupt is set" (TMPR3911 §12.3.1 p12-13). */
 void MipsInterruptChannel::StopCpuAfterAccess() {
-    MipsCpuState& s = *cpu_state_;
-    if (s.isa_mode != 0u) {
+    if (cpu_state_->isa_mode != 0u) {
         emu_.Get<Fatal>().Die("MipsInterruptChannel: STOPCPU from MIPS16 code at 0x%08X is not "
-                              "modeled", s.pc);
+                              "modeled", cpu_state_->pc);
     }
-    EnterIdle("STOPCPU", s.pc + 4u);
-    s.idle_wait = MipsIdle::kStopCpu;
+    IdleAfterInsn(MipsIdle::kStopCpu);
 }
 
 void MipsInterruptChannel::OnCpuStateRestored() {
