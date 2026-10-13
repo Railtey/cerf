@@ -33,6 +33,8 @@ public:
 
     GuestCycleClock::Rate PerclkRootRate() const;
     GuestCycleClock::Rate IpgClkRate() const;
+    GuestCycleClock::Rate SsiClockRate(uint32_t ssi) const;
+    GuestCycleClock::Rate UartClockRootRate() const;
     GuestCycleClock::Rate FpmRate() const;
     uint32_t ClockGate(uint32_t ccgr, uint32_t index) const;
     bool     ClockRunsIn(uint32_t ccgr, uint32_t index, FreescaleLowPowerMode mode) const;
@@ -62,6 +64,7 @@ private:
     Rate PeriphApmClkRate() const;
     Rate PeriphClkRate() const;
     Rate MainBusClkRate() const;
+    Rate SsiLpApmRate() const;
 
     const Imx51ClockInput*             input_    = nullptr;
     const Imx51CortexA8Platform*       platform_ = nullptr;

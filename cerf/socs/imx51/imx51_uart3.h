@@ -12,4 +12,7 @@ class Imx51Uart3
                                                            SocId::Imx51> {
 public:
     using FreescaleUartBase::FreescaleUartBase;
+
+protected:
+    void DriveIrq(bool level) override;
 };

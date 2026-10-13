@@ -3,9 +3,11 @@
 #include "../../core/cerf_emulator.h"
 #include "../irq_controller.h"
 
-/* UART2 RX interrupt = TZIC source 32 (MCIMX51RM Table 3-2, ARM Domain
-   Interrupt Summary). */
-void Imx51Uart2::AssertRxIrq()   { emu_.Get<IrqController>().AssertIrq(32); }
-void Imx51Uart2::DeassertRxIrq() { emu_.Get<IrqController>().DeAssertIrq(32); }
+/* MCIMX51RM Table 3-2 (page 3-2): IRQ 32 "UART-2 ORed interrupt". */
+void Imx51Uart2::DriveIrq(bool level) {
+    auto& ic = emu_.Get<IrqController>();
+    if (level) ic.AssertIrq(32);
+    else       ic.DeAssertIrq(32);
+}
 
 REGISTER_SERVICE(Imx51Uart2);

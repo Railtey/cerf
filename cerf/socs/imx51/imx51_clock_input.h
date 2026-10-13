@@ -10,4 +10,6 @@ public:
 
     virtual uint64_t OscHz() const = 0;
     virtual uint64_t CkilHz() const = 0;
+    virtual uint64_t CkihHz() const = 0;
+    virtual uint64_t Ckih2Hz() const = 0;
 };

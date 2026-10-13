@@ -13,6 +13,5 @@ public:
     using FreescaleUartBase::FreescaleUartBase;
 
 protected:
-    void AssertRxIrq()   override;
-    void DeassertRxIrq() override;
+    void DriveIrq(bool level) override;
 };

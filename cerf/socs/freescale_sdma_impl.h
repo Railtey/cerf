@@ -7,10 +7,12 @@
 #include "../core/cerf_emulator.h"
 #include "../core/log.h"
 #include "../cpu/emulated_memory.h"
+#include "../jit/guest_cycle_clock.h"
 #include "../peripherals/peripheral_dispatcher.h"
 #include "../state/state_stream.h"
 #include "freescale_module_clocks.h"
 #include "freescale_sdma_bus.h"
+#include "freescale_sdma_guest_memory.h"
 #include "freescale_sdma_regs.h"
 #include "guest_cpu_reset.h"
 
@@ -27,8 +29,7 @@
 namespace cerf_freescale_sdma_detail {
 
 template <uint32_t kBase, const std::string_view& kSoc>
-class FreescaleSdmaBase : public Peripheral, public FreescaleSdmaBus,
-                          public FreescaleSdmaChannelHost {
+class FreescaleSdmaBase : public Peripheral, public FreescaleSdmaChannelHost {
 public:
     using Peripheral::Peripheral;
 
@@ -38,6 +39,11 @@ public:
     }
     void OnReady() override {
         module_clocks_ = &emu_.Get<FreescaleModuleClocks>();
+        sdma_clocked_  = module_clocks_->Running(FreescaleModule::kSdma);
+        auto& clock = emu_.Get<GuestCycleClock>();
+        clock.RegisterIdleListener([this] { OnSdmaClock(); });
+        clock.RegisterIdleExitListener([this] { OnSdmaClock(); });
+        module_clocks_->RegisterGateListener([this] { OnSdmaClock(); });
         ResetCore();
         /* MCIMX31RM §40.8.3, §40.14.1; MCIMX51RM Table 54-10 system_rst_b. */
         emu_.Get<GuestCpuReset>().RegisterResetListener([this](ResetLineKind) {
@@ -57,7 +63,8 @@ public:
             case kOffMc0ptr:      return mc0ptr_;
             case kOffIntr:
                 return intr_;
-            case kOffStopStat:    return stop_stat_;
+            /* MCIMX31RM Table 40-15: "Reading this register yields the current state of the HE[i] bits." */
+            case kOffStopStat:    return he_;
             case kOffHstart:      return hstart_;
             case kOffEvtovr:      return evtovr_;
             case kOffDspovr:      return dspovr_;
@@ -101,10 +108,10 @@ public:
                 intr_ &= ~value; RefreshIrq(); return;
             /* HSTART bit N starts channel N: signal completion of its BDs. */
             case kOffHstart:    if (value != 0) CompleteChannels(value); return;
-            /* STOP_STAT is w1c: writing 1 to bit N clears HE[N]/HSTART[N]. CERF
-               completes channels synchronously on HSTART, so this clears idle bits. */
+            /* MCIMX31RM Table 40-15: writing 1 to bit i "clears the HE[i] and HSTART[i] bits". */
             case kOffStopStat:  ReleaseClaims(value);
-                                hstart_ &= ~value; stop_stat_ &= ~value; return;
+                                hstart_        &= ~value;
+                                pending_start_ &= ~value; return;
             case kOffEvtovr:    evtovr_  = value; return;
             case kOffDspovr:    dspovr_  = value; return;
             case kOffHostovr:   hostovr_ = value; return;
@@ -140,7 +147,7 @@ public:
 
     void SaveState(StateWriter& w) override {
         std::lock_guard<std::recursive_mutex> lk(state_mu_);
-        w.Write("mc0ptr", mc0ptr_);    w.Write("intr", intr_);      w.Write("stop_stat", stop_stat_);  w.Write("hstart", hstart_);
+        w.Write("mc0ptr", mc0ptr_);    w.Write("intr", intr_);      w.Write("hstart", hstart_);
         w.Write("evtovr", evtovr_);    w.Write("dspovr", dspovr_);    w.Write("hostovr", hostovr_);    w.Write("evtpend", evtpend_);
         w.Write("reset", reset_);     w.Write("evterr", evterr_);    w.Write("intrmask", intrmask_);   w.Write("psw", psw_);
         w.Write("evterrdbg", evterrdbg_); w.Write("config", config_);    w.Write("once_enb", once_enb_);   w.Write("once_data", once_data_);
@@ -148,17 +155,15 @@ public:
         w.Write("chn0addr", chn0addr_);  w.Write("xtrig_conf1", xtrig_conf1_);w.Write("xtrig_conf2", xtrig_conf2_);
         w.WriteBytes("chnpri", chnpri_, sizeof(chnpri_));
         w.WriteBytes("chnenbl", chnenbl_, sizeof(chnenbl_));
-        w.WriteBytes("rx_cursor", rx_cursor_, sizeof(rx_cursor_));
-        uint8_t claimed[kChannelCount] = {};
-        for (uint32_t i = 0; i < kChannelCount; ++i) claimed[i] = claimed_[i] ? 1u : 0u;
-        w.WriteBytes("claimed", claimed, sizeof(claimed));
+        w.Write("he", he_);
         w.WriteBytes("ctx_watermark", ctx_watermark_, sizeof(ctx_watermark_));
         w.Write("ctx_loaded", ctx_loaded_);
+        w.Write("pending_start", pending_start_);
         for (auto* s : sinks_) s->SaveSinkState(w);
     }
     void RestoreState(StateReader& r) override {
         std::lock_guard<std::recursive_mutex> lk(state_mu_);
-        r.Read("mc0ptr", mc0ptr_);    r.Read("intr", intr_);      r.Read("stop_stat", stop_stat_);  r.Read("hstart", hstart_);
+        r.Read("mc0ptr", mc0ptr_);    r.Read("intr", intr_);      r.Read("hstart", hstart_);
         r.Read("evtovr", evtovr_);    r.Read("dspovr", dspovr_);    r.Read("hostovr", hostovr_);    r.Read("evtpend", evtpend_);
         r.Read("reset", reset_);     r.Read("evterr", evterr_);    r.Read("intrmask", intrmask_);   r.Read("psw", psw_);
         r.Read("evterrdbg", evterrdbg_); r.Read("config", config_);    r.Read("once_enb", once_enb_);   r.Read("once_data", once_data_);
@@ -166,19 +171,20 @@ public:
         r.Read("chn0addr", chn0addr_);  r.Read("xtrig_conf1", xtrig_conf1_);r.Read("xtrig_conf2", xtrig_conf2_);
         r.ReadBytes("chnpri", chnpri_, sizeof(chnpri_));
         r.ReadBytes("chnenbl", chnenbl_, sizeof(chnenbl_));
-        r.ReadBytes("rx_cursor", rx_cursor_, sizeof(rx_cursor_));
-        uint8_t claimed[kChannelCount] = {};
-        r.ReadBytes("claimed", claimed, sizeof(claimed));
-        for (uint32_t i = 0; i < kChannelCount; ++i) claimed_[i] = claimed[i] != 0u;
+        r.Read("he", he_);
         r.ReadBytes("ctx_watermark", ctx_watermark_, sizeof(ctx_watermark_));
         r.Read("ctx_loaded", ctx_loaded_);
+        r.Read("pending_start", pending_start_);
         for (auto* s : sinks_) s->RestoreSinkState(r);
     }
 
     void PostRestore() override {
         std::lock_guard<std::recursive_mutex> lk(state_mu_);
         RefreshIrq();
+        sdma_clocked_ = module_clocks_->Running(FreescaleModule::kSdma);
+        for (auto* s : sinks_) s->OnSdmaClock(sdma_clocked_);
         for (auto* s : sinks_) s->PostRestoreSink();
+        StartPending();
     }
 
     bool ChannelWatermark(uint32_t channel, uint32_t& value) const override {
@@ -187,22 +193,17 @@ public:
         return true;
     }
 
-    void RegisterSdmaEvent(uint32_t event, FreescaleSdmaPeripheral* p,
-                           bool is_tx) override {
-        if (event < kMaxDmaEvents) dma_events_[event] = DmaEventBinding{p, is_tx, true};
-    }
-
     void RegisterChannelSink(FreescaleSdmaChannelSink* sink) override {
         sinks_.push_back(sink);
+        sink->OnSdmaClock(sdma_clocked_);
     }
 
     /* MCIMX51RM Table 52-96 (p.52-230/231): the SDMA resets D of each processed
        BD; I interrupts the AP. */
     void SignalChannelBdDone(uint32_t channel, uint32_t bd_pa) override {
         std::lock_guard<std::recursive_mutex> lk(state_mu_);
-        if (channel >= kChannelCount || !claimed_[channel]) return;
+        if (channel >= kChannelCount || (he_ & (1u << channel)) == 0u) return;
         uint8_t* bd = emu_.Get<EmulatedMemory>().TryTranslateWrite(bd_pa);
-        if (bd == nullptr) return;
         uint32_t* word = reinterpret_cast<uint32_t*>(bd);
         const bool want_irq = (*word & kBdIntr) != 0;
         *word &= ~(kBdDone | kBdError);
@@ -210,63 +211,25 @@ public:
         RefreshIrq();
     }
 
-    /* Fill consecutive owned (Done) RX buffer descriptors of the channel(s) bound
-       (CHNENBL) to `event` with the received bytes, write each BD's received count
-       into its mode/count word, and hand it back to the host (Done cleared) so the
-       guest's DMA reader sees the data; then raise the channel IRQ. */
-    bool SdmaRxDeliver(uint32_t event, const uint8_t* data,
-                       std::size_t n) override {
+    /* MCIMX51RM Table 52-96 (page 52-231): "The SDMA script cannot process a BD with a Done bit to
+       0"; Linux imx-sdma sdma_update_channel_loop: "SDMA stops cyclic channel when DMA request
+       triggers a channel and no SDMA owned buffer is available". */
+    void StopChannel(uint32_t channel) override {
         std::lock_guard<std::recursive_mutex> lk(state_mu_);
-        if (event >= kMaxDmaEvents || !dma_events_[event].used
-            || dma_events_[event].is_tx || mc0ptr_ == 0)
-            return false;
-        const uint32_t chans = Chnenbl(event);
+        if (channel >= kChannelCount) return;
+        he_     &= ~(1u << channel);
+        hstart_ &= ~(1u << channel);
+    }
 
-        if (chans == 0) return false;
-        module_clocks_->RequireRunning(FreescaleModule::kSdma, "runs a receive channel");
-        auto& mem = emu_.Get<EmulatedMemory>();
-        std::size_t off = 0;
-        bool delivered = false;
-        for (uint32_t nch = 0; nch < kChannelCount && off < n; ++nch) {
-            if ((chans & (1u << nch)) == 0) continue;
-            uint8_t* ccb = mem.TryTranslateWrite(mc0ptr_ + nch * kCcbStride + kCcbBaseBdOff);
-            if (ccb == nullptr) continue;
-            /* The SDMA fills BDs in ring order from currentBDptr, wrapping at the
-               W flag (MCIMX51RM Fig 52-82); track that position per channel so each
-               received frame lands in the BD the guest's reader advances to, not
-               always base. */
-            const uint32_t base = *reinterpret_cast<uint32_t*>(ccb);
-            if (rx_cursor_[nch] == 0) rx_cursor_[nch] = base;
-            uint32_t bd_pa = rx_cursor_[nch];
-
-            for (uint32_t i = 0; i < kMaxBdWalk && off < n; ++i) {
-                uint8_t* bd = mem.TryTranslateWrite(bd_pa);
-                if (bd == nullptr) break;
-                uint32_t* word = reinterpret_cast<uint32_t*>(bd);
-
-                if ((*word & kBdDone) == 0) break;          /* host owns -> not armed */
-                const bool wrap     = (*word & kBdWrap) != 0;
-                const bool want_irq = (*word & kBdIntr) != 0;
-                const uint32_t stride = BdStride(*word);
-                const uint32_t cap = *word & 0xFFFFu;        /* BD buffer size */
-                const uint32_t buf_pa = word[1];
-                uint32_t took = 0;
-                for (; took < cap && off < n; ++took, ++off) {
-                    uint8_t* dst = mem.TryTranslateWrite(buf_pa + took);
-                    if (dst == nullptr) break;
-                    *dst = data[off];
-                }
-                *word = (*word & ~(0xFFFFu | kBdDone | kBdError)) | took;
-
-                if (want_irq) intr_ |= (1u << nch);
-                delivered = true;
-                bd_pa = wrap ? base : bd_pa + stride;
-            }
-            rx_cursor_[nch] = bd_pa;
-        }
-
-        if (delivered) RefreshIrq();
-        return delivered;
+    /* MCIMX31RM Table 40-16: at a done instruction "the bit in the HSTART[i] register will be cleared
+       and the HE[i] bit will take the old value of the HSTART[i] bit". */
+    bool EndChannelRun(uint32_t channel) override {
+        std::lock_guard<std::recursive_mutex> lk(state_mu_);
+        if (channel >= kChannelCount || (he_ & (1u << channel)) == 0u) return false;
+        const uint32_t bit = 1u << channel;
+        he_ = (he_ & ~bit) | (hstart_ & bit);
+        hstart_ &= ~bit;
+        return (he_ & bit) != 0u;
     }
 
 protected:
@@ -290,7 +253,15 @@ protected:
         return (word0 & kBdExtd) ? 12u : 8u;
     }
 
+    virtual bool UnmappedRingIdles() const = 0;
+
 private:
+    bool SinkHandles(int ev) const {
+        for (auto* s : sinks_)
+            if (s->HandlesEvent(ev)) return true;
+        return false;
+    }
+
     /* CHNENBL[event] = channel bitmask (MCIMX51RM Section 52.4.3.3). */
     uint32_t Chnenbl(uint32_t event) const {
         return event < ChnenblCount() ? chnenbl_[event] : 0u;
@@ -304,26 +275,30 @@ private:
         return true;
     }
 
+    /* MCIMX31RM §40.5.3.5 Eqn 40-3 (page 40-17): channel i is runnable if "(HE[i] or HO[i]) and
+       (EP[i] or EO[i])"; Table 40-3 (page 40-18): HE is set by a "Write to HSTART register". */
     void CompleteChannels(uint32_t channels) {
+        if (!sdma_clocked_) {
+            hstart_        |= channels & he_;
+            pending_start_ |= channels & ~he_;
+            he_            |= channels;
+            return;
+        }
         if (mc0ptr_ == 0)
             HaltUnsupportedAccess("HSTART before MC0PTR set", kBase + kOffHstart, channels);
-        module_clocks_->RequireRunning(FreescaleModule::kSdma, "starts a channel");
         auto& mem = emu_.Get<EmulatedMemory>();
         for (uint32_t n = 0; n < kChannelCount; ++n) {
             if ((channels & (1u << n)) == 0) continue;
             const int ev = EventForChannel(n);
 
-            if (claimed_[n]) continue;              /* a sink already owns the data movement */
-            if (OfferChannelToSinks(n, ev)) { claimed_[n] = true; continue; }
+            /* MCIMX31RM Table 40-16: "If the corresponding HE[i] bit was already set, the HSTART[i] bit will be set." */
+            if ((he_ & (1u << n)) != 0u) { hstart_ |= 1u << n; continue; }
+            he_ |= 1u << n;
+            if (OfferChannelToSinks(n, ev)) continue;
+            he_ &= ~(1u << n);
+            if (n != 0 && UnmappedRingIdles() && SinkHandles(ev)) continue;
 
-            FreescaleSdmaPeripheral* tx = nullptr;
-            if (ev >= 0 && dma_events_[ev].used) {
-                if (!dma_events_[ev].is_tx) continue;   /* bound RX: completes only via SdmaRxDeliver */
-                tx = dma_events_[ev].p;                 /* bound TX: drain mem->peripheral below */
-            } else if (n != 0) {
-                /* Channel n runs an SDMA script this core does not model: it is
-                   neither channel 0 (the bootload script, MCIMX51RM Sec 52.23.1.2)
-                   nor a channel CHNENBL-bound to an emulated peripheral. */
+            if (n != 0) {
                 char what[128];
                 std::snprintf(what, sizeof(what),
                               "HSTART on unmodeled SDMA channel %u (event=%d, "
@@ -342,16 +317,7 @@ private:
                 const uint32_t stride = BdStride(*word);
                 const bool want_irq = (*word & kBdIntr) != 0;
                 const bool wrap     = (*word & kBdWrap) != 0;
-                if (tx != nullptr) {
-                    const uint32_t count = *word & 0xFFFFu;
-                    const uint32_t buf_pa = word[1];
-                    for (uint32_t k = 0; k < count; ++k) {
-                        uint8_t* src = mem.TryTranslateWrite(buf_pa + k);
-                        if (src == nullptr) break;
-                        tx->SdmaTxByte(*src);
-                    }
-                }
-                if (n == 0u) RunChannelZeroCommand(*word, word[1]);
+                RunChannelZeroCommand(*word, word[1]);
                 *word &= ~(kBdDone | kBdError);
                 if (want_irq) intr_ |= (1u << n);
                 /* W marks the ring's last BD (MCIMX51RM Table 52-96); the BD after
@@ -370,36 +336,53 @@ private:
         if ((command & 0x7u) != 0x7u) return;
         const uint32_t channel = command >> 3;
         const uint32_t count   = word0 & 0xFFFFu;
-        if (count < kContextGr7Word + 1u || claimed_[channel]) {
-            HaltUnsupportedAccess("C0_SETCTX of a running channel or without GR7",
-                                  kBase + kOffHstart, word0);
-        }
-        uint8_t* gr7 = emu_.Get<EmulatedMemory>().TryTranslateWrite(buf_pa + kContextGr7Word * 4u);
-        if (gr7 == nullptr) {
-            HaltUnsupportedAccess("C0_SETCTX buffer does not translate", kBase + kOffHstart, buf_pa);
+        if (count < kContextGr7Word + 1u) return;
+        uint8_t gr7[4] = {};
+        if (emu_.Get<FreescaleSdmaGuestMemory>().Read(buf_pa + kContextGr7Word * 4u, gr7, 4u) !=
+            4u) {
+            return;
         }
         ctx_watermark_[channel] = cerf::le::U32(gr7);
         ctx_loaded_ |= 1u << channel;
     }
 
     bool OfferChannelToSinks(uint32_t n, int ev) {
-        uint8_t* ccb = emu_.Get<EmulatedMemory>().TryTranslateWrite(
-            mc0ptr_ + n * kCcbStride + kCcbBaseBdOff);
+        const uint32_t ccb_pa = mc0ptr_ + n * kCcbStride;
+        auto&          mem    = emu_.Get<EmulatedMemory>();
+        if (mem.TryTranslateWrite(ccb_pa) == nullptr) return false;
+        uint8_t* ccb = mem.TryTranslateWrite(ccb_pa + kCcbBaseBdOff);
         if (ccb == nullptr) return false;
         const uint32_t base_bd_pa = *reinterpret_cast<uint32_t*>(ccb);
-        uint8_t* bd = emu_.Get<EmulatedMemory>().TryTranslateWrite(base_bd_pa);
+        uint8_t* bd = mem.TryTranslateWrite(base_bd_pa);
         if (bd == nullptr) return false;
         const FreescaleSdmaChannelStart info{n, ev, base_bd_pa,
-                                             BdStride(cerf::le::U32(bd))};
+                                             BdStride(cerf::le::U32(bd)), ccb_pa};
         for (auto* s : sinks_)
             if (s->ClaimChannel(info)) return true;
         return false;
     }
 
+    void OnSdmaClock() {
+        std::lock_guard<std::recursive_mutex> lk(state_mu_);
+        const bool on = module_clocks_->Running(FreescaleModule::kSdma);
+        if (on == sdma_clocked_) return;
+        sdma_clocked_ = on;
+        for (auto* s : sinks_) s->OnSdmaClock(on);
+        StartPending();
+    }
+
+    void StartPending() {
+        if (!sdma_clocked_ || pending_start_ == 0u) return;
+        const uint32_t channels = pending_start_;
+        pending_start_ = 0u;
+        he_ &= ~channels;
+        CompleteChannels(channels);
+    }
+
     void ReleaseClaims(uint32_t channels) {
         for (uint32_t n = 0; n < kChannelCount; ++n) {
-            if ((channels & (1u << n)) == 0 || !claimed_[n]) continue;
-            claimed_[n] = false;
+            if ((channels & he_ & (1u << n)) == 0u) continue;
+            he_ &= ~(1u << n);
             for (auto* s : sinks_) s->ReleaseChannel(n);
         }
     }
@@ -421,24 +404,24 @@ private:
     }
 
     void ResetCore() {
-        mc0ptr_ = 0; intr_ = 0; stop_stat_ = 0; hstart_ = 0; evtovr_ = 0;
+        mc0ptr_ = 0; intr_ = 0; hstart_ = 0; evtovr_ = 0;
         dspovr_ = kResetDspovr; hostovr_ = 0; evtpend_ = 0; reset_ = 0; evterr_ = 0;
         intrmask_ = 0; psw_ = 0; evterrdbg_ = 0; config_ = kResetConfig;
         once_enb_ = 0; once_data_ = 0; once_instr_ = 0; once_stat_ = kResetOnceStat;
         once_cmd_ = 0; illinstaddr_ = kResetIllinstaddr; chn0addr_ = kResetChn0addr;
         xtrig_conf1_ = 0; xtrig_conf2_ = 0;
         for (uint32_t i = 0; i < kChannelCount; ++i) {
-            chnpri_[i] = 0; rx_cursor_[i] = 0;
-            if (claimed_[i]) { claimed_[i] = false; for (auto* s : sinks_) s->ReleaseChannel(i); }
+            chnpri_[i] = 0;
+            if ((he_ & (1u << i)) != 0u) { he_ &= ~(1u << i); for (auto* s : sinks_) s->ReleaseChannel(i); }
         }
         for (uint32_t i = 0; i < kMaxDmaEvents; ++i) chnenbl_[i] = 0;
         for (uint32_t i = 0; i < kChannelCount; ++i) ctx_watermark_[i] = 0;
-        ctx_loaded_ = 0;
+        ctx_loaded_    = 0;
+        pending_start_ = 0;
     }
 
     uint32_t mc0ptr_      = 0;
     uint32_t intr_        = 0;
-    uint32_t stop_stat_   = 0;
     uint32_t hstart_      = 0;
     uint32_t evtovr_      = 0;
     uint32_t dspovr_      = kResetDspovr;
@@ -461,19 +444,13 @@ private:
     uint32_t xtrig_conf2_ = 0;
     uint32_t chnpri_[kChannelCount] = {};
     uint32_t chnenbl_[kMaxDmaEvents] = {};
-    uint32_t rx_cursor_[kChannelCount] = {};   /* per-channel RX BD ring fill position (0 = uninit -> base) */
     uint32_t ctx_watermark_[kChannelCount] = {};
     uint32_t ctx_loaded_ = 0;
     static constexpr uint32_t kContextGr7Word = 9u;
 
-    struct DmaEventBinding {
-        FreescaleSdmaPeripheral* p     = nullptr;
-        bool                     is_tx = false;
-        bool                     used  = false;
-    };
-    DmaEventBinding dma_events_[kMaxDmaEvents] = {};
-
-    bool claimed_[kChannelCount] = {};
+    uint32_t he_            = 0;
+    uint32_t pending_start_ = 0;
+    bool     sdma_clocked_  = true;
     std::vector<FreescaleSdmaChannelSink*> sinks_;
     FreescaleModuleClocks* module_clocks_ = nullptr;
 

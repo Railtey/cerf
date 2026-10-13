@@ -74,6 +74,12 @@ constexpr uint32_t kCbcmrPerLpApm  = 1u << 1;
 constexpr uint32_t kCcrWritable = 0x00001FFFu;
 constexpr uint32_t kCcrFpmMult  = 1u << 11;
 
+/* Table 7-13 CSCMR1, Figure 7-13 CS1CDR, Figure 7-14 CS2CDR. */
+constexpr uint32_t kCscmr1 = 0x1Cu;
+constexpr uint32_t kCscdr1 = 0x24u;
+constexpr uint32_t kCs1cdr = 0x28u;
+constexpr uint32_t kCs2cdr = 0x2Cu;
+
 /* Figure 7-15 CDCDR: bits 31 and 15 read 0; Figure 7-22 CTOR: bits 31-14 read 0; Figure 7-35
    CMEOR: bits 31-24, 11 and 1 read 1. */
 constexpr uint32_t kCdcdrWritable = 0x7FFF7FFFu;
@@ -163,7 +169,8 @@ void Imx51Ccm::WriteWord(uint32_t addr, uint32_t value) {
     if (off == kCcr || off == kClpcr) status_->OnControl(Reg(kCcr), Reg(kClpcr));
     if (off == kCbcdr) RaiseDividerLoads(old, stored);
     const bool timing = off == kCcr || off == kCcsr || off == kCbcdr || off == kCbcmr ||
-                        off == kClpcr || off == kCcgr2;
+                        off == kClpcr || off == kCcgr2 || off == kCscmr1 || off == kCscdr1 ||
+                        off == kCs1cdr || off == kCs2cdr;
     if (off == kCacrr) {
         if (dvfs_->WriteArmPodf(stored & kCacrrArmPodfMask)) ApplyRates();
     } else if (timing && old != stored) {
@@ -298,6 +305,48 @@ GuestCycleClock::Rate Imx51Ccm::PeriphApmClkRate() const {
         case 2u: return LpApmRate();
         default: return Rate{0u, 1u};
     }
+}
+
+/* Table 7-13 ssi_apm_clk_sel [9:8]: 00 CAMP1 of CKIH, 01 LP-APM clock selector output,
+   10 CAMP2 of CKIH2. */
+GuestCycleClock::Rate Imx51Ccm::SsiLpApmRate() const {
+    switch ((Reg(kCscmr1) >> 8) & 0x3u) {
+        case 0u: return Rate{status_->Camp1On() ? input_->CkihHz() : 0u, 1u};
+        case 1u: return LpApmRate();
+        case 2u: return Rate{status_->Camp2On() ? input_->Ckih2Hz() : 0u, 1u};
+        default: return Rate{0u, 1u};
+    }
+}
+
+/* Table 7-13 ssi1_clk_sel [15:14] / ssi2_clk_sel [13:12]: 00 pll1_sw_clk, 01 pll2_sw_clk,
+   10 pll3_sw_clk, 11 ssi_lp_apm_clk; ssi3_clk_sel [11]: 0 ssi1_clk_root, 1 ssi2_clk_root.
+   Table 7-16 / Figure 7-14: pred [8:6] and podf [5:0], each a divide by value + 1. */
+GuestCycleClock::Rate Imx51Ccm::SsiClockRate(uint32_t ssi) const {
+    const uint32_t cscmr1 = Reg(kCscmr1);
+    const uint32_t root   = ssi == 3u ? ((cscmr1 >> 11) & 0x1u) + 1u : ssi;
+    const uint32_t cdr    = Reg(root == 1u ? kCs1cdr : kCs2cdr);
+    Rate src;
+    switch ((cscmr1 >> (root == 1u ? 14u : 12u)) & 0x3u) {
+        case 0u:  src = Pll1SwClkRate(); break;
+        case 1u:  src = Pll2SwClkRate(); break;
+        case 2u:  src = Pll3SwClkRate(); break;
+        default:  src = SsiLpApmRate();  break;
+    }
+    return src.Scaled(1u, uint64_t{((cdr >> 6) & 0x7u) + 1u} * ((cdr & 0x3Fu) + 1u));
+}
+
+/* Table 7-13 uart_clk_sel [25:24]: 00 pll1_sw_clk, 01 pll2_sw_clk, 10 pll3_sw_clk, 11 lp_apm clock;
+   Table 7-15 uart_clk_pred [5:3] and uart_clk_podf [2:0], each a divide by value + 1. */
+GuestCycleClock::Rate Imx51Ccm::UartClockRootRate() const {
+    Rate src;
+    switch ((Reg(kCscmr1) >> 24) & 0x3u) {
+        case 0u:  src = Pll1SwClkRate(); break;
+        case 1u:  src = Pll2SwClkRate(); break;
+        case 2u:  src = Pll3SwClkRate(); break;
+        default:  src = LpApmRate();     break;
+    }
+    const uint32_t cscdr1 = Reg(kCscdr1);
+    return src.Scaled(1u, uint64_t{((cscdr1 >> 3) & 0x7u) + 1u} * ((cscdr1 & 0x7u) + 1u));
 }
 
 /* Table 7-11 periph_clk_sel [25]: 0 pll2_sw_clk, 1 periph_apm_clk. */

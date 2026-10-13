@@ -1,4 +1,4 @@
-#include "../../socs/imx51/imx51_ssi_slave_format.h"
+#include "../../socs/freescale_ssi_external_clock.h"
 
 #include "../../core/cerf_emulator.h"
 #include "../../core/fatal.h"
@@ -7,9 +7,9 @@
 
 namespace {
 
-class FordSync2SsiSlaveFormat : public Imx51SsiSlaveFormat {
+class FordSync2SsiSlaveFormat : public FreescaleSsiExternalClock {
 public:
-    using Imx51SsiSlaveFormat::Imx51SsiSlaveFormat;
+    using FreescaleSsiExternalClock::FreescaleSsiExternalClock;
 
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
@@ -33,11 +33,10 @@ public:
        Table 5: I2S SCLK/LRCK (Master Mode) 64x. */
     uint32_t FrameSyncBitClocks(uint32_t ssi) const override {
         if (ssi == 1u || ssi == 2u) return 64u / 2u;
-        emu_.Get<Fatal>().Die("FordSync2SsiSlaveFormat: SSI%u has no external bit clock on this "
-                              "board", ssi);
+        return 0u;
     }
 };
 
 }
 
-REGISTER_SERVICE_AS(FordSync2SsiSlaveFormat, Imx51SsiSlaveFormat);
+REGISTER_SERVICE_AS(FordSync2SsiSlaveFormat, FreescaleSsiExternalClock);

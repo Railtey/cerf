@@ -40,16 +40,27 @@ const char* ModuleName(FreescaleModule module) {
         case FreescaleModule::kGpu2d:       return "GPU2D";
         case FreescaleModule::kAta:         return "ATA";
         case FreescaleModule::kOwire:       return "1-Wire";
+        case FreescaleModule::kSsi1Ipg:     return "SSI1 ipg";
+        case FreescaleModule::kSsi2Ipg:     return "SSI2 ipg";
+        case FreescaleModule::kSsi3Ipg:     return "SSI3 ipg";
     }
     return "";
 }
 
 }
 
+bool FreescaleModuleClocks::Running(FreescaleModule module) const {
+    return ModuleRunsIn(module, CurrentMode());
+}
+
 void FreescaleModuleClocks::RequireRunning(FreescaleModule module, const char* operation) {
-    const FreescaleLowPowerMode mode = emu_.Get<GuestCycleClock>().InIdle()
-        ? emu_.Get<FreescaleTimerClocks>().WfiMode() : FreescaleLowPowerMode::kRun;
+    const FreescaleLowPowerMode mode = CurrentMode();
     if (ModuleRunsIn(module, mode)) return;
     emu_.Get<Fatal>().Die("FreescaleModuleClocks: %s %s with its module clock off in low-power "
                           "mode %u", ModuleName(module), operation, static_cast<unsigned>(mode));
+}
+
+FreescaleLowPowerMode FreescaleModuleClocks::CurrentMode() const {
+    return emu_.Get<GuestCycleClock>().InIdle()
+        ? emu_.Get<FreescaleTimerClocks>().WfiMode() : FreescaleLowPowerMode::kRun;
 }

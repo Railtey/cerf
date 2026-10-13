@@ -22,6 +22,11 @@ public:
     /* MC13892 datasheet: CLK32KMCU is "intended as the CKIL input to the system
        processor", Table 22 "32.768 kHz". */
     uint64_t CkilHz() const override { return 32768u; }
+
+    /* sync_2_sec nk.exe sub_8010D8C8 (IDA 40353): CKIH 24576000 Hz into the DDK frequency
+       table; its ssi_lp_apm_clk takes 0 Hz when CSCMR1 ssi_apm_clk_sel selects CAMP2 of CKIH2. */
+    uint64_t CkihHz() const override { return 24576000u; }
+    uint64_t Ckih2Hz() const override { return 0u; }
 };
 
 }

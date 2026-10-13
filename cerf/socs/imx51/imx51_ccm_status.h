@@ -29,6 +29,8 @@ public:
     void     WriteCimr(uint32_t value);
     void     WriteCwdr(uint32_t value);
     bool     FpmOn() const { return source_on_[kFpm]; }
+    bool     Camp1On() const { return source_on_[kCamp1]; }
+    bool     Camp2On() const { return source_on_[kCamp2]; }
 
     GuestCycleClock::Rate OscillatorRate() const {
         return GuestCycleClock::Rate{source_on_[kCosc] ? osc_hz_ : 0u, 1u};

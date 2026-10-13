@@ -18,5 +18,7 @@ protected:
     uint32_t ChnenblBase()  const override { return 0x80u; }
     uint32_t ChnenblCount() const override { return 32u; }
 
+    bool UnmappedRingIdles() const override { return false; }
+
     bool ReadExtra(uint32_t off, uint32_t& out) override;
 };

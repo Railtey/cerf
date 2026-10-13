@@ -1,418 +1,294 @@
 #include "freescale_ssi_transmitter.h"
 
 #include "../core/cerf_emulator.h"
-#include "../core/fatal.h"
 #include "../state/state_stream.h"
+#include "freescale_ssi_regs.h"
 
 #include <algorithm>
-#include <bit>
+#include <string>
 
 namespace ssi = cerf_freescale_ssi;
 
 void FreescaleSsiTransmitter::Attach() {
     clock_ = &emu_.Get<GuestCycleClock>();
-    grid_.Attach(1u, 1u);
-    underrun_event_ = clock_->Add([this] { OnUnderrun(); });
+    line_.Attach();
 }
 
 void FreescaleSsiTransmitter::Reset() {
-    enabled_ = grid_on_ = te_ = irq_tue0_ = underrun_ = false;
-    tdmae_ = tfen0_ = dma_request_ = false;
-    shape_     = FreescaleSsiFrameShape{};
-    tfwm_      = 0u;
-    settled_   = 0u;
-    tx_start_  = kNever;
-    tx_stop_   = kNever;
-    fifo_.Configure(depth_, 0u, 0u);
-    fifo_.Clear();
-    fifo_.ResetMoved();
+    line_.Reset();
+    dma_ = command_frames_ = cmd_pending_ = false;
+    cmd_from_ = 0u;
+    for (Channel& c : ch_) {
+        c.fen      = false;
+        c.wm       = 0u;
+        c.underrun = false;
+        c.fifo.Configure(1u, 0u, 0u);
+        c.fifo.Clear();
+        c.fifo.ResetMoved();
+    }
+    ConfigureFifos();
     UpdateSupply();
-    clock_->Disarm(underrun_event_);
+}
+
+/* MCIMX51RM Table 56-20 TFWM1 (page 56-56): "The TFE1 flag is set whenever the empty slots in Tx
+   FIFO exceed or are equal to the selected threshold." */
+uint32_t FreescaleSsiTransmitter::EmptyLevel(uint32_t k) const {
+    return depth_ - std::clamp(ch_[k].wm, 1u, depth_);
+}
+
+/* MCIMX31RM Table 45-11 TDMAE (page 45-39): "DMA requests are generated when any of the TFE0/1 bits
+   in the SISR are set and if the corresponding TFEN bit is also set. If the corresponding FIFO is
+   disabled, a DMA request is generated when the corresponding TDE bit is set." */
+bool FreescaleSsiTransmitter::DmaOn(uint32_t k) const {
+    return line_.Enabled() && dma_ && (k == 0u || line_.TwoChannel()) &&
+           ch_[k].fifo.Burst() != 0u && ch_[k].dma_clock;
+}
+
+/* MCIMX31RM Table 45-9 SSIEN (page 45-34): "the contents of transmit and receive FIFOs are
+   cleared". */
+void FreescaleSsiTransmitter::ClearFifos() {
+    for (Channel& c : ch_) {
+        c.fifo.Clear();
+        c.underrun = false;
+    }
+}
+
+void FreescaleSsiTransmitter::ConfigureFifos() {
+    for (uint32_t k = 0; k < 2u; ++k) {
+        DmaBurstFifo&  f     = ch_[k].fifo;
+        const uint32_t level = std::min(f.Level(), Depth(k));
+        f.Configure(Depth(k), Threshold(k), f.Burst());
+        f.Restore(level, f.Moved());
+    }
 }
 
 void FreescaleSsiTransmitter::UpdateSupply() {
-    fifo_.SetSupply(DmaOn() ? DmaBurstFifo::kUnlimited : 0u);
-}
-
-bool FreescaleSsiTransmitter::ShapeKnown(const FreescaleSsiFrameShape& shape) {
-    return shape.frame_hz != 0u && shape.slots != 0u && shape.slots <= 32u && shape.bits != 0u;
-}
-
-uint64_t FreescaleSsiTransmitter::DataSlotsBefore(uint64_t slot) const {
-    const uint32_t s    = shape_.slots;
-    const uint32_t part = static_cast<uint32_t>(slot % s);
-    return (slot / s) * static_cast<uint64_t>(std::popcount(shape_.data)) +
-           static_cast<uint64_t>(std::popcount(shape_.data & ((1u << part) - 1u)));
-}
-
-uint64_t FreescaleSsiTransmitter::TxDataSlots(uint64_t from, uint64_t to) const {
-    if (tx_start_ == kNever) return 0u;
-    const uint64_t lo = std::max(from, tx_start_);
-    const uint64_t hi = std::min(to, tx_stop_);
-    return hi > lo ? DataSlotsBefore(hi) - DataSlotsBefore(lo) : 0u;
-}
-
-uint64_t FreescaleSsiTransmitter::NthDataSlot(uint64_t from, uint64_t n) const {
-    const uint32_t per = static_cast<uint32_t>(std::popcount(shape_.data));
-    if (tx_start_ == kNever || per == 0u || n == 0u) return kNever;
-    const uint64_t target = DataSlotsBefore(std::max(from, tx_start_)) + n - 1u;
-    uint32_t bits = shape_.data;
-    for (uint32_t r = static_cast<uint32_t>(target % per); r != 0u; --r) bits &= bits - 1u;
-    const uint64_t slot = (target / per) * shape_.slots +
-                          static_cast<uint64_t>(std::countr_zero(bits));
-    return slot < tx_stop_ ? slot : kNever;
-}
-
-uint64_t FreescaleSsiTransmitter::NextFrame(uint64_t slot) const {
-    return (slot + shape_.slots - 1u) / shape_.slots * shape_.slots;
-}
-
-/* MCIMX51RM Table 56-12 TE: "SSI expects 4 setup clock cycles before arrival of frame-sync for
-   frame-sync to be accepted by SSI. In case of fewer clock cycles, there is high probability of
-   the frame-sync to get missed." */
-uint64_t FreescaleSsiTransmitter::AcceptedFrame(uint64_t frame_slot, uint64_t now_bit) const {
-    if (setup_clocks_ == 0u || frame_slot * shape_.bits >= now_bit + 1u + setup_clocks_) {
-        return frame_slot;
+    for (uint32_t k = 0; k < 2u; ++k) {
+        ch_[k].fifo.SetSupply(DmaOn(k) ? DmaBurstFifo::kUnlimited : 0u);
     }
-    return frame_slot + shape_.slots;
 }
 
-uint64_t FreescaleSsiTransmitter::CycleOfSlot(uint64_t slot) {
-    return grid_.CycleOf(slot * shape_.bits);
+void FreescaleSsiTransmitter::Refill() {
+    for (Channel& c : ch_) c.fifo.Refill();
 }
 
-/* MCIMX31RM Table 45-7: STX data "is transferred to the transmit shift register (TXSR), when
-   shifting of the previous data is complete"; §40.12.3.5 NOTE: a channel "reads or writes a
-   number of data that matches the watermark level", repeated while the request stays set. */
+uint64_t FreescaleSsiTransmitter::CycleOfTake(uint32_t k, uint64_t m) {
+    const uint64_t slot = line_.NthUse(k, m);
+    return slot == kNever ? kNever : line_.CycleOfEvent(slot);
+}
+
+/* MCIMX31RM Table 45-7 (page 45-26): data written to STX "is transferred to the transmit shift
+   register (TXSR), when shifting of the previous data is complete". */
 void FreescaleSsiTransmitter::Settle() {
-    if (!enabled_ || !grid_on_) return;
-    const uint64_t end = grid_.Now() / shape_.bits + 1u;
-    if (end <= settled_) return;
-    const uint64_t n = TxDataSlots(settled_, end);
-    settled_ = end;
-    if (fifo_.Take(n) != 0u) underrun_ = true;
-    if (tx_stop_ != kNever && settled_ >= tx_stop_) tx_start_ = tx_stop_ = kNever;
-    fifo_.Refill();
+    if (!line_.Running()) return;
+    const uint64_t           end = line_.EventsEnd();
+    FreescaleSsiTimeline::Span s;
+    while (line_.Next(end, s)) {
+        if (cmd_pending_ && command_frames_ && line_.FrameEnded(cmd_from_, s.to)) {
+            cmd_pending_ = false;
+        }
+        for (uint32_t k = 0; k < 2u; ++k) {
+            const uint64_t t = line_.Uses(k, s.ord, s.n);
+            if (t != 0u && ch_[k].fifo.Take(t) != 0u) ch_[k].underrun = true;
+        }
+    }
+    line_.Finish();
+    Refill();
 }
 
-/* Table 45-9 SSIEN: "When disabled, all SSI status bits are preset to the same state
-   produced by the power-on reset ... the contents of transmit and receive FIFOs are
-   cleared. When SSI is disabled, all internal clocks are disabled". */
-void FreescaleSsiTransmitter::Enable(const FreescaleSsiFrameShape& shape) {
-    enabled_  = true;
-    fifo_.Clear();
-    settled_  = 0u;
-    underrun_ = false;
-    tx_start_ = tx_stop_ = kNever;
-    shape_    = shape;
-    grid_on_  = ShapeKnown(shape);
-    if (grid_on_) {
-        grid_.SetOscRate(shape.frame_hz * shape.slots * shape.bits, 1u);
-        grid_.Rebase();
-    }
-    if (te_) {
-        if (!grid_on_) {
-            emu_.Get<Fatal>().Die("SSI %08X: transmit enabled with a frame clock this model "
-                                  "cannot place", base_);
-        }
-        tx_start_ = AcceptedFrame(0u, grid_.Now());
-    }
-    RequireDmaTarget();
-    fifo_.Refill();
-}
-
-void FreescaleSsiTransmitter::Disable() {
-    enabled_  = false;
-    grid_on_  = false;
-    fifo_.Clear();
-    settled_  = 0u;
-    underrun_ = false;
-    tx_start_ = tx_stop_ = kNever;
-    RequireDmaTarget();
-}
-
-/* MCIMX31RM §45.1.2.2.1: "transmission starts from the next frame boundary"; Table 45-9 TE:
-   "the transmitter continues to send data until the end of the current frame and then stops". */
-void FreescaleSsiTransmitter::SetTransmit(bool on) {
-    te_ = on;
-    if (!enabled_) return;
-    const uint64_t now_bit = grid_.Now();
-    if (on) {
-        if (!grid_on_) {
-            emu_.Get<Fatal>().Die("SSI %08X: transmit enabled with a frame clock this model "
-                                  "cannot place", base_);
-        }
-        if (tx_start_ != kNever) {
-            /* Table 45-9 / Table 56-12 TE: "set again before the second to last bit of the last
-               time slot in the current frame, data transmission continues without interruption" */
-            if (now_bit + 2u >= tx_stop_ * shape_.bits) {
-                emu_.Get<Fatal>().Die("SSI %08X: TE set again within the last two bit clocks of the "
-                                      "frame its clear stops; the restart is not modeled", base_);
-            }
-            tx_stop_ = kNever;
-            return;
-        }
-        tx_start_ = AcceptedFrame(NextFrame(settled_), now_bit);
-        tx_stop_  = kNever;
-        return;
-    }
-    if (tx_start_ == kNever) return;
-    if (tx_start_ >= settled_) {
-        if (AcceptedFrame(tx_start_, now_bit) == tx_start_) {
-            tx_start_ = kNever;
-        } else {
-            tx_stop_ = tx_start_ + shape_.slots;
-        }
-        return;
-    }
-    tx_stop_ = AcceptedFrame(NextFrame(settled_), now_bit);
-}
-
-void FreescaleSsiTransmitter::WriteScr(uint32_t old_scr, uint32_t scr,
-                                       const FreescaleSsiFrameShape& shape) {
+void FreescaleSsiTransmitter::Configure(const FreescaleSsiSectionControl& c,
+                                        const FreescaleSsiFrameShape& shape, bool command_frames) {
     Settle();
-    const bool was_on = (old_scr & ssi::kScrSsien) != 0u;
-    const bool on     = (scr & ssi::kScrSsien) != 0u;
-    const bool te     = (scr & ssi::kScrTe) != 0u;
-    if ((scr & ssi::kScrTchEn) != 0u && on && te) {
-        emu_.Get<Fatal>().Die("SSI %08X: SCR 0x%08X transmits in two-channel mode; FIFO 1 is "
-                              "not modeled", base_, scr);
+    dma_            = c.dma;
+    command_frames_ = command_frames;
+    for (uint32_t k = 0; k < 2u; ++k) {
+        ch_[k].fen = c.fen[k];
+        ch_[k].wm  = c.wm[k];
     }
-    if (was_on && !on) Disable();
-    if (!was_on && on) {
-        te_ = te;
-        Enable(shape);
-    } else if (on) {
-        SetShape(shape);
-        if (te != te_) SetTransmit(te);
+    line_.SetRoute(c.data, c.network, c.two_channel);
+    if (!c.enabled) {
+        ClearFifos();
+        line_.Disable(c.run);
+        cmd_from_ = 0u;
+    } else if (!line_.Enabled()) {
+        ClearFifos();
+        line_.Enable(shape, c.run);
+        cmd_from_ = 0u;
     } else {
-        te_ = te;
+        if (line_.Reshape(shape)) cmd_from_ = 0u;
+        if (c.run != line_.Run()) line_.SetRun(c.run);
     }
-    ArmUnderrun();
+    ConfigureFifos();
+    UpdateSupply();
+    Refill();
 }
 
-void FreescaleSsiTransmitter::SetShape(const FreescaleSsiFrameShape& shape) {
+void FreescaleSsiTransmitter::OnCpuRate() { line_.OnCpuRate(); }
+
+/* MCIMX51RM Table 56-10 (page 56-33): "If Tx FIFO0 is not in use and user writes Data1, Data2 to
+   STX0, then Data2 will not over-write Data1 and will be discarded"; NOTE: "Enable SSI (SSIEN=1)
+   before writing to SSI Transmit Data Registers." */
+void FreescaleSsiTransmitter::WriteStx(uint32_t k) {
+    if (!line_.Enabled()) return;
     Settle();
-    if (!enabled_) {
-        shape_ = shape;
-        return;
+    ch_[k].fifo.Put();
+}
+
+/* MCIMX51RM Table 56-22 WR (page 56-61): "the next frame will carry an AC97 Write Command", "This
+   bit is automatically cleared by the SSI after completing transmission of a frame." */
+void FreescaleSsiTransmitter::SetCommand(bool pending) {
+    Settle();
+    cmd_pending_ = pending;
+    cmd_from_    = line_.NextFrameStart();
+}
+
+bool FreescaleSsiTransmitter::CommandPending() {
+    Settle();
+    return cmd_pending_;
+}
+
+void FreescaleSsiTransmitter::SetDmaBurst(uint32_t k, uint32_t words) {
+    Settle();
+    ch_[k].fifo.Configure(Depth(k), Threshold(k), words);
+    ch_[k].fifo.ResetMoved();
+    UpdateSupply();
+    Refill();
+}
+
+void FreescaleSsiTransmitter::SetDmaClock(uint32_t k, bool running) {
+    Settle();
+    ch_[k].dma_clock = running;
+    UpdateSupply();
+    Refill();
+}
+
+uint32_t FreescaleSsiTransmitter::Level(uint32_t k) {
+    Settle();
+    return ch_[k].fifo.Level();
+}
+
+void FreescaleSsiTransmitter::ClearUnderrun(uint32_t k) {
+    Settle();
+    ch_[k].underrun = false;
+}
+
+/* MCIMX51RM Table 56-13: TFE0 "set when the empty slots in Tx FIFO exceed or are equal to the
+   selected Tx FIFO WaterMark 0"; TDE0 "occurs when there is at least one empty slot in STX0 or Tx
+   FIFO 0"; Figure 56-28 TFE1 and TDE1 reset 1. */
+uint32_t FreescaleSsiTransmitter::TxStatus() {
+    Settle();
+    uint32_t s = 0u;
+    for (uint32_t k = 0; k < 2u; ++k) {
+        const uint32_t level = ch_[k].fifo.Level();
+        if (level <= EmptyLevel(k)) s |= ssi::Fifo(ssi::kSisrTfe0, k);
+        if (level < Depth(k)) s |= ssi::Fifo(ssi::kSisrTde0, k);
+        if (ch_[k].underrun) s |= ssi::Fifo(ssi::kSisrTue0, k);
     }
-    const bool known = ShapeKnown(shape);
-    if (!grid_on_) {
-        if (known) {
-            emu_.Get<Fatal>().Die("SSI %08X: the frame clock became known while the SSI runs; "
-                                  "its phase since SSIEN is not modeled", base_);
+    if (line_.FirstSlot()) s |= ssi::kSisrTfs;
+    if (line_.LastSlot()) s |= ssi::kSisrTls;
+    if (line_.FrameDone()) s |= ssi::kSisrTfrc;
+    return s;
+}
+
+void FreescaleSsiTransmitter::ClearLastSlot() {
+    Settle();
+    line_.ClearLastSlot();
+}
+
+uint64_t FreescaleSsiTransmitter::NextStatusCycle(uint32_t watch) {
+    Settle();
+    if (!line_.Running()) return kNever;
+    uint64_t at = kNever;
+    for (uint32_t k = 0; k < 2u; ++k) {
+        if (k == 1u && !line_.TwoChannel()) break;
+        const Channel& c     = ch_[k];
+        const uint64_t left  = c.fifo.TakesBeforeEmpty();
+        const uint32_t level = c.fifo.Level();
+        const bool     fed   = left == DmaBurstFifo::kUnlimited;
+        if ((watch & ssi::Fifo(ssi::kSisrTue0, k)) != 0u && !c.underrun && !fed) {
+            at = std::min(at, CycleOfTake(k, left + 1u));
         }
-        shape_ = shape;
-        return;
+        if ((watch & ssi::Fifo(ssi::kSisrTfe0, k)) != 0u && level > EmptyLevel(k) && !fed) {
+            at = std::min(at, CycleOfTake(k, left - EmptyLevel(k)));
+        }
+        if ((watch & ssi::Fifo(ssi::kSisrTde0, k)) != 0u && level >= Depth(k)) {
+            at = std::min(at, CycleOfTake(k, 1u));
+        }
     }
-    if (!known || shape.slots != shape_.slots || shape.bits != shape_.bits) {
-        emu_.Get<Fatal>().Die("SSI %08X: the frame changes from %u slots of %u bits at %llu Hz to "
-                              "%u slots of %u bits at %llu Hz while the SSI runs", base_,
-                              shape_.slots, shape_.bits,
-                              static_cast<unsigned long long>(shape_.frame_hz), shape.slots,
-                              shape.bits, static_cast<unsigned long long>(shape.frame_hz));
-    }
-    if (shape.frame_hz != shape_.frame_hz) {
-        grid_.SetOscRate(shape.frame_hz * shape.slots * shape.bits, 1u);
-    }
-    shape_ = shape;
-    ArmUnderrun();
+    return std::min(at, line_.NextStatusCycle((watch & ssi::kSisrTfs) != 0u,
+                                              (watch & ssi::kSisrTls) != 0u,
+                                              (watch & ssi::kSisrTfrc) != 0u));
 }
 
-void FreescaleSsiTransmitter::OnCpuRate() {
-    if (!enabled_ || !grid_on_) return;
-    grid_.Rescale();
-    ArmUnderrun();
-}
-
-/* MCIMX31RM Table 45-11 TDMAE: "DMA requests are generated when any of the TFE0/1 bits in the
-   SISR are set and if the corresponding TFEN bit is also set"; Table 45-16 TFWM0. */
-void FreescaleSsiTransmitter::WriteDmaControl(uint32_t sier, uint32_t stcr, uint32_t sfcsr) {
+uint64_t FreescaleSsiTransmitter::DmaWords(uint32_t k) {
     Settle();
-    if ((sier & ssi::kSierTie) != 0u &&
-        (sier & ssi::kSierTxIrqEnables & ~ssi::kSierTue0En) != 0u) {
-        emu_.Get<Fatal>().Die("SSI %08X: SIER 0x%08X enables transmit interrupts this model "
-                              "does not raise", base_, sier);
-    }
-    irq_tue0_    = (sier & ssi::kSierTie) != 0u && (sier & ssi::kSierTue0En) != 0u;
-    tdmae_       = (sier & ssi::kSierTdmae) != 0u;
-    tfen0_       = (stcr & ssi::kStcrTfen0) != 0u;
-    dma_request_ = tdmae_ && tfen0_;
-    tfwm_        = sfcsr & ssi::kSfcsrTfwm0Mask;
-    fifo_.Configure(depth_, tfwm_ <= depth_ ? depth_ - tfwm_ : 0u, fifo_.Burst());
-    UpdateSupply();
-    RequireDmaTarget();
-    fifo_.Refill();
-    ArmUnderrun();
+    return ch_[k].fifo.Moved();
 }
 
-void FreescaleSsiTransmitter::RequireDmaTarget() const {
-    const uint32_t burst = fifo_.Burst();
-    if (burst == 0u) return;
-    if (tdmae_ && !tfen0_) {
-        emu_.Get<Fatal>().Die("SSI %08X: TDMAE with transmit FIFO 0 disabled; the TDE-driven "
-                              "DMA request is not modeled", base_);
-    }
-    if (!dma_request_) return;
-    if (!enabled_) {
-        emu_.Get<Fatal>().Die("SSI %08X: a transmit DMA request with SSIEN clear is not "
-                              "modeled", base_);
-    }
-    if (tfwm_ == 0u || tfwm_ > depth_) {
-        emu_.Get<Fatal>().Die("SSI %08X: TFWM0 %u is reserved", base_, tfwm_);
-    }
-    if (burst > tfwm_) {
-        emu_.Get<Fatal>().Die("SSI %08X: a %u-word DMA burst exceeds the %u empty slots TFWM0 "
-                              "guarantees; the overflow is not modeled", base_, burst, tfwm_);
-    }
-}
-
-/* MCIMX31RM p.45-27 NOTE: "Enable SSI (SSIEN=1) before writing to SSI transmit data
-   registers"; Table 45-7: past the eighth word "Data9 is discarded". */
-void FreescaleSsiTransmitter::WriteStx0(uint32_t scr, uint32_t stcr) {
-    if ((scr & ssi::kScrSsien) == 0u || (stcr & ssi::kStcrTfen0) == 0u) {
-        emu_.Get<Fatal>().Die("SSI %08X: STX0 write with SCR 0x%08X STCR 0x%08X; a write to a "
-                              "disabled SSI or a disabled transmit FIFO 0 is not modeled",
-                              base_, scr, stcr);
-    }
+bool FreescaleSsiTransmitter::CycleOfDmaWords(uint32_t k, uint64_t words, uint64_t& cycle) {
     Settle();
-    fifo_.Put();
-    ArmUnderrun();
-}
-
-void FreescaleSsiTransmitter::SetDmaBurst(uint32_t words) {
-    Settle();
-    fifo_.Configure(depth_, fifo_.Threshold(), words);
-    fifo_.ResetMoved();
-    UpdateSupply();
-    RequireDmaTarget();
-    fifo_.Refill();
-    ArmUnderrun();
-}
-
-uint32_t FreescaleSsiTransmitter::Level() {
-    Settle();
-    return fifo_.Level();
-}
-
-bool FreescaleSsiTransmitter::Transmitting() {
-    Settle();
-    return enabled_ && tx_start_ != kNever;
-}
-
-void FreescaleSsiTransmitter::ClearUnderrun() {
-    Settle();
-    underrun_ = false;
-    ArmUnderrun();
-}
-
-uint64_t FreescaleSsiTransmitter::DmaWords() {
-    Settle();
-    return fifo_.Moved();
-}
-
-bool FreescaleSsiTransmitter::CycleOfDmaWords(uint64_t words, uint64_t& cycle) {
-    Settle();
-    if (words <= fifo_.Moved()) {
+    const DmaBurstFifo& f = ch_[k].fifo;
+    if (words <= f.Moved()) {
         cycle = clock_->Cycles();
         return true;
     }
-    if (!DmaOn() || !enabled_ || !grid_on_) return false;
+    if (!DmaOn(k) || !line_.Running()) return false;
     uint64_t takes = 0;
-    if (!fifo_.TakesToMove(words, takes)) return false;
-    const uint64_t slot = NthDataSlot(settled_, takes);
-    if (slot == kNever) return false;
-    cycle = CycleOfSlot(slot);
+    if (!f.TakesToMove(words, takes)) return false;
+    const uint64_t at = CycleOfTake(k, takes);
+    if (at == kNever) return false;
+    cycle = at;
     return true;
-}
-
-bool FreescaleSsiTransmitter::CycleOfUnderrun(uint64_t& cycle) {
-    if (DmaOn() || !enabled_ || !grid_on_) return false;
-    const uint64_t slot = NthDataSlot(settled_, fifo_.TakesBeforeEmpty() + 1u);
-    if (slot == kNever) return false;
-    cycle = CycleOfSlot(slot);
-    return true;
-}
-
-void FreescaleSsiTransmitter::ArmUnderrun() {
-    if (!irq_tue0_ || !enabled_) {
-        clock_->Disarm(underrun_event_);
-        return;
-    }
-    Settle();
-    if (underrun_) OnUnderrun();
-    uint64_t cycle = 0;
-    if (CycleOfUnderrun(cycle)) {
-        clock_->Arm(underrun_event_, cycle);
-    } else {
-        clock_->Disarm(underrun_event_);
-    }
-}
-
-void FreescaleSsiTransmitter::OnUnderrun() {
-    emu_.Get<Fatal>().Die("SSI %08X: transmit underrun with TIE and TUE0_EN set; the SSI "
-                          "interrupt is not modeled", base_);
 }
 
 void FreescaleSsiTransmitter::Save(StateWriter& w) {
     Settle();
-    w.Write<uint8_t>("tx_enabled", enabled_ ? 1u : 0u);
-    w.Write<uint8_t>("tx_grid_on", grid_on_ ? 1u : 0u);
-    w.Write<uint8_t>("tx_te", te_ ? 1u : 0u);
-    w.Write<uint8_t>("tx_irq_tue0", irq_tue0_ ? 1u : 0u);
-    w.Write<uint8_t>("tx_underrun", underrun_ ? 1u : 0u);
-    w.Write<uint8_t>("tx_tdmae", tdmae_ ? 1u : 0u);
-    w.Write<uint8_t>("tx_tfen0", tfen0_ ? 1u : 0u);
-    w.Write<uint64_t>("tx_frame_hz", shape_.frame_hz);
-    w.Write<uint32_t>("tx_slots", shape_.slots);
-    w.Write<uint32_t>("tx_data", shape_.data);
-    w.Write<uint32_t>("tx_bits", shape_.bits);
-    w.Write<uint32_t>("tx_tfwm", tfwm_);
-    w.Write<uint32_t>("tx_level", fifo_.Level());
-    w.Write<uint64_t>("tx_settled", settled_);
-    w.Write<uint64_t>("tx_start", tx_start_);
-    w.Write<uint64_t>("tx_stop", tx_stop_);
-    w.Write<uint32_t>("tx_burst", fifo_.Burst());
-    w.Write<uint64_t>("tx_dma_words", fifo_.Moved());
-    grid_.Save(w);
+    w.Write<uint8_t>("tx_dma", dma_ ? 1u : 0u);
+    w.Write<uint8_t>("tx_command_frames", command_frames_ ? 1u : 0u);
+    w.Write<uint8_t>("tx_cmd_pending", cmd_pending_ ? 1u : 0u);
+    w.Write<uint64_t>("tx_cmd_from", cmd_from_);
+    for (uint32_t k = 0; k < 2u; ++k) {
+        const std::string n = std::to_string(k);
+        w.Write<uint8_t>(("tx_fen" + n).c_str(), ch_[k].fen ? 1u : 0u);
+        w.Write<uint8_t>(("tx_underrun" + n).c_str(), ch_[k].underrun ? 1u : 0u);
+        w.Write<uint32_t>(("tx_wm" + n).c_str(), ch_[k].wm);
+        w.Write<uint32_t>(("tx_level" + n).c_str(), ch_[k].fifo.Level());
+        w.Write<uint32_t>(("tx_burst" + n).c_str(), ch_[k].fifo.Burst());
+        w.Write<uint64_t>(("tx_dma_words" + n).c_str(), ch_[k].fifo.Moved());
+        w.Write<uint8_t>(("tx_dma_clock" + n).c_str(), ch_[k].dma_clock ? 1u : 0u);
+    }
+    line_.Save(w, "tx_");
 }
 
 void FreescaleSsiTransmitter::Restore(StateReader& r) {
-    uint8_t enabled = 0, grid_on = 0, te = 0, irq = 0, underrun = 0, tdmae = 0, tfen0 = 0;
-    uint32_t level = 0, burst = 0;
-    uint64_t moved = 0;
-    r.Read("tx_enabled", enabled);
-    r.Read("tx_grid_on", grid_on);
-    r.Read("tx_te", te);
-    r.Read("tx_irq_tue0", irq);
-    r.Read("tx_underrun", underrun);
-    r.Read("tx_tdmae", tdmae);
-    r.Read("tx_tfen0", tfen0);
-    r.Read("tx_frame_hz", shape_.frame_hz);
-    r.Read("tx_slots", shape_.slots);
-    r.Read("tx_data", shape_.data);
-    r.Read("tx_bits", shape_.bits);
-    r.Read("tx_tfwm", tfwm_);
-    r.Read("tx_level", level);
-    r.Read("tx_settled", settled_);
-    r.Read("tx_start", tx_start_);
-    r.Read("tx_stop", tx_stop_);
-    r.Read("tx_burst", burst);
-    r.Read("tx_dma_words", moved);
-    grid_.Restore(r);
-    enabled_     = enabled != 0u;
-    grid_on_     = grid_on != 0u;
-    te_          = te != 0u;
-    irq_tue0_    = irq != 0u;
-    underrun_    = underrun != 0u;
-    tdmae_       = tdmae != 0u;
-    tfen0_       = tfen0 != 0u;
-    dma_request_ = tdmae_ && tfen0_;
-    fifo_.Configure(depth_, tfwm_ <= depth_ ? depth_ - tfwm_ : 0u, burst);
-    fifo_.Restore(level, moved);
+    uint8_t dma = 0, command_frames = 0, cmd_pending = 0;
+    r.Read("tx_dma", dma);
+    r.Read("tx_command_frames", command_frames);
+    r.Read("tx_cmd_pending", cmd_pending);
+    r.Read("tx_cmd_from", cmd_from_);
+    uint32_t level[2] = {}, burst[2] = {};
+    uint64_t moved[2] = {};
+    for (uint32_t k = 0; k < 2u; ++k) {
+        const std::string n = std::to_string(k);
+        uint8_t fen = 0, underrun = 0, dma_clock = 0;
+        r.Read(("tx_fen" + n).c_str(), fen);
+        r.Read(("tx_underrun" + n).c_str(), underrun);
+        r.Read(("tx_wm" + n).c_str(), ch_[k].wm);
+        r.Read(("tx_level" + n).c_str(), level[k]);
+        r.Read(("tx_burst" + n).c_str(), burst[k]);
+        r.Read(("tx_dma_words" + n).c_str(), moved[k]);
+        r.Read(("tx_dma_clock" + n).c_str(), dma_clock);
+        ch_[k].fen       = fen != 0u;
+        ch_[k].underrun  = underrun != 0u;
+        ch_[k].dma_clock = dma_clock != 0u;
+    }
+    line_.Restore(r, "tx_");
+    dma_            = dma != 0u;
+    command_frames_ = command_frames != 0u;
+    cmd_pending_    = cmd_pending != 0u;
+    for (uint32_t k = 0; k < 2u; ++k) {
+        ch_[k].fifo.Configure(Depth(k), Threshold(k), burst[k]);
+        ch_[k].fifo.Restore(level[k], moved[k]);
+    }
     UpdateSupply();
-    clock_->Disarm(underrun_event_);
 }
-
-void FreescaleSsiTransmitter::PostRestore() { ArmUnderrun(); }
