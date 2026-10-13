@@ -15,10 +15,10 @@ public:
         return bd && bd->GetSocId() == SocId::Sa1110;
     }
 
-    /* SA-1110 Dev Manual §5.2.1 (Arch 01 = v4, Part B11 = SA1110);
-       proc-sa1100.S:277 sa1110 = 0x6901b110 mask 0xfffffff0. */
-    uint32_t Midr() const override { return 0x6901B110u; }
-    uint32_t Ctr()  const override { return 0x6901B110u; }
+    /* SA-1110 Developer's Manual §5.2.1 (page 5-2): Architecture Version 01 = Version 4, Part
+       Number B11 = SA1110, Stepping 1000 = B4 stepping. */
+    uint32_t Midr() const override { return 0x6901B118u; }
+    uint32_t Ctr()  const override { return 0x6901B118u; }
 };
 
 }  /* namespace */

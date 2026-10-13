@@ -7,15 +7,12 @@
 #include "sa1100_id.h"
 #include "../../state/state_stream.h"
 #include "../guest_cpu_reset.h"
-#include "sa11xx_gpio.h"
-#include "sa11xx_ssp_clock_input.h"
+#include "sa11xx_external_clocks.h"
+#include "sa11xx_ssp_regs.h"
+
+using namespace sa11xx_ssp;
 
 namespace {
-
-/* SA-1110 Developer's Manual §11.12.9 SSCR0 (printed 11-158): SCR 15:8; §11.12.10 SSCR1 (printed
-   11-162): ECS 5. */
-constexpr uint32_t kScrShift = 8;
-constexpr uint32_t kEcs      = 1u << 5;
 
 /* §11.12.7.2: the 3.6864 MHz clock "is first divided by a fixed value of 2 and then by a
    programmable number between 1 and 256". */
@@ -34,12 +31,10 @@ bool Sa11xxSspBitClock::ShouldRegister() {
 
 void Sa11xxSspBitClock::OnReady() {
     clock_ = &emu_.Get<GuestCycleClock>();
-    gpio_  = &emu_.Get<Sa11xxGpio>();
-    input_ = emu_.TryGet<Sa11xxSspClockInput>();
+    ext_   = &emu_.Get<Sa11xxExternalClocks>();
     reset_ = &emu_.Get<GuestCpuReset>();
     clock_->RegisterRateListener([this] { OnCpuRate(); });
-    if (input_ != nullptr) input_->RegisterChangeListener([this] { Reevaluate(); });
-    gpio_->RegisterPinConfigListener([this] { Reevaluate(); });
+    ext_->RegisterChangeListener([this] { Reevaluate(); });
 }
 
 void Sa11xxSspBitClock::SetListener(BeforeChange before, AfterChange after) {
@@ -59,10 +54,9 @@ bool Sa11xxSspBitClock::Select(uint32_t sscr0, uint32_t sscr1, GuestCycleClock::
         rate = GuestCycleClock::Rate{kInternalClockHz, div};
         return true;
     }
-    const Sa11xxGpio::PinConfig pin = gpio_->Pin(kSspClockPin);
     GuestCycleClock::Rate in{};
-    if (!pin.alternate || pin.output || input_ == nullptr || !input_->Frequency(in)) return false;
-    rate = GuestCycleClock::Rate{in.num, in.den * div};
+    if (!ext_->Rate(kSspClockPin, in)) return false;
+    rate = in.Scaled(1u, div);
     return true;
 }
 
@@ -70,11 +64,11 @@ void Sa11xxSspBitClock::Start(uint64_t now, uint32_t sscr0, uint32_t sscr1) {
     sscr0_   = sscr0;
     sscr1_   = sscr1;
     started_ = true;
-    held_    = RatedTickCount::Position{};
+    held_    = TickPosition{};
     clocked_ = Select(sscr0, sscr1, rate_);
     if (!clocked_) return;
-    RequireRatio(bits_.SetRate(clock_->ClockRate(), rate_));
-    bits_.Start(now);
+    RequireRatio(halves_.SetRate(clock_->ClockRate(), rate_.Scaled(2u, 1u)));
+    halves_.Start(now);
 }
 
 void Sa11xxSspBitClock::Change(uint64_t now, uint32_t sscr0, uint32_t sscr1) {
@@ -82,14 +76,15 @@ void Sa11xxSspBitClock::Change(uint64_t now, uint32_t sscr0, uint32_t sscr1) {
     sscr1_ = sscr1;
     GuestCycleClock::Rate rate{};
     if (!Select(sscr0, sscr1, rate)) {
-        if (clocked_) held_ = bits_.PositionAt(now);
+        if (clocked_) held_ = halves_.PositionAt(now);
         clocked_ = false;
         return;
     }
     if (clocked_) {
-        RequireRatio(bits_.Rescale(now, clock_->ClockRate(), rate));
+        RequireRatio(halves_.Rescale(now, clock_->ClockRate(), rate.Scaled(2u, 1u)));
     } else {
-        RequireRatio(bits_.SetRate(clock_->ClockRate(), rate) && bits_.PlaceAt(now, held_));
+        RequireRatio(halves_.SetRate(clock_->ClockRate(), rate.Scaled(2u, 1u)) &&
+                     halves_.PlaceAt(now, held_));
     }
     rate_    = rate;
     clocked_ = true;
@@ -99,9 +94,9 @@ void Sa11xxSspBitClock::Reevaluate() {
     if (!started_ || reset_->LineHeld()) return;
     GuestCycleClock::Rate rate{};
     const bool known = Select(sscr0_, sscr1_, rate);
-    if (known == clocked_ && (!known || (rate.num == rate_.num && rate.den == rate_.den))) return;
+    if (known == clocked_ && (!known || rate == rate_)) return;
     const uint64_t now = clock_->Cycles();
-    before_(now, !known);
+    before_(now);
     Change(now, sscr0_, sscr1_);
     after_(now);
 }
@@ -109,46 +104,42 @@ void Sa11xxSspBitClock::Reevaluate() {
 void Sa11xxSspBitClock::OnCpuRate() {
     if (!started_ || !clocked_) return;
     const uint64_t now = clock_->Cycles();
-    before_(now, false);
-    RequireRatio(bits_.Rescale(now, clock_->ClockRate(), rate_));
+    before_(now);
+    RequireRatio(halves_.Rescale(now, clock_->ClockRate(), rate_.Scaled(2u, 1u)));
     after_(now);
 }
 
 void Sa11xxSspBitClock::Save(StateWriter& w) {
-    const RatedTickCount::Position pos = clocked_ ? bits_.PositionAt(clock_->Cycles()) : held_;
+    const TickPosition pos = clocked_ ? halves_.PositionAt(clock_->Cycles()) : held_;
     w.Write<uint32_t>("bit_clock_sscr0", sscr0_);
     w.Write<uint32_t>("bit_clock_sscr1", sscr1_);
     w.Write<uint8_t>("bit_clock_started", started_ ? 1u : 0u);
     w.Write<uint8_t>("bit_clock_clocked", clocked_ ? 1u : 0u);
     w.Write<uint64_t>("bit_clock_rate_num", rate_.num);
     w.Write<uint64_t>("bit_clock_rate_den", rate_.den);
-    w.Write<uint64_t>("bit_clock_ticks", pos.ticks);
-    w.Write<uint64_t>("bit_clock_phase", pos.phase);
-    w.Write<uint64_t>("bit_clock_phase_den", pos.phase_den);
+    w.Write<uint64_t>("bit_clock_half_ticks", pos.ticks);
+    w.Write<uint64_t>("bit_clock_half_phase", pos.phase);
+    w.Write<uint64_t>("bit_clock_half_phase_den", pos.phase_den);
 }
 
 void Sa11xxSspBitClock::Restore(StateReader& r) {
     uint8_t started = 0, clocked = 0;
-    RatedTickCount::Position pos;
+    TickPosition pos;
     r.Read("bit_clock_sscr0", sscr0_);
     r.Read("bit_clock_sscr1", sscr1_);
     r.Read("bit_clock_started", started);
     r.Read("bit_clock_clocked", clocked);
     r.Read("bit_clock_rate_num", rate_.num);
     r.Read("bit_clock_rate_den", rate_.den);
-    r.Read("bit_clock_ticks", pos.ticks);
-    r.Read("bit_clock_phase", pos.phase);
-    r.Read("bit_clock_phase_den", pos.phase_den);
+    r.Read("bit_clock_half_ticks", pos.ticks);
+    r.Read("bit_clock_half_phase", pos.phase);
+    r.Read("bit_clock_half_phase_den", pos.phase_den);
     started_ = started != 0u;
     clocked_ = clocked != 0u;
-    held_    = clocked_ ? RatedTickCount::Position{} : pos;
+    held_    = clocked_ ? TickPosition{} : pos;
     if (!clocked_) return;
-    if (!bits_.SetRate(clock_->ClockRate(), rate_) || !bits_.PlaceAt(clock_->Cycles(), pos)) {
-        r.Reject("Sa11xxSsp: the restored bit clock %llu/%llu Hz at bit %llu does not fit the "
-                 "current core ratio", static_cast<unsigned long long>(rate_.num),
-                 static_cast<unsigned long long>(rate_.den),
-                 static_cast<unsigned long long>(pos.ticks));
-    }
+    halves_.SetRate(clock_->ClockRate(), rate_.Scaled(2u, 1u));
+    halves_.PlaceAt(clock_->Cycles(), pos);
 }
 
 REGISTER_SERVICE(Sa11xxSspBitClock);

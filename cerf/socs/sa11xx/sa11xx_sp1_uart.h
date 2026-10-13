@@ -16,7 +16,11 @@ protected:
     /* Linux arch/arm/mach-sa1100 irqs.h: IRQ_Ser1UART maps to
        SA-1110 INTC source bit 15. h3xxx.c routes MicroP IRQ here. */
     int         IntcSourceBit() const override { return 15; }
+    /* SA-1110 Table 11-5 (printed 11-5): serial port 1 GPIO 18 "Sample clock input to UART". */
+    int         SampleClockPin() const override { return 18; }
     /* SA-1110 Table 11-6 (printed 11-9): Serial port 1 UART transmit DS 0100, receive DS 0101. */
     uint32_t    TransmitDeviceSelect() const override { return 0x4u; }
     uint32_t    ReceiveDeviceSelect() const override { return 0x5u; }
+    Sa11xxDmaTransmitFifo& TransmitFifo() override;
+    Sa11xxDmaReceiveFifo&  ReceiveFifo() override;
 };

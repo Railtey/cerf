@@ -23,10 +23,7 @@ uint8_t BitRev8(uint8_t v) {
     return (uint8_t)(((v & 0xAAu) >> 1) | ((v & 0x55u) << 1));
 }
 
-/* Jornada 720 keyboard/touch/battery/PWM MCU (HP doc §4, nk.exe
-   sub_8004F244). Wire format: TX byte arrives bit-reversed in frame bits
-   15:8, the response must go back bit-reversed in bits 7:0 - decoding the
-   low byte or skipping BitRev8 re-hangs the OAL's SSSR.RNE poll. */
+/* Jornada 720 keyboard/touch/battery/PWM MCU: HP doc §4; jornada720 nk.exe sub_8004F244. */
 class Jornada720Mcu : public Sa11xxSspDevice {
 public:
     using Sa11xxSspDevice::Sa11xxSspDevice;
@@ -36,8 +33,10 @@ public:
         return bd && bd->GetBoardId() == BoardId::Jornada720;
     }
 
+    Pins WiredTo() const override { return Pins::SerialPort4; }
+
     uint16_t Exchange(uint16_t tx_frame) override {
-        const uint8_t byte = BitRev8((uint8_t)(tx_frame >> 8));
+        const uint8_t byte = BitRev8(static_cast<uint8_t>(tx_frame));
         return BitRev8(Consume(byte));
     }
 

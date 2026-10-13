@@ -35,7 +35,7 @@ void Sa11xxPpc::OnReady() {
 
 uint32_t Sa11xxPpc::Ppar() const {
     std::lock_guard<std::mutex> lk(mtx_);
-    return regs_[2];
+    return regs_[kPparIndex];
 }
 
 void Sa11xxPpc::RegisterMccr1Listener(std::function<void()> fn) {

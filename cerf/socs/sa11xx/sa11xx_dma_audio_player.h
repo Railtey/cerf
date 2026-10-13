@@ -19,6 +19,8 @@ public:
 
     void OnTransmitBlock(uint32_t ddar, uint32_t pa, uint32_t bytes,
                          GuestCycleClock::Rate word_rate) override;
+    void OnTransmitData(uint32_t ddar, const uint8_t* data, uint32_t bytes,
+                        GuestCycleClock::Rate word_rate) override;
     void OnTransmitStop(uint32_t ddar) override;
     void OnTransmitRestored() override;
 
@@ -28,6 +30,7 @@ protected:
 
 private:
     bool Matches(uint32_t ddar) const { return (ddar & cfg_.ddar_mask) == cfg_.ddar_value; }
+    void QueueBlock(GuestCycleClock::Rate word_rate);
 
     Sa11xxAudioConfig    cfg_{};
     PacedWaveOut         out_;

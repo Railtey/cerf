@@ -35,6 +35,9 @@ public:
        as output in PPDR has no effect on PPSR reads (§11.13.4). */
     void DriveInputPin(uint32_t pin, bool level);
 
+    /* SA-1110 Developer's Manual §11.13.5 PPAR (printed 11-173): SPR bit 18. */
+    static constexpr uint32_t kPparSpr = 1u << 18;
+
     uint32_t Mccr1() const { return mccr1_; }
     uint32_t Ppar() const;
     void     RegisterMccr1Listener(std::function<void()> fn);

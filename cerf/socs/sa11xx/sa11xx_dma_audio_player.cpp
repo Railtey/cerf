@@ -21,8 +21,20 @@ void Sa11xxDmaAudioPlayer::OnShutdown() { out_.Stop(); }
 void Sa11xxDmaAudioPlayer::OnTransmitBlock(uint32_t ddar, uint32_t pa, uint32_t bytes,
                                            GuestCycleClock::Rate word_rate) {
     if (!Matches(ddar)) return;
-    const uint64_t den  = word_rate.den * cfg_.channels;
-    const uint32_t rate = static_cast<uint32_t>((word_rate.num + den / 2u) / den);
+    block_.resize(bytes);
+    emu_.Get<EmulatedMemory>().CopyOut(pa, block_.data(), bytes);
+    QueueBlock(word_rate);
+}
+
+void Sa11xxDmaAudioPlayer::OnTransmitData(uint32_t ddar, const uint8_t* data, uint32_t bytes,
+                                          GuestCycleClock::Rate word_rate) {
+    if (!Matches(ddar)) return;
+    block_.assign(data, data + bytes);
+    QueueBlock(word_rate);
+}
+
+void Sa11xxDmaAudioPlayer::QueueBlock(GuestCycleClock::Rate word_rate) {
+    const uint32_t rate = static_cast<uint32_t>(word_rate.Scaled(1u, cfg_.channels).RoundedHz());
     if (rate != rate_) {
         rate_ = rate;
         out_.SetFormat(rate, cfg_.channels, cfg_.bits_per_sample);
@@ -31,11 +43,9 @@ void Sa11xxDmaAudioPlayer::OnTransmitBlock(uint32_t ddar, uint32_t pa, uint32_t 
         out_.BeginAudioOut({});
         active_ = true;
     }
-    block_.resize(bytes);
-    emu_.Get<EmulatedMemory>().CopyOut(pa, block_.data(), bytes);
-    if (OutputMuted()) std::memset(block_.data(), 0, bytes);
+    if (OutputMuted()) std::memset(block_.data(), 0, block_.size());
     else               emu_.Get<AudioActivityWidget>().MarkTx();
-    out_.QueueOutput(block_.data(), bytes);
+    out_.QueueOutput(block_.data(), static_cast<uint32_t>(block_.size()));
 }
 
 void Sa11xxDmaAudioPlayer::OnTransmitStop(uint32_t ddar) {

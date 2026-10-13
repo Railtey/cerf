@@ -26,6 +26,16 @@ void Sa11xxMcpSampleCounter::Reload(uint64_t edge) {
     next_ = edge;
 }
 
+void Sa11xxMcpSampleCounter::Shift(uint64_t at, uint64_t by) {
+    if (counting_ && origin_ <= at) origin_ += by;
+}
+
+uint64_t Sa11xxMcpSampleCounter::Rephase(uint64_t period) {
+    origin_ += taken_ * period;
+    taken_   = 0u;
+    return origin_;
+}
+
 /* §11.12.1.3: at the enable "the next available entry of data is taken from the audio transmit
    FIFO"; "After the audio D-to-A conversion is made ... This reload triggers the audio transmit
    FIFO to transfer the next available entry". */
@@ -73,20 +83,32 @@ bool Sa11xxMcpSampleCounter::TakeTick(uint64_t take, uint64_t period, uint64_t& 
     return true;
 }
 
+/* §11.12.1.2 (printed 11-129): "Samples/conversions are made each time the audio codec's counter
+   reaches zero"; Figure 11-31: a divisor of 12 reaches zero after "384 (32*12=384) SCLK cycles". */
+bool Sa11xxMcpSampleCounter::NextZero(uint64_t at, uint64_t period, uint64_t& zero) const {
+    if (!counting_) return false;
+    const uint64_t k = at <= origin_ + period ? 1u : (at - origin_ + period - 1u) / period;
+    zero = origin_ + k * period;
+    if (stop_ == kNever || zero < stop_) return true;
+    if (next_ == kNever) return false;
+    zero = next_ + period * (at <= next_ + period ? 1u : (at - next_ + period - 1u) / period);
+    return true;
+}
+
 void Sa11xxMcpSampleCounter::Save(StateWriter& w) const {
-    w.Write<uint8_t>("audio_counting", counting_ ? 1u : 0u);
-    w.Write<uint64_t>("audio_origin", origin_);
-    w.Write<uint64_t>("audio_stop", stop_);
-    w.Write<uint64_t>("audio_next", next_);
-    w.Write<uint64_t>("audio_taken", taken_);
+    w.Write<uint8_t>("counter_counting", counting_ ? 1u : 0u);
+    w.Write<uint64_t>("counter_origin", origin_);
+    w.Write<uint64_t>("counter_stop", stop_);
+    w.Write<uint64_t>("counter_next", next_);
+    w.Write<uint64_t>("counter_taken", taken_);
 }
 
 void Sa11xxMcpSampleCounter::Restore(StateReader& r) {
     uint8_t counting = 0;
-    r.Read("audio_counting", counting);
-    r.Read("audio_origin", origin_);
-    r.Read("audio_stop", stop_);
-    r.Read("audio_next", next_);
-    r.Read("audio_taken", taken_);
+    r.Read("counter_counting", counting);
+    r.Read("counter_origin", origin_);
+    r.Read("counter_stop", stop_);
+    r.Read("counter_next", next_);
+    r.Read("counter_taken", taken_);
     counting_ = counting != 0u;
 }

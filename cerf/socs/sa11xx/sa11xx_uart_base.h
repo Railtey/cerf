@@ -1,13 +1,17 @@
 #pragma once
 
+#include "../../jit/guest_cycle_clock.h"
 #include "../../peripherals/peripheral_base.h"
+#include "sa11xx_uart_regs.h"
 
 #include <cstdint>
 #include <functional>
 #include <mutex>
 #include <vector>
 
-class GuestCycleClock;
+class Sa11xxDmaReceiveFifo;
+class Sa11xxDmaTransmitFifo;
+class Sa11xxExternalClocks;
 class Sa11xxUartReceiver;
 class Sa11xxUartTransmitter;
 
@@ -34,17 +38,20 @@ public:
     void SetTxListener(std::function<void(uint8_t)> fn) {
         tx_listener_ = std::move(fn);
     }
-    bool HasTxListener() const { return static_cast<bool>(tx_listener_); }
     void PushRxByte(uint8_t b);
     void PushRxBurst(const uint8_t* data, size_t n);
     void OnTransmitted(const std::vector<uint8_t>& out);
     void OnReceived();
+    bool BitClock(const sa11xx_uart::Control& ctl, GuestCycleClock::Rate& rate) const;
 
 protected:
     virtual const char* ChannelName() const = 0;
     virtual int         IntcSourceBit() const { return -1; }
+    virtual int         SampleClockPin() const { return -1; }
     virtual uint32_t    TransmitDeviceSelect() const = 0;
     virtual uint32_t    ReceiveDeviceSelect() const = 0;
+    virtual Sa11xxDmaTransmitFifo& TransmitFifo() = 0;
+    virtual Sa11xxDmaReceiveFifo&  ReceiveFifo() = 0;
 
 private:
     mutable std::mutex state_mtx_;
@@ -58,6 +65,7 @@ private:
     std::vector<uint8_t> tx_line_;
     bool intc_asserted_ = false;
     GuestCycleClock*       clock_   = nullptr;
+    Sa11xxExternalClocks*  ext_     = nullptr;
     Sa11xxUartTransmitter* tx_      = nullptr;
     Sa11xxUartReceiver*    rx_      = nullptr;
     uint32_t               port_    = 0;
@@ -68,8 +76,10 @@ private:
     void Emit(const std::vector<uint8_t>& out);
     uint32_t Utsr1Locked() const;
     uint32_t ComputeUtsr0Locked() const;
+    uint64_t DmaMovedLocked() const;
     void     RefreshIrqLocked();
     void     OnResetLine();
+    void     OnClockChange();
 
     uint32_t ReadReg(uint32_t off);
     void     WriteReg(uint32_t off, uint32_t value);

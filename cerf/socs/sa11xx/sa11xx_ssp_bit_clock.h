@@ -8,14 +8,13 @@
 #include <functional>
 
 class GuestCpuReset;
-class Sa11xxGpio;
-class Sa11xxSspClockInput;
+class Sa11xxExternalClocks;
 class StateReader;
 class StateWriter;
 
 class Sa11xxSspBitClock : public Service {
 public:
-    using BeforeChange = std::function<void(uint64_t now, bool stops)>;
+    using BeforeChange = std::function<void(uint64_t now)>;
     using AfterChange  = std::function<void(uint64_t now)>;
 
     using Service::Service;
@@ -30,8 +29,8 @@ public:
 
     bool                  Clocked() const { return clocked_; }
     GuestCycleClock::Rate BitRate() const { return rate_; }
-    uint64_t TicksAt(uint64_t now) const { return bits_.TicksAt(now); }
-    uint64_t CycleOfTick(uint64_t tick) const { return bits_.CycleOfTick(tick); }
+    uint64_t HalfTicksAt(uint64_t now) const { return halves_.TicksAt(now); }
+    uint64_t CycleOfHalfTick(uint64_t tick) const { return halves_.CycleOfTick(tick); }
 
     void Save(StateWriter& w);
     void Restore(StateReader& r);
@@ -42,14 +41,13 @@ private:
     void OnCpuRate();
     void RequireRatio(bool fits) const;
 
-    GuestCycleClock*     clock_ = nullptr;
-    Sa11xxGpio*          gpio_  = nullptr;
-    Sa11xxSspClockInput* input_ = nullptr;
-    GuestCpuReset*       reset_ = nullptr;
+    GuestCycleClock*      clock_ = nullptr;
+    Sa11xxExternalClocks* ext_   = nullptr;
+    GuestCpuReset*        reset_ = nullptr;
     BeforeChange         before_;
     AfterChange          after_;
-    RatedTickCount           bits_;
-    RatedTickCount::Position held_{};
+    NarrowRatedTickCount     halves_;
+    TickPosition             held_{};
     GuestCycleClock::Rate    rate_{};
     uint32_t sscr0_   = 0;
     uint32_t sscr1_   = 0;

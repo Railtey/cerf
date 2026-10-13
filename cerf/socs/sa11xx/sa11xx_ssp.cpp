@@ -1,7 +1,6 @@
 #include "../../peripherals/peripheral_base.h"
 
 #include "../../core/cerf_emulator.h"
-#include "../../core/fatal.h"
 #include "../../core/log.h"
 #include "../../boards/board_context.h"
 #include "sa1110_id.h"
@@ -10,13 +9,11 @@
 #include "../../state/state_stream.h"
 #include "../guest_cpu_reset.h"
 #include "sa11xx_dma.h"
+#include "sa11xx_external_clocks.h"
+#include "sa11xx_ssp_regs.h"
 #include "sa11xx_ssp_stream.h"
 
 namespace {
-
-/* SA-1110 §11.12.14 SSP: SSCR0 +0x60, SSCR1 +0x64, SSDR +0x6C, SSSR +0x74; §11.12.12.6: ROR
-   bit 6. */
-constexpr uint32_t kSssrRor = 1u << 6;
 
 class Sa11xxSsp : public Peripheral {
 public:
@@ -33,7 +30,7 @@ public:
         /* SA-1110 Developer's Manual §11.12.9.3 (printed 11-157): "SSE is the only control bit
            within the SSP that is reset to a known state". */
         emu_.Get<GuestCpuReset>().RegisterResetListener([this](ResetLineKind) {
-            sscr0_ &= ~0x80u;
+            sscr0_ &= ~sa11xx_ssp::kSse;
         });
         emu_.Get<PeripheralDispatcher>().Register(this);
     }
@@ -48,7 +45,10 @@ public:
 
     void SaveState(StateWriter& w) override;
     void RestoreState(StateReader& r) override;
-    void PostRestore() override { stream_->RefreshLine(clock_->Cycles()); }
+    void PostRestore() override {
+        emu_.Get<Sa11xxExternalClocks>().Resync();
+        stream_->PostRestore(clock_->Cycles());
+    }
 
 private:
     Sa11xxSspStream* stream_ = nullptr;
@@ -88,7 +88,7 @@ private:
                 dma_->OnPortChange();
                 break;
             case 0x74:
-                if ((value & kSssrRor) != 0u) stream_->ClearOverrun(clock_->Cycles());
+                if ((value & sa11xx_ssp::kRor) != 0u) stream_->ClearOverrun(clock_->Cycles());
                 break;
             default:   break;
         }
@@ -117,7 +117,14 @@ void Sa11xxSsp::WriteByte(uint32_t addr, uint8_t value) {
     const uint32_t base  = off & ~0x3u;
     const uint32_t shift = (off & 0x3u) * 8;
     if (!IsKnown(base)) HaltUnsupportedAccess("WriteByte", addr, value);
-    if (base == 0x6C || base == 0x74) HaltUnsupportedAccess("WriteByte", addr, value);
+    if (base == 0x6C) {
+        WriteReg(base, static_cast<uint32_t>(value) << shift);
+        return;
+    }
+    if (base == 0x74) {
+        if (shift == 0u) WriteReg(base, value);
+        return;
+    }
     const uint32_t cur     = ReadReg(base);
     const uint32_t cleared = cur & ~(0xFFu << shift);
     WriteReg(base, cleared | (static_cast<uint32_t>(value) << shift));

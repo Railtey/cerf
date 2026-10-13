@@ -14,38 +14,46 @@ constexpr uint32_t kCountMask = 0x1FFFu;
 
 }
 
-uint32_t Sa11xxDmaStream::Count(const Sa11xxDmaChannelRegs& r, bool b) {
-    return (b ? r.dbtb : r.dbta) & kCountMask;
+/* §11.6.1.2 (printed 11-10): STRTA "causes the buffer A transfer to begin. This bit is functional
+   only if the RUN bit is set"; RUN: "Operation can then be resumed by again setting the RUN bit". */
+uint32_t Sa11xxDmaStream::Kick(const Sa11xxDmaChannelRegs& r, uint32_t newly_set) {
+    if ((r.dcsr & kRun) == 0u) return 0u;
+    const uint32_t starting = (newly_set & kRun) != 0u ? (r.dcsr & (kStrtA | kStrtB))
+                                                       : (newly_set & (kStrtA | kStrtB));
+    uint32_t started = 0u;
+    for (const bool b : {false, true}) {
+        const uint32_t i = b ? 1u : 0u;
+        if ((starting & Strt(b)) == 0u || in_flight_[i]) continue;
+        start_[i]     = b ? r.dbsb : r.dbsa;
+        count_[i]     = (b ? r.dbtb : r.dbta) & kCountMask;
+        in_flight_[i] = true;
+        started |= Strt(b);
+    }
+    return started;
 }
 
-bool Sa11xxDmaStream::BufferValid(const Sa11xxDmaChannelRegs& r, bool b, uint32_t datum) {
-    const uint32_t bytes = Count(r, b);
-    return bytes != 0u && (bytes % datum) == 0u && (Start(r, b) & 0x3u) == 0u;
+void Sa11xxDmaStream::Release(uint32_t cleared) {
+    if ((cleared & kStrtA) != 0u) in_flight_[0] = false;
+    if ((cleared & kStrtB) != 0u) in_flight_[1] = false;
 }
 
 uint32_t Sa11xxDmaStream::Datum() const {
     return port_->DatumBytes();
 }
 
-uint32_t Sa11xxDmaStream::Words(const Sa11xxDmaChannelRegs& r, bool b) const {
-    return Count(r, b) / Datum();
+uint32_t Sa11xxDmaStream::Words(bool b) const {
+    return Count(b) / Datum();
 }
 
-/* §11.6.1.3: DBSAn "contains the starting memory address for buffer A"; §11.6.1.4: DBTAn
-   "contains the current transfer count in bytes for buffer A". */
-bool Sa11xxDmaStream::ArmBuffer(const Sa11xxDmaChannelRegs& r, bool b) {
-    const uint32_t i = b ? 1u : 0u;
-    if (moved_[i] == 0u) return true;
-    if (moved_[i] < Words(r, b)) return false;
-    Rewind(b);
-    return true;
-}
-
+/* §11.6.2 (printed 11-13): "A context switch may occur when a channel completes a command or
+   when a particular burst (portion of a transfer) has been completed". */
 uint64_t Sa11xxDmaStream::Supply(const Sa11xxDmaChannelRegs& r) const {
     if ((r.dcsr & kRun) == 0u || !active_) return 0u;
     uint64_t words = end_ - std::min(end_, port_->Moved());
     const bool other = !cur_b_;
-    if ((r.dcsr & Strt(other)) != 0u) words += Words(r, other) - moved_[other ? 1 : 0];
+    if (in_flight_[other ? 1 : 0] && words % kBurstDatums == 0u) {
+        words += Words(other) - moved_[other ? 1 : 0];
+    }
     return words;
 }
 
@@ -53,22 +61,49 @@ uint64_t Sa11xxDmaStream::Supply(const Sa11xxDmaChannelRegs& r) const {
    to (or from) one buffer completes, the transfer to (or from) the other begins immediately." */
 void Sa11xxDmaStream::Begin(Sa11xxDmaChannelRegs& r, const Hooks& hooks) {
     cur_b_ = (r.dcsr & kBiu) != 0u;
-    const uint32_t words = Words(r, cur_b_);
+    const uint32_t words = Words(cur_b_);
     origin_ = chained_ ? end_ : port_->Moved();
     end_    = origin_ + words;
     active_ = true;
-    if (!port_->Receive()) {
-        hooks.transmit(r.ddar, Start(r, cur_b_), words * Datum(), port_->WordRate());
-    }
+    announce_ = !port_->Receive() && !port_->LoopedBack();
+    Announce(r, hooks);
+}
+
+void Sa11xxDmaStream::Announce(const Sa11xxDmaChannelRegs& r, const Hooks& hooks) {
+    if (!announce_) return;
+    const GuestCycleClock::Rate rate = port_->WordRate();
+    if (rate.num == 0u) return;
+    announce_ = false;
+    hooks.transmit(r.ddar, Start(cur_b_), Words(cur_b_) * Datum(), rate);
 }
 
 void Sa11xxDmaStream::WriteReceived(const Sa11xxDmaChannelRegs& r, const Hooks& hooks,
                                     uint32_t upto) {
     uint32_t& written = written_[cur_b_ ? 1 : 0];
     if (upto <= written) return;
-    hooks.receive(r.ddar, Start(r, cur_b_) + written * Datum(), (upto - written) * Datum(),
-                  port_->WordRate());
+    const uint32_t pa    = Start(cur_b_) + written * Datum();
+    const uint32_t bytes = (upto - written) * Datum();
+    if (!port_->FillReceived(pa, bytes)) hooks.receive(r.ddar, pa, bytes, port_->WordRate());
     written = upto;
+}
+
+/* §11.6.1.4: DBTAn "contains the current transfer count in bytes for buffer A"; Linux
+   sa11x0-dma (sa11x0_dma_pos, sa11x0_dma_suspend / sa11x0_dma_resume) reads DBSx as the live
+   position and writes the saved DBSx / DBTx back to continue a paused transfer. */
+void Sa11xxDmaStream::CommitPointer(Sa11xxDmaChannelRegs& r, uint32_t words) {
+    const uint32_t i     = cur_b_ ? 1u : 0u;
+    const uint32_t bytes = std::min(words * Datum(), count_[i]);
+    start_[i] += bytes;
+    count_[i] -= bytes;
+    if (cur_b_) {
+        r.dbsb = start_[i];
+        r.dbtb = count_[i];
+    } else {
+        r.dbsa = start_[i];
+        r.dbta = count_[i];
+    }
+    moved_[i]   = 0u;
+    written_[i] = 0u;
 }
 
 /* §11.6.1.2: DONEA "indicates that the transfer into or out of buffer A has completed";
@@ -77,24 +112,26 @@ void Sa11xxDmaStream::WriteReceived(const Sa11xxDmaChannelRegs& r, const Hooks& 
 void Sa11xxDmaStream::Complete(Sa11xxDmaChannelRegs& r, const Hooks& hooks) {
     const uint32_t words = static_cast<uint32_t>(end_ - origin_);
     if (port_->Receive()) WriteReceived(r, hooks, words);
-    moved_[cur_b_ ? 1 : 0] = words;
+    CommitPointer(r, words);
     r.dcsr |= Done(cur_b_);
     r.dcsr &= ~Strt(cur_b_);
     r.dcsr ^= kBiu;
-    active_  = false;
-    chained_ = true;
+    in_flight_[cur_b_ ? 1 : 0] = false;
+    active_   = false;
+    chained_  = true;
+    announce_ = false;
 }
 
 void Sa11xxDmaStream::Evaluate(uint64_t now, Sa11xxDmaChannelRegs& r, const Hooks& hooks) {
     port_->Settle(now);
+    if (active_) Announce(r, hooks);
     for (;;) {
         for (;;) {
             if (active_ && port_->Moved() >= end_) {
                 Complete(r, hooks);
                 continue;
             }
-            if (!active_ && (r.dcsr & kRun) != 0u &&
-                (r.dcsr & Strt((r.dcsr & kBiu) != 0u)) != 0u) {
+            if (!active_ && (r.dcsr & kRun) != 0u && in_flight_[(r.dcsr & kBiu) != 0u ? 1 : 0]) {
                 Begin(r, hooks);
                 continue;
             }
@@ -110,33 +147,47 @@ void Sa11xxDmaStream::FlushReceived(const Sa11xxDmaChannelRegs& r, const Hooks& 
     if (active_ && port_->Receive()) WriteReceived(r, hooks, moved_[cur_b_ ? 1 : 0]);
 }
 
-void Sa11xxDmaStream::Abandon(uint64_t now, Sa11xxDmaChannelRegs& r, const Hooks& hooks) {
+void Sa11xxDmaStream::StopActive(uint64_t now, Sa11xxDmaChannelRegs& r, const Hooks& hooks) {
     Evaluate(now, r, hooks);
     if (!active_) return;
-    if (port_->Receive()) WriteReceived(r, hooks, moved_[cur_b_ ? 1 : 0]);
-    active_  = false;
-    chained_ = false;
+    const uint32_t moved = moved_[cur_b_ ? 1 : 0];
+    if (port_->Receive()) WriteReceived(r, hooks, moved);
+    CommitPointer(r, moved);
+    active_   = false;
+    chained_  = false;
+    announce_ = false;
     port_->SetSupply(now, 0u);
 }
 
 void Sa11xxDmaStream::Reset() {
-    port_    = nullptr;
-    active_  = false;
-    chained_ = false;
+    port_     = nullptr;
+    active_   = false;
+    chained_  = false;
+    announce_ = false;
     cur_b_   = false;
     origin_ = 0u;
     end_    = 0u;
-    Rewind(false);
-    Rewind(true);
-}
-
-void Sa11xxDmaStream::Rewind(bool buffer_b) {
-    moved_[buffer_b ? 1 : 0]   = 0u;
-    written_[buffer_b ? 1 : 0] = 0u;
+    moved_[0] = moved_[1] = 0u;
+    written_[0] = written_[1] = 0u;
+    start_[0] = start_[1] = 0u;
+    count_[0] = count_[1] = 0u;
+    in_flight_[0] = in_flight_[1] = false;
 }
 
 bool Sa11xxDmaStream::DoneCycle(uint64_t& cycle) const {
     return active_ && port_->CycleOfMoved(end_, cycle);
+}
+
+bool Sa11xxDmaStream::WordAddress(uint64_t word, uint32_t& pa) const {
+    if (!active_ || word < origin_) return false;
+    if (word < end_) {
+        pa = Start(cur_b_) + static_cast<uint32_t>(word - origin_) * Datum();
+        return true;
+    }
+    const bool other = !cur_b_;
+    if (!in_flight_[other ? 1 : 0] || word - end_ >= Words(other)) return false;
+    pa = Start(other) + static_cast<uint32_t>(word - end_) * Datum();
+    return true;
 }
 
 void Sa11xxDmaStream::Save(StateWriter& w) const {
@@ -145,10 +196,17 @@ void Sa11xxDmaStream::Save(StateWriter& w) const {
     w.Write<uint8_t>("stream_buffer_b", cur_b_ ? 1u : 0u);
     w.Write<uint64_t>("stream_origin", origin_);
     w.Write<uint64_t>("stream_end", end_);
-    w.Write<uint32_t>("stream_moved_a", moved_[0]);
-    w.Write<uint32_t>("stream_moved_b", moved_[1]);
-    w.Write<uint32_t>("stream_written_a", written_[0]);
-    w.Write<uint32_t>("stream_written_b", written_[1]);
+    w.Write<uint32_t>("stream_pointer_moved_a", moved_[0]);
+    w.Write<uint32_t>("stream_pointer_moved_b", moved_[1]);
+    w.Write<uint32_t>("stream_pointer_written_a", written_[0]);
+    w.Write<uint32_t>("stream_pointer_written_b", written_[1]);
+    w.Write<uint32_t>("stream_latched_start_a", start_[0]);
+    w.Write<uint32_t>("stream_latched_start_b", start_[1]);
+    w.Write<uint32_t>("stream_latched_count_a", count_[0]);
+    w.Write<uint32_t>("stream_latched_count_b", count_[1]);
+    w.Write<uint8_t>("stream_in_flight_a", in_flight_[0] ? 1u : 0u);
+    w.Write<uint8_t>("stream_in_flight_b", in_flight_[1] ? 1u : 0u);
+    w.Write<uint8_t>("stream_announce", announce_ ? 1u : 0u);
 }
 
 void Sa11xxDmaStream::Restore(StateReader& r) {
@@ -158,10 +216,22 @@ void Sa11xxDmaStream::Restore(StateReader& r) {
     r.Read("stream_buffer_b", buffer_b);
     r.Read("stream_origin", origin_);
     r.Read("stream_end", end_);
-    r.Read("stream_moved_a", moved_[0]);
-    r.Read("stream_moved_b", moved_[1]);
-    r.Read("stream_written_a", written_[0]);
-    r.Read("stream_written_b", written_[1]);
+    r.Read("stream_pointer_moved_a", moved_[0]);
+    r.Read("stream_pointer_moved_b", moved_[1]);
+    r.Read("stream_pointer_written_a", written_[0]);
+    r.Read("stream_pointer_written_b", written_[1]);
+    r.Read("stream_latched_start_a", start_[0]);
+    r.Read("stream_latched_start_b", start_[1]);
+    r.Read("stream_latched_count_a", count_[0]);
+    r.Read("stream_latched_count_b", count_[1]);
+    uint8_t in_flight_a = 0, in_flight_b = 0;
+    r.Read("stream_in_flight_a", in_flight_a);
+    r.Read("stream_in_flight_b", in_flight_b);
+    uint8_t announce = 0;
+    r.Read("stream_announce", announce);
+    in_flight_[0] = in_flight_a != 0u;
+    in_flight_[1] = in_flight_b != 0u;
+    announce_     = announce != 0u;
     active_  = active != 0u;
     chained_ = chained != 0u;
     cur_b_   = buffer_b != 0u;

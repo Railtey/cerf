@@ -26,6 +26,8 @@ public:
         return bd && bd->GetBoardId() == BoardId::Jornada820;
     }
 
+    Pins WiredTo() const override { return Pins::Gpio10To13; }
+
     uint16_t Exchange(uint16_t tx_frame) override {
         const uint8_t b = static_cast<uint8_t>(tx_frame & 0xFFu);
 

@@ -10,6 +10,8 @@ public:
 
     virtual void OnTransmitBlock(uint32_t ddar, uint32_t pa, uint32_t bytes,
                                  GuestCycleClock::Rate word_rate) = 0;
+    virtual void OnTransmitData(uint32_t ddar, const uint8_t* data, uint32_t bytes,
+                                GuestCycleClock::Rate word_rate) = 0;
     virtual void OnTransmitStop(uint32_t ddar) = 0;
     virtual void OnTransmitRestored() = 0;
 };

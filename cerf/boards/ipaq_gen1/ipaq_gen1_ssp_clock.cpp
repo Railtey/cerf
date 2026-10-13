@@ -1,4 +1,4 @@
-#include "../../socs/sa11xx/sa11xx_ssp_clock_input.h"
+#include "../../socs/sa11xx/sa11xx_gpio_clock_input.h"
 
 #include "../../boards/board_context.h"
 #include "ipaq_gen1_id.h"
@@ -16,9 +16,12 @@ constexpr uint32_t kClkSet0 = 12u;
 constexpr uint32_t kClkSet1 = 13u;
 constexpr uint64_t kClockHz[4] = {12288000u, 11289600u, 4096000u, 5624500u};
 
-class IpaqGen1SspClock : public Sa11xxSspClockInput {
+/* SA-1110 Table 11-5 (printed 11-5): GPIO 19 "Clock input pin for SSP". */
+constexpr uint32_t kSspClockPin = 19u;
+
+class IpaqGen1SspClock : public Sa11xxGpioClockInput {
 public:
-    using Sa11xxSspClockInput::Sa11xxSspClockInput;
+    using Sa11xxGpioClockInput::Sa11xxGpioClockInput;
 
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
@@ -35,7 +38,8 @@ public:
         });
     }
 
-    bool Frequency(GuestCycleClock::Rate& hz) const override {
+    bool Frequency(uint32_t pin, GuestCycleClock::Rate& hz) const override {
+        if (pin != kSspClockPin) return false;
         const Sa11xxGpio::PinConfig set0 = gpio_->Pin(kClkSet0);
         const Sa11xxGpio::PinConfig set1 = gpio_->Pin(kClkSet1);
         if (!set0.output || set0.alternate || !set1.output || set1.alternate) return false;
@@ -50,4 +54,4 @@ private:
 
 }
 
-REGISTER_SERVICE_AS(IpaqGen1SspClock, Sa11xxSspClockInput);
+REGISTER_SERVICE_AS(IpaqGen1SspClock, Sa11xxGpioClockInput);

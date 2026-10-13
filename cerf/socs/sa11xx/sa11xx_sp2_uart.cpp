@@ -1,6 +1,8 @@
 #include "sa11xx_uart_base.h"
 
 #include "../../core/cerf_emulator.h"
+#include "sa11xx_sp2_uart_receive_fifo.h"
+#include "sa11xx_sp2_uart_transmit_fifo.h"
 
 namespace {
 
@@ -18,6 +20,12 @@ protected:
     /* SA-1110 Table 11-6 (printed 11-9): Serial port 2 UART transmit DS 0110, receive DS 0111. */
     uint32_t    TransmitDeviceSelect() const override { return 0x6u; }
     uint32_t    ReceiveDeviceSelect() const override { return 0x7u; }
+    Sa11xxDmaTransmitFifo& TransmitFifo() override {
+        return emu_.Get<Sa11xxSp2UartTransmitFifo>();
+    }
+    Sa11xxDmaReceiveFifo& ReceiveFifo() override {
+        return emu_.Get<Sa11xxSp2UartReceiveFifo>();
+    }
 };
 
 }  /* namespace */

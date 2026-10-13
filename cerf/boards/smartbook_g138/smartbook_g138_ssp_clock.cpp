@@ -1,4 +1,4 @@
-#include "../../socs/sa11xx/sa11xx_ssp_clock_input.h"
+#include "../../socs/sa11xx/sa11xx_gpio_clock_input.h"
 
 #include "../../boards/board_context.h"
 #include "smartbook_g138_id.h"
@@ -15,16 +15,20 @@ constexpr uint64_t kWordsPerFrame = 2u;
 constexpr uint64_t kBitsPerWord  = 16u;
 constexpr uint64_t kScrDivider   = 2u;
 
-class SmartbookG138SspClock : public Sa11xxSspClockInput {
+/* SA-1110 Table 11-5 (printed 11-5): GPIO 19 "Clock input pin for SSP". */
+constexpr uint32_t kSspClockPin = 19u;
+
+class SmartbookG138SspClock : public Sa11xxGpioClockInput {
 public:
-    using Sa11xxSspClockInput::Sa11xxSspClockInput;
+    using Sa11xxGpioClockInput::Sa11xxGpioClockInput;
 
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
         return bd && bd->GetBoardId() == BoardId::SmartbookG138;
     }
 
-    bool Frequency(GuestCycleClock::Rate& hz) const override {
+    bool Frequency(uint32_t pin, GuestCycleClock::Rate& hz) const override {
+        if (pin != kSspClockPin) return false;
         hz = GuestCycleClock::Rate{kFrameHz * kWordsPerFrame * kBitsPerWord * kScrDivider, 1u};
         return true;
     }
@@ -32,4 +36,4 @@ public:
 
 }
 
-REGISTER_SERVICE_AS(SmartbookG138SspClock, Sa11xxSspClockInput);
+REGISTER_SERVICE_AS(SmartbookG138SspClock, Sa11xxGpioClockInput);

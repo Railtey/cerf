@@ -2,21 +2,19 @@
 
 #include "../../core/service.h"
 #include "../../jit/guest_cycle_clock.h"
-#include "../rated_tick_count.h"
 #include "sa11xx_dma_port.h"
+#include "sa11xx_dma_receive_fifo.h"
 #include "sa11xx_uart_regs.h"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <memory>
-#include <mutex>
-#include <vector>
 
 class HostRequestChannel;
 class Sa11xxDma;
 class Sa11xxUartBase;
+class Sa11xxUartRxLine;
 class StateReader;
 class StateWriter;
 
@@ -30,16 +28,26 @@ public:
     void OnReady() override;
 
     uint32_t Attach(Sa11xxUartBase* owner, uint32_t utdr, uint32_t device_select,
-                    const char* name);
+                    const char* name, Sa11xxDmaReceiveFifo& fifo);
     void     Push(uint32_t port, const uint8_t* data, size_t n);
+    void     Loop(uint32_t port, uint8_t byte);
+    bool     LoopBreak(uint32_t port, bool low);
     void     WriteControl(uint32_t port, uint64_t now, const Control& c);
     void     Settle(uint32_t port, uint64_t now);
+    void     ClockChanged(uint32_t port, uint64_t now);
     uint8_t  Pop(uint32_t port, uint64_t now);
     uint32_t Utsr0(uint32_t port) const;
     uint32_t Utsr1(uint32_t port) const;
     void     ClearStatus(uint32_t port, uint64_t now, uint32_t mask);
     bool     InterruptRequest(uint32_t port) const;
     void     Reset(uint32_t port);
+    uint64_t DmaMoved(uint32_t port) const { return ch_[port]->fifo->Moved(); }
+    bool     TakeReplan(uint32_t port) {
+        Channel& c = *ch_[port];
+        const bool replan = c.replan;
+        c.replan = false;
+        return replan;
+    }
 
     void Save(uint32_t port, StateWriter& w);
     void Restore(uint32_t port, StateReader& r);
@@ -47,7 +55,6 @@ public:
 
 private:
     static constexpr uint32_t kPorts = 3u;
-    static constexpr uint64_t kNever = UINT64_MAX;
 
     class Port : public Sa11xxDmaPort {
     public:
@@ -59,9 +66,12 @@ private:
         void     SetSupply(uint64_t now, uint64_t words) override {
             r_.SetDmaSupply(index_, now, words);
         }
-        uint64_t Moved() const override { return 0u; }
+        uint64_t Moved() const override { return r_.ch_[index_]->fifo->Moved(); }
         bool     CycleOfMoved(uint64_t words, uint64_t& cycle) override;
         GuestCycleClock::Rate WordRate() const override;
+        bool     FillReceived(uint32_t pa, uint32_t bytes) override {
+            return r_.ch_[index_]->fifo->Fill(pa, bytes);
+        }
 
     private:
         Sa11xxUartReceiver& r_;
@@ -71,41 +81,37 @@ private:
     struct Channel {
         Channel(Sa11xxUartReceiver& r, uint32_t index) : port(r, index) {}
         Port                    port;
-        Sa11xxUartBase*         owner = nullptr;
-        const char*             name  = "";
-        uint32_t                utdr  = 0;
-        GuestCycleClock::Event* ev    = nullptr;
+        GuestCycleClock::Event* ev         = nullptr;
+        Sa11xxUartBase*         owner      = nullptr;
+        Sa11xxDmaReceiveFifo*   fifo       = nullptr;
+        const char*             name       = "";
+        uint32_t                utdr       = 0;
+        uint32_t                line       = 0;
         Control                 ctl{};
-        RatedTickCount          bits;
-        bool                    clocked = false;
-        std::deque<uint16_t>    fifo;
-        std::deque<uint64_t>    line_end;
-        std::deque<uint8_t>     line_bytes;
-        uint64_t                next_start = 0;
-        bool                    rid      = false;
-        uint64_t                rid_tick = kNever;
-        uint64_t                dma_supply = 0;
-        std::mutex              wire_mtx;
-        std::vector<uint8_t>    wire;
+        bool                    rid        = false;
+        bool                    rbb        = false;
+        bool                    reb        = false;
+        bool                    break_lock = false;
+        bool                    replan     = false;
     };
 
-    static uint64_t FrameBits(const Channel& c);
-    static bool Rfs(const Channel& c);
-    static bool Eif(const Channel& c);
+    static bool Rfs(uint32_t utcr3, const Sa11xxDmaReceiveFifo& fifo);
 
-    void Accept(Channel& c, uint64_t now);
+    bool CycleOfMoved(const Channel& c, uint64_t words, uint64_t& cycle) const;
     void SettleChannel(Channel& c, uint64_t now);
-    void Store(Channel& c, uint8_t byte);
-    void CheckIdle(Channel& c, uint64_t tick);
-    void StopReceive(Channel& c);
     void Arm(Channel& c, uint64_t now);
-    void SetDmaSupply(uint32_t port, uint64_t now, uint64_t words);
-    void OnHostRequest();
     void OnEvent(uint32_t port);
     void OnCpuRate();
+    void Store(Channel& c, uint8_t byte, int32_t tags);
+    void Take(Channel& c, uint16_t entry);
+    void StopReceive(Channel& c);
+    void SetDmaSupply(uint32_t port, uint64_t now, uint64_t words);
+    void OnHostRequest();
 
     GuestCycleClock*    clock_    = nullptr;
     HostRequestChannel* requests_ = nullptr;
+    Sa11xxDma*          dma_      = nullptr;
+    Sa11xxUartRxLine*   line_     = nullptr;
     std::array<std::unique_ptr<Channel>, kPorts> ch_{};
     uint32_t            count_ = 0;
 };

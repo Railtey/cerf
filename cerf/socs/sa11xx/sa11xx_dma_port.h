@@ -17,4 +17,6 @@ public:
     virtual uint64_t Moved() const = 0;
     virtual bool     CycleOfMoved(uint64_t words, uint64_t& cycle) = 0;
     virtual GuestCycleClock::Rate WordRate() const = 0;
+    virtual bool     LoopedBack() const { return false; }
+    virtual bool     FillReceived(uint32_t, uint32_t) { return false; }
 };

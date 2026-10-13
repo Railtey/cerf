@@ -30,7 +30,9 @@ public:
     void RegisterPort(uint32_t device_select, Sa11xxDmaPort* port);
     void RegisterTransmitObserver(Sa11xxDmaTransmitObserver* observer);
     void RegisterReceiveSource(Sa11xxDmaReceiveSource* source);
+    void TransmitData(uint32_t ddar, const uint8_t* data, uint32_t bytes, GuestCycleClock::Rate rate);
     void OnPortChange();
+    bool SourceAddress(const Sa11xxDmaPort* port, uint64_t word, uint32_t& pa) const;
 
     void SaveState(StateWriter& w) override;
     void RestoreState(StateReader& r) override;
@@ -41,6 +43,8 @@ public:
 
 private:
     static constexpr uint8_t kUnbound = 0xFFu;
+
+    Sa11xxDmaPort* PortFor(uint32_t ddar) const;
 
     template <typename F>
     static constexpr void VisitChannel(Sa11xxDmaChannelRegs& c, F& field) {
@@ -57,17 +61,15 @@ private:
     uint32_t ReadReg(uint32_t off);
     uint32_t ReadBuffer(uint32_t ch, uint32_t reg);
     void     WriteReg(uint32_t off, uint32_t value);
-    Sa11xxDmaPort* PortFor(uint32_t ddar) const;
-    bool           SelectsPort(uint32_t ddar) const;
-    void           RequireSupportedTransfer(uint32_t ch, uint32_t dcsr) const;
-    void     Bind(uint32_t ch, Sa11xxDmaPort* port);
+    Sa11xxDmaPort* Bind(uint32_t ch, Sa11xxDmaPort* port);
+    bool     HoldsPort(uint32_t ch) const;
+    bool     BindWaiting();
     void     OnResetLine();
-    void     RequireBuffers(uint32_t ch) const;
     void     WriteDdar(uint32_t ch, uint32_t value);
     void     WriteDcsrSet(uint32_t ch, uint32_t value);
     void     WriteDcsrClear(uint32_t ch, uint32_t value);
     void     WriteBuffer(uint32_t ch, uint32_t reg, uint32_t value);
-    void     KickUnbound(uint32_t ch, uint32_t newly_set);
+    static uint32_t SetStatus(Sa11xxDmaChannelRegs& c, uint32_t newly_set);
     void     Update();
     void     ArmDone(uint32_t ch);
     void     RefreshIrqLine(uint32_t ch);
@@ -82,4 +84,7 @@ private:
     Sa11xxDmaStream::Hooks  hooks_;
     std::vector<Sa11xxDmaTransmitObserver*> transmit_;
     std::vector<Sa11xxDmaReceiveSource*>    receive_;
+    /* SA-1110 Developer's Manual page 5-2: ID Part Number B11 = SA1110, Stepping 1000 = B4; page
+       11-8: "The Big Endian implementation scheme is not supported in the B4 stepping and above." */
+    bool                    big_endian_dma_ = false;
 };

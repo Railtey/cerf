@@ -22,6 +22,7 @@ public:
     uint32_t Burst() const     { return burst_; }
     uint32_t Level() const     { return level_; }
     uint64_t Moved() const     { return moved_; }
+    uint64_t Supply() const    { return supply_; }
 
     void     Put();
     void     Refill(Arrivals* arrivals = nullptr);
