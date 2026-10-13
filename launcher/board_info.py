@@ -21,11 +21,10 @@ SUPPORT_LABELS = {
 WARN = "warn"
 DANGER = "danger"
 
-_WARNINGS = {
-    SUPPORT_BOOTABLE_PARTIAL: (WARN, "Supported, but CERF does not model this "
-                                     "board's differences."),
-    SUPPORT_UNKNOWN_PARTIAL: (WARN, "This board has never run in CERF."),
-    SUPPORT_NO_SUPPORT: (DANGER, "This board does not run in CERF."),
+_WARNING_SEVERITIES = {
+    SUPPORT_BOOTABLE_PARTIAL: WARN,
+    SUPPORT_UNKNOWN_PARTIAL: WARN,
+    SUPPORT_NO_SUPPORT: DANGER,
 }
 _UNKNOWN_WARNING = (DANGER, "CERF does not know this board.")
 
@@ -58,7 +57,9 @@ def board_support_warning(board_id: str) -> Optional[Tuple[str, str]]:
         return None
     if board(board_id) is None:
         return _UNKNOWN_WARNING
-    return _WARNINGS.get(board_support_level(board_id) or "")
+    level = board_support_level(board_id) or ""
+    severity = _WARNING_SEVERITIES.get(level)
+    return (severity, SUPPORT_LABELS[level]) if severity else None
 
 
 def board_extra_notes(board_id: str) -> List[str]:
