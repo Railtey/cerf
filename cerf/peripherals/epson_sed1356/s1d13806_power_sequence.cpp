@@ -22,19 +22,6 @@ public:
         return 1u;
     }
 
-    /* Table 6-15 p.62 t1: LCD Enable Bit low to FPFRAME, FPLINE, FPSHIFT, FPDATA, DRDY
-       inactive, max 1 T_FPLINE. */
-    PanelDown LcdDisableToPanelDown(uint32_t, uint8_t power_save_reg) const override {
-        RequireBit4Set(power_save_reg, "power-off");
-        return PanelDown{Delay{}, Delay{0u, 1u}};
-    }
-
-    /* Table 6-16 p.63 t1: power save to LCD Power Save Status rising, min 1, max 2 T_FPLINE;
-       REG[1F1h] p.145 bit 1: "When this bit = 1, the panel is powered down." */
-    PanelDown PowerSaveToPanelDown() const override {
-        return PanelDown{Delay{0u, 1u}, Delay{0u, 2u}};
-    }
-
     /* REG[1F1h] p.145 note: "When the LCD panel is not enabled (REG[1FCh] bit 0 = 0), this
        bit returns a 1." */
     bool LcdDisabledReadsPanelDown() const override { return true; }

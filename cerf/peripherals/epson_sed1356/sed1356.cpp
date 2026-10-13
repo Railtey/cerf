@@ -127,7 +127,7 @@ uint64_t Sed1356::LcdFrameTicks() const {
    period occurs; S1D13806 Figure 6-22 p.72: VDP lines, then VNDP lines. */
 uint8_t Sed1356::LcdVndStatusBit() {
     std::lock_guard<std::mutex> lk(state_mtx_);
-    if (!ScanLiveLocked()) return panel_->VndWhileScanStopped();
+    if (!ScanLiveLocked()) return 0x00u;
     const uint64_t tick = ScanTicksLocked(ScanNow());
     if (tick < lcd_on_tick_) return 0x00u;
     const uint64_t display = LcdLineTicks() * (LcdGuestH() / LcdPanelDivisor());
@@ -156,10 +156,7 @@ void Sed1356::TrackLcdScanLocked(uint32_t off, uint8_t old) {
     const bool     running = LcdPipelineRunning();
     const bool     changed = ((old ^ reg_[off]) & LcdFieldMask(off)) != 0u;
     if (!ScanLiveLocked()) {
-        if (!running) {
-            if (changed) panel_->Disturb();
-            return;
-        }
+        if (!running) return;
         StartScanLocked(now);
         lcd_on_tick_ =
             off == 0x1FCu ? LcdLineTicks() * power_seq_->LcdPowerOnLines(Reg(0x1F0)) : 0u;
@@ -168,8 +165,7 @@ void Sed1356::TrackLcdScanLocked(uint32_t off, uint8_t old) {
     }
     if (!running) {
         StopScanLocked();
-        panel_->PowerDown(off == 0x1FCu, {LcdPixelRate(), LcdFrameTicks(), LcdLineTicks(),
-                                          LcdPanelDivisor(), Reg(0x1F0)});
+        panel_->PowerDown();
         return;
     }
     if (changed) {
@@ -183,12 +179,11 @@ void Sed1356::OnBusClockChange() {
     {
         std::lock_guard<std::mutex> lk(state_mtx_);
         if (hz == bus_clock_hz_) return;
-        if (hz == 0u && (ScanLiveLocked() || panel_->PowerDownInProgress())) {
-            emu_.Get<Fatal>().Die("Sed1356: BUSCLK stopped while the LCD scan or the panel "
-                                  "power-down sequence runs is not modelled");
+        if (hz == 0u && ScanLiveLocked()) {
+            emu_.Get<Fatal>().Die("Sed1356: BUSCLK stopped while the LCD scan runs is not "
+                                  "modelled");
         }
         bus_clock_hz_ = hz;
-        if (panel_->Pending()) panel_->SetPixelRate(LcdPixelRate());
     }
     OnScanSourceClockChange();
 }
@@ -493,7 +488,6 @@ void Sed1356::PostRestore() {
     std::lock_guard<std::mutex> lk(state_mtx_);
     bus_clock_hz_ = emu_.Get<Sed1356Config>().BusClockHz();
     ResumeScanLocked(ScanNow());
-    panel_->ResumeAfterRestore();
 }
 
 REGISTER_SERVICE(Sed1356);
