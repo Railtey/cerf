@@ -7,12 +7,11 @@
 #include "cerf_virt_folder_share_regs.h"
 
 #include <cstdint>
+#include <unordered_map>
 
 class FolderShareDir : public Service {
 public:
-    explicit FolderShareDir(CerfEmulator& emu) : Service(emu) {
-        for (int i = 0; i < kMaxFc; ++i) finds_[i] = INVALID_HANDLE_VALUE;
-    }
+    using Service::Service;
     ~FolderShareDir() override;
 
     bool ShouldRegister() override;
@@ -25,8 +24,7 @@ public:
     void ReconcileGeneration();
 
 private:
-    static constexpr int kMaxFc = 40;
-    HANDLE   finds_[kMaxFc];
+    std::unordered_map<uint32_t, HANDLE> finds_;
     uint32_t config_generation_ = 0;
 
     uint16_t MkDir(CerfVirt::ServerPB& pb);

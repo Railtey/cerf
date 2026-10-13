@@ -30,12 +30,8 @@ void FolderShareFiles::OnReady() {
 }
 
 void FolderShareFiles::CloseAll() {
-    for (int i = 0; i < kMaxFd; ++i) {
-        if (files_[i].h == INVALID_HANDLE_VALUE) continue;
-        CloseHandle(files_[i].h);
-        files_[i].h = INVALID_HANDLE_VALUE;
-        files_[i].name.clear();
-    }
+    for (auto& entry : files_) CloseHandle(entry.second.h);
+    files_.clear();
 }
 
 void FolderShareFiles::ReconcileGeneration() {
@@ -47,21 +43,17 @@ void FolderShareFiles::ReconcileGeneration() {
 }
 
 void FolderShareFiles::SaveState(StateWriter& w) {
-    w.Write("open_seq", open_seq_);
+    w.Write("next_handle", next_handle_);
 }
 
 void FolderShareFiles::RestoreState(StateReader& r) {
-    r.Read("open_seq", open_seq_);
+    r.Read("next_handle", next_handle_);
     CloseAll();
 }
 
-FolderShareFiles::Slot* FolderShareFiles::SlotFor(uint16_t handle) {
-    const uint16_t idx = handle & 0x3Fu;
-    if (idx >= (uint16_t)kMaxFd) return nullptr;
-    Slot& s = files_[idx];
-    if (s.h == INVALID_HANDLE_VALUE) return nullptr;
-    if ((uint16_t)(handle >> 6) != s.seq) return nullptr;
-    return &s;
+FolderShareFiles::OpenFile* FolderShareFiles::FileFor(uint16_t handle) {
+    auto it = files_.find(handle);
+    return it == files_.end() ? nullptr : &it->second;
 }
 
 bool FolderShareFiles::Owns(uint32_t code) {
@@ -92,11 +84,13 @@ uint32_t FolderShareFiles::Run(uint32_t code, ServerPB& pb) {
     CerfFatalExit();
 }
 
-uint16_t FolderShareFiles::AllocSlot() {
-    for (int i = 0; i < kMaxFd; ++i) {
-        if (files_[i].h == INVALID_HANDLE_VALUE) return (uint16_t)i;
-    }
-    return (uint16_t)kMaxFd;
+bool FolderShareFiles::AllocHandle(uint16_t& handle) {
+    if (files_.size() > 0xFFFFu) return false;
+    do {
+        next_handle_ = (uint16_t)(next_handle_ + 1u);
+    } while (files_.count(next_handle_) != 0);
+    handle = next_handle_;
+    return true;
 }
 
 uint16_t FolderShareFiles::GetDriveConfig(ServerPB&) {
@@ -123,8 +117,8 @@ uint16_t FolderShareFiles::Open(ServerPB& pb) {
         pb.fLfn.fName, pb.fLfn.fNameLength, path);
     if (e != kErrorNoError) return e;
 
-    const uint16_t slot = AllocSlot();
-    if (slot >= (uint16_t)kMaxFd) return kErrorTooManyOpenFiles;
+    uint16_t handle;
+    if (!AllocHandle(handle)) return kErrorTooManyOpenFiles;
 
     DWORD access;
     switch (pb.fOpenMode & 0x03u) {
@@ -153,25 +147,24 @@ uint16_t FolderShareFiles::Open(ServerPB& pb) {
     if (h == INVALID_HANDLE_VALUE)
         return FolderSharePath::CeError(GetLastError());
 
-    open_seq_ = (uint16_t)((open_seq_ + 1u) & 0x3FFu);
-    files_[slot].h   = h;
-    files_[slot].seq = open_seq_;
-    files_[slot].name.assign(
+    OpenFile& file = files_[handle];
+    file.h = h;
+    file.name.assign(
         reinterpret_cast<const wchar_t*>(pb.fLfn.fName),
         pb.fLfn.fNameLength / sizeof(uint16_t));
-    pb.fHandle = (uint16_t)(slot | (open_seq_ << 6));
+    pb.fHandle = handle;
     return kErrorNoError;
 }
 
 uint16_t FolderShareFiles::Read(ServerPB& pb) {
-    Slot* slot = SlotFor(pb.fHandle);
-    if (!slot) return kErrorInvalidHandle;
+    OpenFile* file = FileFor(pb.fHandle);
+    if (!file) return kErrorInvalidHandle;
     if (pb.fSize > kFolderShareMaxReadWriteSize) {
         LOG(Cerf, "[FolderShareFiles] Read of %u bytes exceeds the stage\n",
             pb.fSize);
         CerfFatalExit();
     }
-    HANDLE h = slot->h;
+    HANDLE h = file->h;
     LARGE_INTEGER pos;
     pos.QuadPart = pb.fPosition;
     if (!SetFilePointerEx(h, pos, nullptr, FILE_BEGIN))
@@ -185,14 +178,14 @@ uint16_t FolderShareFiles::Read(ServerPB& pb) {
 }
 
 uint16_t FolderShareFiles::Write(ServerPB& pb) {
-    Slot* slot = SlotFor(pb.fHandle);
-    if (!slot) return kErrorInvalidHandle;
+    OpenFile* file = FileFor(pb.fHandle);
+    if (!file) return kErrorInvalidHandle;
     if (pb.fSize > kFolderShareMaxReadWriteSize) {
         LOG(Cerf, "[FolderShareFiles] Write of %u bytes exceeds the stage\n",
             pb.fSize);
         CerfFatalExit();
     }
-    HANDLE h = slot->h;
+    HANDLE h = file->h;
     LARGE_INTEGER pos;
     pos.QuadPart = pb.fPosition;
     if (!SetFilePointerEx(h, pos, nullptr, FILE_BEGIN))
@@ -206,9 +199,9 @@ uint16_t FolderShareFiles::Write(ServerPB& pb) {
 }
 
 uint16_t FolderShareFiles::SetEof(ServerPB& pb) {
-    Slot* slot = SlotFor(pb.fHandle);
-    if (!slot) return kErrorInvalidHandle;
-    HANDLE h = slot->h;
+    OpenFile* file = FileFor(pb.fHandle);
+    if (!file) return kErrorInvalidHandle;
+    HANDLE h = file->h;
     LARGE_INTEGER pos;
     pos.QuadPart = pb.fPosition;
     if (!SetFilePointerEx(h, pos, nullptr, FILE_BEGIN))
@@ -219,25 +212,24 @@ uint16_t FolderShareFiles::SetEof(ServerPB& pb) {
 }
 
 uint16_t FolderShareFiles::Close(ServerPB& pb) {
-    Slot* slot = SlotFor(pb.fHandle);
-    if (!slot) return kErrorInvalidHandle;
-    CloseHandle(slot->h);
-    slot->h = INVALID_HANDLE_VALUE;
-    slot->name.clear();
+    auto it = files_.find(pb.fHandle);
+    if (it == files_.end()) return kErrorInvalidHandle;
+    CloseHandle(it->second.h);
+    files_.erase(it);
     return kErrorNoError;
 }
 
 uint16_t FolderShareFiles::GetFcbInfo(ServerPB& pb) {
-    Slot* slot = SlotFor(pb.fHandle);
-    if (!slot) return kErrorInvalidHandle;
+    OpenFile* file = FileFor(pb.fHandle);
+    if (!file) return kErrorInvalidHandle;
     BY_HANDLE_FILE_INFORMATION fi;
-    if (!GetFileInformationByHandle(slot->h, &fi))
+    if (!GetFileInformationByHandle(file->h, &fi))
         return FolderSharePath::CeError(GetLastError());
     pb.fFileAttributes     = FolderSharePath::CeFileAttributes(fi.dwFileAttributes);
     pb.fSize               = FolderSharePath::CeFileSize(fi.nFileSizeHigh, fi.nFileSizeLow);
     pb.fFileTimeDate       = FolderSharePath::FiletimeToLong(fi.ftLastWriteTime);
     pb.fFileCreateTimeDate = FolderSharePath::FiletimeToLong(fi.ftCreationTime);
-    const std::wstring& name = slot->name;
+    const std::wstring& name = file->name;
     size_t n = name.size();
     if (n > kMaxLfn) n = kMaxLfn;
     memcpy(pb.fLfn.fName, name.data(), n * sizeof(uint16_t));

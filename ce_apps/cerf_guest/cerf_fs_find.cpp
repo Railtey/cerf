@@ -2,20 +2,6 @@
 
 #include <windows.h>
 
-#define CERF_FS_MAX_FIND 40
-
-static unsigned char g_tid_used[CERF_FS_MAX_FIND];
-
-static unsigned long AllocTid(void) {
-    unsigned long i;
-    for (i = 0; i < CERF_FS_MAX_FIND; ++i)
-        if (!g_tid_used[i]) { g_tid_used[i] = 1; return i; }
-    return 0xFFFFFFFFu;
-}
-static void FreeTid(unsigned long tid) {
-    if (tid < CERF_FS_MAX_FIND) g_tid_used[tid] = 0;
-}
-
 static void HostFindClose(unsigned long tid) {
     CerfFsServerPB* pb = CerfFsPb();
     pb->fFindTransactionID = tid;
@@ -42,21 +28,22 @@ static void FillFindData(WIN32_FIND_DATAW* fd, CerfFsServerPB* pb) {
 HANDLE CerfFsFindFirstFileW(CerfVol* vol, HANDLE hProc, PCWSTR spec,
                             PWIN32_FIND_DATAW fd) {
     CerfFsServerPB* pb = CerfFsPb();
-    unsigned long tid, e;
+    unsigned long e;
     HANDLE h = INVALID_HANDLE_VALUE;
     CerfFind* sc;
     int n;
     (void)vol;
 
-    CerfFsLock();
-    tid = AllocTid();
-    if (tid == 0xFFFFFFFFu) {
-        CerfFsUnlock();
-        SetLastError(ERROR_TOO_MANY_OPEN_FILES);
+    sc = (CerfFind*)LocalAlloc(LPTR, sizeof(CerfFind));
+    if (!sc) {
+        CerfFsResultToBool(ERROR_OUTOFMEMORY);
         return INVALID_HANDLE_VALUE;
     }
+    sc->tid = (unsigned long)sc;
+
+    CerfFsLock();
     pb->fIndex = 0;
-    pb->fFindTransactionID = tid;
+    pb->fFindTransactionID = sc->tid;
     n = lstrlenW(spec);
     if (n > (int)CERF_FS_MAX_LFN) n = (int)CERF_FS_MAX_LFN;
     memcpy(pb->u.fName, spec, n * sizeof(WCHAR));
@@ -66,26 +53,17 @@ HANDLE CerfFsFindFirstFileW(CerfVol* vol, HANDLE hProc, PCWSTR spec,
     e = CerfFsCall(pb, CERF_FS_OP_GET_INFO);
     if (e == CERF_FS_OK) {
         FillFindData(fd, pb);
-        sc = (CerfFind*)LocalAlloc(LPTR, sizeof(CerfFind));
-        if (sc) {
-            sc->tid = tid;
-            h = CerfFsMakeHandle(CerfFsFindApi(), sc, hProc);
-            if (h == INVALID_HANDLE_VALUE) {
-                HostFindClose(tid);
-                FreeTid(tid);
-                LocalFree(sc);
-                e = ERROR_OUTOFMEMORY;
-            }
-        } else {
-            HostFindClose(tid);
-            FreeTid(tid);
+        h = CerfFsMakeHandle(CerfFsFindApi(), sc, hProc);
+        if (h == INVALID_HANDLE_VALUE) {
+            HostFindClose(sc->tid);
             e = ERROR_OUTOFMEMORY;
         }
-    } else {
-        FreeTid(tid);
     }
     CerfFsUnlock();
-    if (h == INVALID_HANDLE_VALUE) CerfFsResultToBool(e);
+    if (h == INVALID_HANDLE_VALUE) {
+        LocalFree(sc);
+        CerfFsResultToBool(e);
+    }
     return h;
 }
 
@@ -104,7 +82,6 @@ BOOL CerfFsFindNextFileW(CerfFind* s, PWIN32_FIND_DATAW fd) {
 BOOL CerfFsFindClose(CerfFind* s) {
     CerfFsLock();
     HostFindClose(s->tid);
-    FreeTid(s->tid);
     CerfFsUnlock();
     LocalFree(s);
     return TRUE;

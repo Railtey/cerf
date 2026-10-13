@@ -49,11 +49,8 @@ void FolderShareDir::OnReady() {
 }
 
 void FolderShareDir::CloseAll() {
-    for (int i = 0; i < kMaxFc; ++i) {
-        if (finds_[i] == INVALID_HANDLE_VALUE) continue;
-        FindClose(finds_[i]);
-        finds_[i] = INVALID_HANDLE_VALUE;
-    }
+    for (auto& entry : finds_) FindClose(entry.second);
+    finds_.clear();
 }
 
 void FolderShareDir::ReconcileGeneration() {
@@ -161,14 +158,10 @@ uint16_t FolderShareDir::SetAttributes(ServerPB& pb) {
 }
 
 uint16_t FolderShareDir::CloseFind(ServerPB& pb) {
-    const uint32_t tid = pb.fFindTransactionID;
-    if (tid >= (uint32_t)kMaxFc) {
-        LOG(Cerf, "[FolderShareDir] FIND_CLOSE with transaction id 0x%X\n", tid);
-        CerfFatalExit();
-    }
-    if (finds_[tid] != INVALID_HANDLE_VALUE) {
-        FindClose(finds_[tid]);
-        finds_[tid] = INVALID_HANDLE_VALUE;
+    auto it = finds_.find(pb.fFindTransactionID);
+    if (it != finds_.end()) {
+        FindClose(it->second);
+        finds_.erase(it);
     }
     return kErrorNoError;
 }
@@ -190,16 +183,12 @@ uint16_t FolderShareDir::GetInfo(ServerPB& pb) {
     }
 
     const uint32_t tid = pb.fFindTransactionID;
-    if (tid >= (uint32_t)kMaxFc) {
-        LOG(Cerf, "[FolderShareDir] GetInfo with transaction id 0x%X\n", tid);
-        CerfFatalExit();
-    }
-
     WIN32_FIND_DATAW fd;
     if (pb.fIndex == 0) {
-        if (finds_[tid] != INVALID_HANDLE_VALUE) {
-            FindClose(finds_[tid]);
-            finds_[tid] = INVALID_HANDLE_VALUE;
+        auto stale = finds_.find(tid);
+        if (stale != finds_.end()) {
+            FindClose(stale->second);
+            finds_.erase(stale);
         }
         std::wstring spec;
         uint16_t e = emu_.Get<FolderSharePath>().ToWin32Path(
@@ -223,11 +212,12 @@ uint16_t FolderShareDir::GetInfo(ServerPB& pb) {
         return kErrorNoError;
     }
 
-    if (finds_[tid] == INVALID_HANDLE_VALUE) return kErrorNoMoreFiles;
+    auto it = finds_.find(tid);
+    if (it == finds_.end()) return kErrorNoMoreFiles;
     do {
-        if (!FindNextFileW(finds_[tid], &fd)) {
-            FindClose(finds_[tid]);
-            finds_[tid] = INVALID_HANDLE_VALUE;
+        if (!FindNextFileW(it->second, &fd)) {
+            FindClose(it->second);
+            finds_.erase(it);
             return kErrorNoMoreFiles;
         }
     } while (IsDotName(fd.cFileName));

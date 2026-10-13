@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 
 class StateWriter;
 class StateReader;
@@ -31,18 +32,16 @@ public:
     void RestoreState(StateReader& r);
 
 private:
-    static constexpr int kMaxFd = 40;
-    struct Slot {
-        HANDLE       h   = INVALID_HANDLE_VALUE;
-        uint16_t     seq = 0;
+    struct OpenFile {
+        HANDLE       h = INVALID_HANDLE_VALUE;
         std::wstring name;
     };
-    Slot     files_[kMaxFd];
-    uint16_t open_seq_          = 0;
+    std::unordered_map<uint16_t, OpenFile> files_;
+    uint16_t next_handle_       = 0;
     uint32_t config_generation_ = 0;
 
-    Slot*    SlotFor(uint16_t handle);
-    uint16_t AllocSlot();
+    OpenFile* FileFor(uint16_t handle);
+    bool      AllocHandle(uint16_t& handle);
 
     uint16_t GetDriveConfig(CerfVirt::ServerPB& pb);
     uint16_t Create(CerfVirt::ServerPB& pb);
