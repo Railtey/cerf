@@ -6,10 +6,16 @@
 #include "../../boards/siemens_simatic_mp377/siemens_simatic_mp377_family_id.h"
 #include "../../core/cerf_emulator.h"
 #include "../../core/fatal.h"
+#include "../../peripherals/ac97_codec.h"
 #include "../../peripherals/cirrus_cs4297a/cs4297a_codec.h"
 #include "../../socs/guest_cpu_reset.h"
 
 namespace siemens_simatic_mp377 {
+namespace {
+
+constexpr GuestCycleClock::Rate kAcLinkFrameRate{Ac97Codec::kFrameRateHz, 1u};
+
+} // namespace
 
 bool SiemensSimaticMp377Sm501Ac97::ShouldRegister() {
     auto* board = emu_.TryGet<BoardContext>();
@@ -17,6 +23,13 @@ bool SiemensSimaticMp377Sm501Ac97::ShouldRegister() {
 }
 
 void SiemensSimaticMp377Sm501Ac97::OnReady() {
+    registers_ = &emu_.Get<SiemensSimaticMp377Sm501Regs>();
+    power_ = &emu_.Get<SiemensSimaticMp377Sm501PowerGpio>();
+    codec_ = &emu_.Get<Cs4297aCodec>();
+    output_ = &emu_.Get<SiemensSimaticMp377Sm501AudioOutput>();
+    clock_ = &emu_.Get<GuestCycleClock>();
+    frame_event_ = clock_->Add([this] { OnFrameEvent(); });
+    clock_->RegisterRateListener([this] { OnCpuRate(); });
     ResetController();
     emu_.Get<GuestCpuReset>().RegisterResetListener([this](ResetLineKind) {
         if (emu_.Get<GuestCpuReset>().DeliveredResetWasResume()) return;
@@ -47,7 +60,7 @@ void SiemensSimaticMp377Sm501Ac97::ResetController() {
     drop_count_ = 0u;
     irq_pending_ = false;
     codec_ready_ = false;
-    bclk_running_ = false;
+    SetLinkClock(false);
     tx_dirty_mask_ = 0u;
     frame_phase_ = 0u;
     codec_ready_frames_ = 0u;
@@ -132,7 +145,7 @@ void SiemensSimaticMp377Sm501Ac97::Write(uint32_t off, uint32_t old_value, uint3
         if ((value & kCtrlColdReset) != 0u) {
             ResetCodec(true);
         } else if ((value & kCtrlWarmReset) != 0u) {
-            emu_.Get<Cs4297aCodec>().WarmReset();
+            codec_->WarmReset();
             codec_ready_ = false;
             codec_ready_frames_ = 0u;
             codec_read_pending_ = false;
@@ -232,14 +245,13 @@ uint32_t SiemensSimaticMp377Sm501Ac97::ControlStatusValue() const {
 
 void SiemensSimaticMp377Sm501Ac97::UpdateStatus() {
     std::lock_guard<std::recursive_mutex> lock(state_mutex_);
-    auto& power = emu_.Get<SiemensSimaticMp377Sm501PowerGpio>();
-    const bool gate_on = power.IsGateEnabled(kSm501GateAc97I2sBit);
+    const bool gate_on = power_->IsGateEnabled(kSm501GateAc97I2sBit);
     const bool enabled = (control_ & kCtrlEnable) != 0u;
     const bool reset = (control_ & (kCtrlColdReset | kCtrlWarmReset)) != 0u;
     const bool sync_stopped = (control_ & kCtrlStopSync) != 0u;
     const bool link_powered = LinkPowered();
-    const bool pins_routed = power.IsAc97LinkMuxed();
-    const bool board_reset_released = power.IsCodecResetDeasserted();
+    const bool pins_routed = power_->IsAc97LinkMuxed();
+    const bool board_reset_released = power_->IsCodecResetDeasserted();
 
     const bool link_clock_running = gate_on && enabled && !reset && !sync_stopped && link_powered &&
                                     pins_routed && board_reset_released;
@@ -248,7 +260,7 @@ void SiemensSimaticMp377Sm501Ac97::UpdateStatus() {
         codec_ready_frames_ = 0u;
         codec_read_pending_ = false;
     }
-    bclk_running_ = link_clock_running;
+    SetLinkClock(link_clock_running);
     /* SM501 MMCC Databook v1.02, AC97 RX Slot 0 Tag Port: bit 15 is
        Codec Ready; bits 14:11 independently report valid receive slots. */
     rx_slot0_ &= ~kTagValidFrame;
@@ -258,7 +270,7 @@ void SiemensSimaticMp377Sm501Ac97::UpdateStatus() {
 }
 
 void SiemensSimaticMp377Sm501Ac97::ResetCodec(bool cold) {
-    emu_.Get<Cs4297aCodec>().Reset();
+    codec_->Reset();
     codec_ready_ = cold ? false : codec_ready_;
     if (cold) codec_ready_frames_ = 0u;
     codec_read_pending_ = false;
@@ -342,17 +354,17 @@ void SiemensSimaticMp377Sm501Ac97::ProcessFrame() {
             /* AC'97 read-back address/data appear in the input frame after
                the frame containing the request (CS4297A section 3.2). */
             codec_read_register_ = static_cast<uint8_t>(reg);
-            codec_read_data_ = emu_.Get<Cs4297aCodec>().ReadRegister(reg, codec_ready_);
+            codec_read_data_ = codec_->ReadRegister(reg, codec_ready_);
             codec_read_pending_ = true;
         } else {
             const uint16_t data = static_cast<uint16_t>((tx_slot2_ >> 4) & 0xFFFFu);
-            emu_.Get<Cs4297aCodec>().WriteRegister(reg, data);
+            codec_->WriteRegister(reg, data);
             if (reg == 0x26u) {
                 if (!LinkPowered()) {
                     codec_ready_ = false;
-                    bclk_running_ = false;
+                    SetLinkClock(false);
                 }
-                if (!DacReady()) emu_.Get<SiemensSimaticMp377Sm501AudioOutput>().HandleDacPowerDown();
+                if (!DacReady()) output_->HandleDacPowerDown();
                 UpdateStatus();
             }
         }
@@ -360,7 +372,7 @@ void SiemensSimaticMp377Sm501Ac97::ProcessFrame() {
     }
 
     if (codec_ready_ && want_pcm && DacReady()) {
-        emu_.Get<SiemensSimaticMp377Sm501AudioOutput>().QueueAc97PcmSample(tx_slot3_, tx_slot4_);
+        output_->QueueAc97PcmSample(tx_slot3_, tx_slot4_);
         handled_dirty |= kDirtySlot3 | kDirtySlot4;
     }
 
@@ -377,7 +389,7 @@ void SiemensSimaticMp377Sm501Ac97::ProcessFrame() {
 }
 void SiemensSimaticMp377Sm501Ac97::RaiseInterrupt() {
     irq_pending_ = true;
-    emu_.Get<SiemensSimaticMp377Sm501AudioMcu>().SignalAc97Interrupt();
+    mcu_.Get().SignalAc97Interrupt();
     Registers().RaiseSm501InterruptBits(kSm501Ac97IrqBit);
 }
 
@@ -390,29 +402,87 @@ void SiemensSimaticMp377Sm501Ac97::ClearInterrupt() {
 }
 
 SiemensSimaticMp377Sm501Regs& SiemensSimaticMp377Sm501Ac97::Registers() const {
-    return emu_.Get<SiemensSimaticMp377Sm501Regs>();
+    return *registers_;
 }
 
 bool SiemensSimaticMp377Sm501Ac97::DacReady() const {
     std::lock_guard<std::recursive_mutex> lock(state_mutex_);
-    return emu_.Get<Cs4297aCodec>().DacReady(codec_ready_);
+    return codec_->DacReady(codec_ready_);
 }
 
 bool SiemensSimaticMp377Sm501Ac97::AdcReady() const {
     std::lock_guard<std::recursive_mutex> lock(state_mutex_);
-    return emu_.Get<Cs4297aCodec>().AdcReady(codec_ready_);
+    return codec_->AdcReady(codec_ready_);
 }
 
 bool SiemensSimaticMp377Sm501Ac97::LinkPowered() const {
-    return emu_.Get<Cs4297aCodec>().LinkPowered();
+    return codec_->LinkPowered();
 }
 
 void SiemensSimaticMp377Sm501Ac97::SaveCodecState(StateWriter& writer) const {
-    emu_.Get<Cs4297aCodec>().SaveState(writer);
+    codec_->SaveState(writer);
 }
 
 void SiemensSimaticMp377Sm501Ac97::RestoreCodecState(StateReader& reader) {
-    emu_.Get<Cs4297aCodec>().RestoreState(reader);
+    codec_->RestoreState(reader);
+}
+
+void SiemensSimaticMp377Sm501Ac97::SetLinkClock(bool running) {
+    if (running == bclk_running_) return;
+    bclk_running_ = running;
+    if (running) {
+        frames_.SetRate(clock_->ClockRate(), kAcLinkFrameRate);
+        frames_.Start(clock_->Cycles());
+        next_frame_ = 1u;
+    }
+    ArmNextFrame();
+}
+
+void SiemensSimaticMp377Sm501Ac97::OnFrameEvent() {
+    const uint64_t now = clock_->Cycles();
+    while (bclk_running_ && frames_.CycleOfTick(next_frame_) <= now) {
+        ++next_frame_;
+        ClockFrame();
+        mcu_.Get().ServiceAc97Frame();
+    }
+    ArmNextFrame();
+}
+
+void SiemensSimaticMp377Sm501Ac97::OnCpuRate() {
+    if (!bclk_running_) return;
+    frames_.Rescale(clock_->Cycles(), clock_->ClockRate(), kAcLinkFrameRate);
+    ArmNextFrame();
+}
+
+void SiemensSimaticMp377Sm501Ac97::ArmNextFrame() {
+    if (bclk_running_)
+        clock_->Arm(frame_event_, frames_.CycleOfTick(next_frame_));
+    else
+        clock_->Disarm(frame_event_);
+}
+
+void SiemensSimaticMp377Sm501Ac97::SaveFrameClock(StateWriter& writer) const {
+    const RatedTickCount::Position pos =
+        bclk_running_ ? frames_.PositionAt(clock_->Cycles()) : RatedTickCount::Position{};
+    writer.Write<uint64_t>("ac_link_frames", pos.ticks);
+    writer.Write<uint64_t>("ac_link_phase", pos.phase);
+    writer.Write<uint64_t>("ac_link_phase_den", pos.phase_den);
+}
+
+void SiemensSimaticMp377Sm501Ac97::RestoreFrameClock(StateReader& reader) {
+    RatedTickCount::Position pos;
+    reader.Read("ac_link_frames", pos.ticks);
+    reader.Read("ac_link_phase", pos.phase);
+    reader.Read("ac_link_phase_den", pos.phase_den);
+    clock_->Disarm(frame_event_);
+    if (!bclk_running_) return;
+    frames_.SetRate(clock_->ClockRate(), kAcLinkFrameRate);
+    frames_.PlaceAt(clock_->Cycles(), pos);
+    next_frame_ = pos.ticks + 1u;
+}
+
+void SiemensSimaticMp377Sm501Ac97::PostRestore() {
+    ArmNextFrame();
 }
 
 REGISTER_SERVICE(SiemensSimaticMp377Sm501Ac97);

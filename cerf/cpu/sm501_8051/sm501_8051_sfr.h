@@ -53,6 +53,7 @@ public:
         state_.extended_pending |= static_cast<uint8_t>(1u << line);
     }
 
+    bool CanTakeExtended(uint8_t line) const;
     bool ServiceInterrupts();
     void ReturnFromInterrupt();
     bool HighPriorityInterruptInService() const {

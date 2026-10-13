@@ -19,6 +19,10 @@ bool SiemensSimaticMp377Sm501Dma::ShouldRegister() {
 }
 
 void SiemensSimaticMp377Sm501Dma::OnReady() {
+    registers_ = &emu_.Get<SiemensSimaticMp377Sm501Regs>();
+    memory_ = &emu_.Get<EmulatedMemory>();
+    fb_ = &emu_.Get<SiemensSimaticMp377Sm501Fb>();
+    mcu_ = &emu_.Get<SiemensSimaticMp377Sm501AudioMcu>();
     Reset();
     emu_.Get<GuestCpuReset>().RegisterResetListener([this](ResetLineKind) {
         if (emu_.Get<GuestCpuReset>().DeliveredResetWasResume()) return;
@@ -126,18 +130,17 @@ bool SiemensSimaticMp377Sm501Dma::ReadMemoryByte(uint32_t address, uint8_t& valu
     if (external) {
         const uint32_t physical_address = local_address +
             ((address & kSdramChipSelectBit) != 0u ? 0x04000000u : 0u);
-        const uint8_t* host = emu_.Get<EmulatedMemory>().TryTranslate(physical_address);
+        const uint8_t* host = memory_->TryTranslate(physical_address);
         if (!host)
             registers.HaltUnsupportedAccess("SM501 DMA system-memory read outside RAM", physical_address, address);
         value = *host;
         return true;
     }
-    auto& fb = emu_.Get<SiemensSimaticMp377Sm501Fb>();
     if (local_address >= kSm501FbBytes) {
         registers.HaltUnsupportedAccess("SM501 DMA0 local memory read outside BAR0", kSm501FbBarPa + local_address,
                                         address);
     }
-    value = fb.Vram()[local_address];
+    value = fb_->Vram()[local_address];
     return true;
 }
 
@@ -148,19 +151,18 @@ bool SiemensSimaticMp377Sm501Dma::WriteMemoryByte(uint32_t address, uint8_t valu
     if (external) {
         const uint32_t physical_address = local_address +
             ((address & kSdramChipSelectBit) != 0u ? 0x04000000u : 0u);
-        uint8_t* host = emu_.Get<EmulatedMemory>().TryTranslateWrite(physical_address);
+        uint8_t* host = memory_->TryTranslateWrite(physical_address);
         if (!host)
             registers.HaltUnsupportedAccess("SM501 DMA system-memory write outside RAM", physical_address, address);
         *host = value;
         return true;
     }
-    auto& fb = emu_.Get<SiemensSimaticMp377Sm501Fb>();
     if (local_address >= kSm501FbBytes) {
         registers.HaltUnsupportedAccess("SM501 DMA0 local memory write outside BAR0", kSm501FbBarPa + local_address,
                                         address);
     }
-    fb.MutableVramFor2d()[local_address] = value;
-    fb.Note2dWrite(local_address, 1u);
+    fb_->MutableVramFor2d()[local_address] = value;
+    fb_->Note2dWrite(local_address, 1u);
     return true;
 }
 
@@ -181,15 +183,15 @@ void SiemensSimaticMp377Sm501Dma::ExecuteTransfer() {
         const uint32_t sram_offset = SiemensSimaticMp377Sm501AudioMcu::kSramBase + sram_relative + i;
         const uint32_t address = flags | ((base + i) & 0x03FFFFFFu);
         if (sram_to_memory) {
-            WriteMemoryByte(address, emu_.Get<SiemensSimaticMp377Sm501AudioMcu>().ReadSramByte(sram_offset));
+            WriteMemoryByte(address, mcu_->ReadSramByte(sram_offset));
         } else {
             uint8_t value = 0u;
             ReadMemoryByte(address, value);
-            emu_.Get<SiemensSimaticMp377Sm501AudioMcu>().WriteSramByte(sram_offset, value);
+            mcu_->WriteSramByte(sram_offset, value);
         }
     }
     CompleteTransfer();
-    emu_.Get<SiemensSimaticMp377Sm501AudioMcu>().RunMmioSlice(16384u);
+    mcu_->RunMmioSlice(16384u);
 }
 
 void SiemensSimaticMp377Sm501Dma::CompleteTransfer() {
@@ -236,7 +238,7 @@ void SiemensSimaticMp377Sm501Dma::AbortDma1() {
 }
 
 SiemensSimaticMp377Sm501Regs& SiemensSimaticMp377Sm501Dma::Registers() const {
-    return emu_.Get<SiemensSimaticMp377Sm501Regs>();
+    return *registers_;
 }
 
 REGISTER_SERVICE(SiemensSimaticMp377Sm501Dma);

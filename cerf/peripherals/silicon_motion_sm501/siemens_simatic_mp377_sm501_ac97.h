@@ -1,15 +1,23 @@
 #pragma once
 
+#include "../../core/deferred_service.h"
 #include "../../core/service.h"
+#include "../../jit/guest_cycle_clock.h"
+#include "../../socs/rated_tick_count.h"
 #include "../../state/state_stream.h"
 
 #include <cstdint>
 #include <mutex>
 
+class Cs4297aCodec;
+
 namespace siemens_simatic_mp377 {
 
 class SiemensSimaticMp377Sm501Regs;
 class SiemensSimaticMp377Sm501Ac97;
+class SiemensSimaticMp377Sm501AudioMcu;
+class SiemensSimaticMp377Sm501AudioOutput;
+class SiemensSimaticMp377Sm501PowerGpio;
 
 inline constexpr uint32_t kSm501Ac97IrqBit = 1u << 17;
 
@@ -63,6 +71,7 @@ public:
         writer.Write("codec_read_pending", codec_read_pending_);
         writer.Write("codec_read_register", codec_read_register_);
         writer.Write("codec_read_data", codec_read_data_);
+        SaveFrameClock(writer);
     }
     void RestoreState(StateReader& reader) {
         std::lock_guard<std::recursive_mutex> lock(state_mutex_);
@@ -88,7 +97,9 @@ public:
         reader.Read("codec_read_pending", codec_read_pending_);
         reader.Read("codec_read_register", codec_read_register_);
         reader.Read("codec_read_data", codec_read_data_);
+        RestoreFrameClock(reader);
     }
+    void PostRestore();
 
 private:
     static constexpr uint32_t kTxSlot0TagReg = 0x0A0100u;
@@ -136,7 +147,22 @@ private:
     bool LinkPowered() const;
     void SaveCodecState(StateWriter& writer) const;
     void RestoreCodecState(StateReader& reader);
+    void SetLinkClock(bool running);
+    void OnFrameEvent();
+    void OnCpuRate();
+    void ArmNextFrame();
+    void SaveFrameClock(StateWriter& writer) const;
+    void RestoreFrameClock(StateReader& reader);
     SiemensSimaticMp377Sm501Regs& Registers() const;
+    SiemensSimaticMp377Sm501Regs* registers_ = nullptr;
+    SiemensSimaticMp377Sm501PowerGpio* power_ = nullptr;
+    Cs4297aCodec* codec_ = nullptr;
+    SiemensSimaticMp377Sm501AudioOutput* output_ = nullptr;
+    DeferredService<SiemensSimaticMp377Sm501AudioMcu> mcu_{emu_};
+    GuestCycleClock* clock_ = nullptr;
+    GuestCycleClock::Event* frame_event_ = nullptr;
+    RatedTickCount frames_;
+    uint64_t next_frame_ = 0u;
     uint32_t control_ = 0;
     uint32_t tx_slot0_ = 0;
     uint32_t tx_slot1_ = 0;

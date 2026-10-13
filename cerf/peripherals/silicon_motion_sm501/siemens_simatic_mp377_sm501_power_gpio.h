@@ -1,11 +1,13 @@
 #pragma once
 
+#include "../../core/deferred_service.h"
 #include "../../core/service.h"
 
 #include <cstdint>
 
 namespace siemens_simatic_mp377 {
 
+class SiemensSimaticMp377Sm501Ac97;
 class SiemensSimaticMp377Sm501Regs;
 
 // SM501 Databook ch. 6 and ch. 17: power-mode gate/clock selection and GPIO
@@ -29,6 +31,9 @@ public:
 private:
     uint32_t CurrentGateMask() const;
     uint32_t ActiveAc97GpioMuxMask() const;
+
+    DeferredService<SiemensSimaticMp377Sm501Regs> registers_{emu_};
+    DeferredService<SiemensSimaticMp377Sm501Ac97> ac97_{emu_};
 };
 
 } // namespace siemens_mp377

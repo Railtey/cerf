@@ -26,13 +26,7 @@ class Pxa2xxAc97Link : public Service, public Ac97FrameSource {
 public:
     using Service::Service;
 
-    /* AC '97 Component Specification Revision 2.1 Figure 13 (page 32): BIT_CLK 12.288 MHz, a
-       20.8 us (48 kHz) frame; Intel PXA27x Developer's Manual section 13.6.4 (page 13-18): "The
-       AC '97 controller divides the AC97_BITCLK by 256 to generate the AC97_SYNC signal". */
-    static constexpr uint64_t kBitClockHz   = 12288000u;
-    static constexpr uint64_t kBitsPerFrame = 256u;
-    static constexpr uint32_t kFrameRateHz  = static_cast<uint32_t>(kBitClockHz / kBitsPerFrame);
-    static constexpr uint64_t kNever        = UINT64_MAX;
+    static constexpr uint64_t kNever = UINT64_MAX;
 
     bool ShouldRegister() override;
     void OnReady() override;
@@ -49,8 +43,11 @@ public:
     bool     RequestsEnabled() const { return cold_released_ && !requests_off_; }
     bool     DmaRequestsEnabled() const { return RequestsEnabled() && !dma_masked_; }
     void     SetDmaRequestsMasked(bool masked) { dma_masked_ = masked; }
-    uint64_t FrameIndexAt(uint64_t cycle) const { return bits_.TicksAt(cycle) / kBitsPerFrame; }
-    uint64_t CycleOfFrame(uint64_t frame) const { return bits_.CycleOfTick(frame * kBitsPerFrame); }
+    /* AC '97 Component Specification Revision 2.1 Figure 13 (page 32): BIT_CLK 12.288 MHz, a
+       20.8 us (48 kHz) frame; Intel PXA27x Developer's Manual section 13.6.4 (page 13-18): "The
+       AC '97 controller divides the AC97_BITCLK by 256 to generate the AC97_SYNC signal". */
+    uint64_t FrameIndexAt(uint64_t cycle) const { return bits_.TicksAt(cycle) / Ac97Codec::kBitsPerFrame; }
+    uint64_t CycleOfFrame(uint64_t frame) const { return bits_.CycleOfTick(frame * Ac97Codec::kBitsPerFrame); }
 
     void SetColdReset(uint64_t now, bool asserted);
     void SetCodecResetPin(uint64_t now, bool asserted);

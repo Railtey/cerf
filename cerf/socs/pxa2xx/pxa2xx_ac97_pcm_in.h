@@ -26,5 +26,5 @@ protected:
 private:
     Pxa2xxSlotPace Pace();
 
-    Pxa2xxFrameSlotLaw law_{Pxa2xxAc97Link::kFrameRateHz};
+    Pxa2xxFrameSlotLaw law_{Ac97Codec::kFrameRateHz};
 };

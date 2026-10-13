@@ -7,8 +7,6 @@
 namespace siemens_simatic_mp377 {
 
 void SiemensSimaticMp377Sm501Regs::SaveState(StateWriter& w) {
-    auto audio_pacer_lock = emu_.Get<SiemensSimaticMp377Sm501AudioOutput>().LockForState();
-
     w.WriteBytes("regs", regs_.data(), regs_.size() * sizeof(regs_[0]));
     w.Write("panel_fb_raw", panel_fb_raw_);
     w.Write("panel_pitch_bytes", panel_pitch_bytes_);
@@ -24,8 +22,6 @@ void SiemensSimaticMp377Sm501Regs::SaveState(StateWriter& w) {
 }
 
 void SiemensSimaticMp377Sm501Regs::RestoreState(StateReader& r) {
-    emu_.Get<SiemensSimaticMp377Sm501AudioOutput>().SetPacerEnabled(false);
-
     r.ReadBytes("regs", regs_.data(), regs_.size() * sizeof(regs_[0]));
     r.Read("panel_fb_raw", panel_fb_raw_);
     r.Read("panel_pitch_bytes", panel_pitch_bytes_);
@@ -38,11 +34,6 @@ void SiemensSimaticMp377Sm501Regs::RestoreState(StateReader& r) {
     emu_.Get<SiemensSimaticMp377Sm501AudioOutput>().RestoreState(r);
 
     emu_.Get<SiemensSimaticMp377TouchPanel>().RestoreState(r);
-}
-
-void SiemensSimaticMp377Sm501Regs::PostRestore() {
-    RefreshSm501InterruptLine();
-    emu_.Get<SiemensSimaticMp377TouchPanel>().PostRestore();
 }
 
 } // namespace siemens_mp377

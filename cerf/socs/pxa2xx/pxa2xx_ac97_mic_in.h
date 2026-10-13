@@ -42,6 +42,6 @@ private:
     uint64_t       DigitiserWords(uint64_t frames) const;
     size_t         SpanOf(uint64_t n) const;
 
-    Pxa2xxFrameSlotLaw adc_{Pxa2xxAc97Link::kFrameRateHz};
+    Pxa2xxFrameSlotLaw adc_{Ac97Codec::kFrameRateHz};
     std::vector<Span>  spans_;
 };

@@ -2,6 +2,7 @@
 
 #include "siemens_simatic_mp377_sm501.h"
 
+#include "../../core/deferred_service.h"
 #include "../../peripherals/peripheral_base.h"
 #include "../../state/state_stream.h"
 
@@ -10,13 +11,19 @@
 #include <mutex>
 #include <vector>
 
+class IrqController;
+
 namespace siemens_simatic_mp377 {
 
 class SiemensSimaticMp377Sm501Ac97;
 class SiemensSimaticMp377Sm501AudioMcu;
 class SiemensSimaticMp377Sm501AudioOutput;
+class SiemensSimaticMp377Sm501Blitter;
 class SiemensSimaticMp377Sm501Dma;
 class SiemensSimaticMp377Sm501PowerGpio;
+class SiemensSimaticMp377Sm501Video;
+class SiemensSimaticMp377SmiBridge;
+class SiemensSimaticMp377TouchPanel;
 
 class SiemensSimaticMp377Sm501Regs : public Peripheral {
 public:
@@ -74,6 +81,15 @@ private:
     uint32_t SspInterruptStatus(uint32_t base) const;
     void RefreshSspInterruptCascade();
 
+    IrqController* irq_ = nullptr;
+    SiemensSimaticMp377Sm501PowerGpio* power_ = nullptr;
+    SiemensSimaticMp377Sm501Video* video_ = nullptr;
+    DeferredService<SiemensSimaticMp377Sm501Ac97> ac97_{emu_};
+    DeferredService<SiemensSimaticMp377Sm501AudioMcu> mcu_{emu_};
+    DeferredService<SiemensSimaticMp377Sm501Dma> dma_{emu_};
+    DeferredService<SiemensSimaticMp377Sm501Blitter> blitter_{emu_};
+    DeferredService<SiemensSimaticMp377SmiBridge> smi_bridge_{emu_};
+    DeferredService<SiemensSimaticMp377TouchPanel> touch_panel_{emu_};
     std::vector<uint32_t> regs_;
     uint32_t panel_fb_raw_ = 0u;
     uint32_t panel_pitch_bytes_ = 0u;

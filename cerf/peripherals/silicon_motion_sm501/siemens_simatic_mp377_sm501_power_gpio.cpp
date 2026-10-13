@@ -30,7 +30,7 @@ void SiemensSimaticMp377Sm501PowerGpio::Initialize(SiemensSimaticMp377Sm501Regs&
 }
 
 uint32_t SiemensSimaticMp377Sm501PowerGpio::CurrentGateMask() const {
-    const auto& regs = emu_.Get<SiemensSimaticMp377Sm501Regs>().regs_;
+    const auto& regs = registers_.Get().regs_;
     const uint32_t mode = regs[kSm501PowerModeControlReg / 4u] & 3u;
     if (mode == 1u) return regs[kSm501PowerMode1GateReg / 4u];
     if (mode == 2u) return regs[kSm501SleepModeGateReg / 4u];
@@ -42,7 +42,7 @@ uint32_t SiemensSimaticMp377Sm501PowerGpio::CurrentGate() const {
 }
 
 uint32_t SiemensSimaticMp377Sm501PowerGpio::CurrentClock() const {
-    const auto& regs = emu_.Get<SiemensSimaticMp377Sm501Regs>().regs_;
+    const auto& regs = registers_.Get().regs_;
     const uint32_t mode = regs[kSm501PowerModeControlReg / 4u] & 3u;
     if (mode == 1u) return regs[kSm501PowerMode1ClockReg / 4u];
     return regs[kSm501PowerMode0ClockReg / 4u];
@@ -58,11 +58,11 @@ void SiemensSimaticMp377Sm501PowerGpio::WritePowerModeControl(uint32_t value) {
         value |= 4u;
     else
         value &= ~4u;
-    emu_.Get<SiemensSimaticMp377Sm501Regs>().regs_[kSm501PowerModeControlReg / 4u] = value;
+    registers_.Get().regs_[kSm501PowerModeControlReg / 4u] = value;
 }
 
 uint32_t SiemensSimaticMp377Sm501PowerGpio::ActiveAc97GpioMuxMask() const {
-    const auto& regs = emu_.Get<SiemensSimaticMp377Sm501Regs>().regs_;
+    const auto& regs = registers_.Get().regs_;
     return regs[kSm501Gpio31_0ControlReg / 4u] & kSm501GpioAc97Mask;
 }
 
@@ -71,7 +71,7 @@ bool SiemensSimaticMp377Sm501PowerGpio::IsAc97LinkMuxed() const {
 }
 
 bool SiemensSimaticMp377Sm501PowerGpio::IsCodecResetDeasserted() const {
-    const auto& regs = emu_.Get<SiemensSimaticMp377Sm501Regs>().regs_;
+    const auto& regs = registers_.Get().regs_;
     const uint32_t data = regs[kSm501GpioDataLowReg / 4u];
     const uint32_t direction = regs[kSm501GpioDirectionLowReg / 4u];
     if ((direction & kMp377CodecResetGpioBit) != 0u && (data & kMp377CodecResetGpioBit) != 0u) return true;
@@ -79,7 +79,7 @@ bool SiemensSimaticMp377Sm501PowerGpio::IsCodecResetDeasserted() const {
 }
 
 uint32_t SiemensSimaticMp377Sm501PowerGpio::ReadGpioDataLow() const {
-    const auto& regs = emu_.Get<SiemensSimaticMp377Sm501Regs>().regs_;
+    const auto& regs = registers_.Get().regs_;
     const uint32_t value = regs[kSm501GpioDataLowReg / 4u];
     const uint32_t mux = ActiveAc97GpioMuxMask();
     if (mux == 0u) return value;
@@ -90,7 +90,7 @@ uint32_t SiemensSimaticMp377Sm501PowerGpio::ReadGpioDataLow() const {
 }
 
 uint32_t SiemensSimaticMp377Sm501PowerGpio::ReadGpioDirectionLow() const {
-    const auto& regs = emu_.Get<SiemensSimaticMp377Sm501Regs>().regs_;
+    const auto& regs = registers_.Get().regs_;
     const uint32_t value = regs[kSm501GpioDirectionLowReg / 4u];
     const uint32_t mux = ActiveAc97GpioMuxMask();
     if (mux == 0u) return value;
@@ -98,7 +98,7 @@ uint32_t SiemensSimaticMp377Sm501PowerGpio::ReadGpioDirectionLow() const {
 }
 
 void SiemensSimaticMp377Sm501PowerGpio::UpdateAc97Link() {
-    emu_.Get<SiemensSimaticMp377Sm501Ac97>().UpdateStatus();
+    ac97_.Get().UpdateStatus();
 }
 
 REGISTER_SERVICE(SiemensSimaticMp377Sm501PowerGpio);

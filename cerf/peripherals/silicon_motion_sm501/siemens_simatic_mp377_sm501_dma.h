@@ -4,8 +4,12 @@
 
 #include <cstdint>
 
+class EmulatedMemory;
+
 namespace siemens_simatic_mp377 {
 
+class SiemensSimaticMp377Sm501AudioMcu;
+class SiemensSimaticMp377Sm501Fb;
 class SiemensSimaticMp377Sm501Regs;
 
 inline constexpr uint32_t kSm501DmaIrqBit = 1u << 20;
@@ -56,6 +60,11 @@ private:
     void AbortTransfer();
     void AbortDma1();
     SiemensSimaticMp377Sm501Regs& Registers() const;
+
+    SiemensSimaticMp377Sm501Regs* registers_ = nullptr;
+    EmulatedMemory* memory_ = nullptr;
+    SiemensSimaticMp377Sm501Fb* fb_ = nullptr;
+    SiemensSimaticMp377Sm501AudioMcu* mcu_ = nullptr;
 };
 
 } // namespace siemens_mp377

@@ -4,9 +4,7 @@
 
 namespace {
 
-constexpr uint32_t kFixedRateHz = 48000u;
-constexpr uint16_t kFixedRate   = 0xBB80u;
-constexpr uint64_t kBitClockHz  = 12288000u;
+constexpr uint16_t kFixedRate = 0xBB80u;
 
 }  // namespace
 
@@ -66,8 +64,8 @@ void Ac97Codec::OnExtAudioCtrlWrite() {
 }
 
 void Ac97Codec::ResetRates() {
-    dac_rate_ = kFixedRateHz;
-    adc_rate_ = kFixedRateHz;
+    dac_rate_ = kFrameRateHz;
+    adc_rate_ = kFrameRateHz;
 }
 
 void Ac97Codec::SaveRates(StateWriter& w) const {

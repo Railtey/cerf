@@ -32,6 +32,9 @@ bool SiemensSimaticMp377Sm501Regs::ShouldRegister() {
     return bd && bd->GetBoardFamilyId() == BoardFamilyId::SiemensSimaticMp377;
 }
 void SiemensSimaticMp377Sm501Regs::OnReady() {
+    irq_ = &emu_.Get<IrqController>();
+    power_ = &emu_.Get<SiemensSimaticMp377Sm501PowerGpio>();
+    video_ = &emu_.Get<SiemensSimaticMp377Sm501Video>();
     ResetDevice(false);
     emu_.Get<PeripheralDispatcher>().Register(this);
     emu_.Get<GuestCpuReset>().RegisterResetListener([this](ResetLineKind) {
@@ -40,7 +43,7 @@ void SiemensSimaticMp377Sm501Regs::OnReady() {
 }
 void SiemensSimaticMp377Sm501Regs::ResetDevice(bool synchronize_audio) {
     std::unique_lock<std::recursive_mutex> ac97_lock;
-    if (synchronize_audio) ac97_lock = emu_.Get<SiemensSimaticMp377Sm501Ac97>().LockForState();
+    if (synchronize_audio) ac97_lock = ac97_.Get().LockForState();
     {
         std::lock_guard<std::mutex> irq_lock(sm501_irq_mutex_);
         regs_.assign(kSm501RegsBytes / 4u, 0u);
@@ -51,12 +54,12 @@ void SiemensSimaticMp377Sm501Regs::ResetDevice(bool synchronize_audio) {
         regs_[kSm501ArbitrationControlReg / 4u] = 0x05146732u;
         regs_[0x000068u / 4u] = 0x00090900u;
         regs_[0x080200u / 4u] = 0x00010000u;
-        emu_.Get<SiemensSimaticMp377Sm501PowerGpio>().Initialize(*this);
+        power_->Initialize(*this);
         panel_fb_raw_ = 0u;
         panel_pitch_bytes_ = 0u;
     }
-    emu_.Get<SiemensSimaticMp377Sm501Video>().ResetDisplayMode();
-    emu_.Get<IrqController>().SetSharedIrqLevel(kMp377Sm501IrqSource, kMp377Sm501IrqContributor, false);
+    video_->ResetDisplayMode();
+    irq_->SetSharedIrqLevel(kMp377Sm501IrqSource, kMp377Sm501IrqContributor, false);
 }
 uint32_t SiemensSimaticMp377Sm501Regs::MmioBase() const {
     return kSm501RegsBarPa;
@@ -120,25 +123,24 @@ uint32_t SiemensSimaticMp377Sm501Regs::ReadWord(uint32_t a) {
     uint32_t off = 0;
     if (!Sm501RegsPaToOffset(a, off)) HaltUnsupportedAccess("SM501 regs read outside BAR1", a, 0);
     std::unique_lock<std::recursive_mutex> ac97_lock;
-    if (Sm501IsAc97SharedRegister(off)) ac97_lock = emu_.Get<SiemensSimaticMp377Sm501Ac97>().LockForState();
+    if (Sm501IsAc97SharedRegister(off)) ac97_lock = ac97_.Get().LockForState();
     if (SiemensSimaticMp377Sm501Dma::IsRegister(off)) {
-        const uint32_t value = emu_.Get<SiemensSimaticMp377Sm501Dma>().Read(off);
+        const uint32_t value = dma_.Get().Read(off);
         return value;
     }
 
     if (SiemensSimaticMp377Sm501Ac97::IsRegister(off)) {
-        const uint32_t value = emu_.Get<SiemensSimaticMp377Sm501Ac97>().Read(off, true);
+        const uint32_t value = ac97_.Get().Read(off, true);
         return value;
     }
 
     if (SiemensSimaticMp377Sm501AudioMcu::IsControlRegister(off)) {
-        auto& mcu = emu_.Get<SiemensSimaticMp377Sm501AudioMcu>();
-        const uint32_t value = mcu.ReadControl(a, off);
+        const uint32_t value = mcu_.Get().ReadControl(a, off);
         return value;
     }
 
     if (SiemensSimaticMp377Sm501AudioMcu::IsSram(off)) {
-        return emu_.Get<SiemensSimaticMp377Sm501AudioMcu>().ReadSramWord(a, off);
+        return mcu_.Get().ReadSramWord(a, off);
     }
 
     uint32_t value = 0u;
@@ -146,23 +148,23 @@ uint32_t SiemensSimaticMp377Sm501Regs::ReadWord(uint32_t a) {
     case kSm501DramControlReg: value = regs_[off / 4u]; break;
     case kSm501CommandListStatusReg: value = kSm501CommandListIdle; break;
     case kSm501IrqStatusReg:
-        value = emu_.Get<SiemensSimaticMp377SmiBridge>().Sm501MasterStatus() | Sm501LatchedInterruptStatus();
+        value = smi_bridge_.Get().Sm501MasterStatus() | Sm501LatchedInterruptStatus();
         break;
     case kSm501IrqMaskReg: value = Sm501InterruptMask(); break;
-    case kSm501CurrentGateReg: value = emu_.Get<SiemensSimaticMp377Sm501PowerGpio>().CurrentGate(); break;
-    case kSm501CurrentClockReg: value = emu_.Get<SiemensSimaticMp377Sm501PowerGpio>().CurrentClock(); break;
+    case kSm501CurrentGateReg: value = power_->CurrentGate(); break;
+    case kSm501CurrentClockReg: value = power_->CurrentClock(); break;
     case kSm501PowerMode0GateReg:
     case kSm501PowerMode0ClockReg:
     case kSm501PowerMode1GateReg:
     case kSm501PowerMode1ClockReg:
     case kSm501SleepModeGateReg:
     case kSm501PowerModeControlReg: value = regs_[off / 4u]; break;
-    case kSm501GpioDataLowReg: value = emu_.Get<SiemensSimaticMp377Sm501PowerGpio>().ReadGpioDataLow(); break;
-    case kSm501GpioDirectionLowReg: value = emu_.Get<SiemensSimaticMp377Sm501PowerGpio>().ReadGpioDirectionLow(); break;
+    case kSm501GpioDataLowReg: value = power_->ReadGpioDataLow(); break;
+    case kSm501GpioDirectionLowReg: value = power_->ReadGpioDirectionLow(); break;
     case kSm501DeviceIdReg: value = kSm501DeviceId; break;
     case 0x020008u:
     case 0x020108u: {
-        value = emu_.Get<SiemensSimaticMp377TouchPanel>().ReadSmiSampleWord();
+        value = touch_panel_.Get().ReadSmiSampleWord();
         RefreshSspInterruptCascade();
         break;
     }
@@ -172,7 +174,7 @@ uint32_t SiemensSimaticMp377Sm501Regs::ReadWord(uint32_t a) {
         constexpr uint32_t kTransmitEmpty = 0x3u;
         constexpr uint32_t kReceiveNotEmpty = 0x1u << 2;
         value = kTransmitEmpty;
-        if (emu_.Get<SiemensSimaticMp377TouchPanel>().HasPendingSmiResponse()) value |= kReceiveNotEmpty;
+        if (touch_panel_.Get().HasPendingSmiResponse()) value |= kReceiveNotEmpty;
         break;
     }
     case 0x020014u:
@@ -212,12 +214,11 @@ void SiemensSimaticMp377Sm501Regs::WriteWord(uint32_t a, uint32_t v) {
 
 void SiemensSimaticMp377Sm501Regs::WriteResolvedWord(uint32_t a, uint32_t off, uint32_t v) {
     std::unique_lock<std::recursive_mutex> ac97_lock;
-    if (Sm501IsAc97SharedRegister(off)) ac97_lock = emu_.Get<SiemensSimaticMp377Sm501Ac97>().LockForState();
+    if (Sm501IsAc97SharedRegister(off)) ac97_lock = ac97_.Get().LockForState();
     if (SiemensSimaticMp377Sm501AudioMcu::IsSram(off)) {
-        auto& mcu = emu_.Get<SiemensSimaticMp377Sm501AudioMcu>();
         const uint32_t old_value = regs_[off / 4u];
         regs_[off / 4u] = v;
-        mcu.WriteSramWord(a, off, old_value, v);
+        mcu_.Get().WriteSramWord(a, off, old_value, v);
         return;
     }
     if (!SiemensSimaticMp377Sm501Dma::IsRegister(off) && !SiemensSimaticMp377Sm501Ac97::IsRegister(off) &&
@@ -276,16 +277,16 @@ void SiemensSimaticMp377Sm501Regs::WriteResolvedWord(uint32_t a, uint32_t off, u
     case 0x080000u:
         /* SM501 display controller, Panel Display Control. */
         regs_[off / 4u] = v & 0x0FFF73FFu;
-        emu_.Get<SiemensSimaticMp377Sm501Video>().PublishDisplayMode();
+        video_->PublishDisplayMode();
         return;
     case 0x080200u:
         /* QEMU v10.1 hw/display/sm501.c sm501_disp_ctrl_write(). */
         regs_[off / 4u] = v & 0x0003FFFFu;
-        emu_.Get<SiemensSimaticMp377Sm501Video>().PublishDisplayMode();
+        video_->PublishDisplayMode();
         return;
     case 0x080024u:
     case 0x08002Cu:
-        emu_.Get<SiemensSimaticMp377Sm501Video>().PublishDisplayMode();
+        video_->PublishDisplayMode();
         return;
     case 0x080204u:
     case 0x080230u:
@@ -296,13 +297,13 @@ void SiemensSimaticMp377Sm501Regs::WriteResolvedWord(uint32_t a, uint32_t off, u
         return;
     case 0x08020Cu:
         regs_[off / 4u] = v & 0x0FFF0FFFu;
-        emu_.Get<SiemensSimaticMp377Sm501Video>().PublishDisplayMode();
+        video_->PublishDisplayMode();
         return;
     case 0x080214u:
         /* SM501 Databook v1.02 section 5, CRT Vertical Total:
            VT bits[26:16], VDE bits[10:0]. */
         regs_[off / 4u] = v & 0x07FF07FFu;
-        emu_.Get<SiemensSimaticMp377Sm501Video>().PublishDisplayMode();
+        video_->PublishDisplayMode();
         return;
     case 0x080210u:
         regs_[off / 4u] = v & 0x00FF0FFFu;
@@ -338,27 +339,26 @@ void SiemensSimaticMp377Sm501Regs::WriteResolvedWord(uint32_t a, uint32_t off, u
     }
 
     if (SiemensSimaticMp377Sm501Dma::IsRegister(off)) {
-        emu_.Get<SiemensSimaticMp377Sm501Dma>().Write(off, v);
+        dma_.Get().Write(off, v);
         return;
     }
 
     if (off == kSm501PowerModeControlReg) {
-        emu_.Get<SiemensSimaticMp377Sm501PowerGpio>().WritePowerModeControl(v);
-        emu_.Get<SiemensSimaticMp377Sm501PowerGpio>().UpdateAc97Link();
+        power_->WritePowerModeControl(v);
+        power_->UpdateAc97Link();
     } else if (off == kSm501PowerMode0GateReg || off == kSm501PowerMode0ClockReg || off == kSm501PowerMode1GateReg ||
                off == kSm501PowerMode1ClockReg || off == kSm501SleepModeGateReg || off == kSm501Gpio31_0ControlReg ||
                off == kSm501GpioDataLowReg || off == kSm501GpioDirectionLowReg) {
-        emu_.Get<SiemensSimaticMp377Sm501PowerGpio>().UpdateAc97Link();
+        power_->UpdateAc97Link();
     }
 
     if (SiemensSimaticMp377Sm501Ac97::IsRegister(off)) {
-        emu_.Get<SiemensSimaticMp377Sm501Ac97>().Write(off, old_value, v);
+        ac97_.Get().Write(off, old_value, v);
         return;
     }
 
     if (SiemensSimaticMp377Sm501AudioMcu::IsControlRegister(off)) {
-        auto& mcu = emu_.Get<SiemensSimaticMp377Sm501AudioMcu>();
-        mcu.WriteControl(off, old_value, v);
+        mcu_.Get().WriteControl(off, old_value, v);
         return;
     }
 
@@ -371,14 +371,14 @@ void SiemensSimaticMp377Sm501Regs::WriteResolvedWord(uint32_t a, uint32_t off, u
     }
 
     if (off == 0x020008u || off == 0x020108u) {
-        if (emu_.Get<SiemensSimaticMp377TouchPanel>().QueueSmiCommand(static_cast<uint16_t>(v & 0xFFFFu)))
+        if (touch_panel_.Get().QueueSmiCommand(static_cast<uint16_t>(v & 0xFFFFu)))
             regs_[((off & ~0x1Fu) + 0x14u) / 4u] |= 1u << 2;
         RefreshSspInterruptCascade();
     }
     if (SiemensSimaticMp377Sm501Blitter::IsCommandRegister(off) && (v & 0x80000000u)) {
-        emu_.Get<SiemensSimaticMp377Sm501Blitter>().ExecuteCommand(v);
+        blitter_.Get().ExecuteCommand(v);
     }
-    if (SiemensSimaticMp377Sm501Blitter::IsDataPort(off)) emu_.Get<SiemensSimaticMp377Sm501Blitter>().WriteDataPort(v);
+    if (SiemensSimaticMp377Sm501Blitter::IsDataPort(off)) blitter_.Get().WriteDataPort(v);
 }
 
 uint32_t SiemensSimaticMp377Sm501Regs::SspInterruptStatus(uint32_t base) const {
@@ -387,7 +387,7 @@ uint32_t SiemensSimaticMp377Sm501Regs::SspInterruptStatus(uint32_t base) const {
     constexpr uint32_t kTransmit = 1u << 1;
     constexpr uint32_t kOverflow = 1u << 2;
     uint32_t status = kTransmit | (regs_[(base + 0x14u) / 4u] & kOverflow);
-    if (emu_.Get<SiemensSimaticMp377TouchPanel>().PendingSmiResponseCount() >= 4u) status |= kReceive;
+    if (touch_panel_.Get().PendingSmiResponseCount() >= 4u) status |= kReceive;
     return status;
 }
 
@@ -400,7 +400,7 @@ void SiemensSimaticMp377Sm501Regs::RefreshSspInterruptCascade() {
         const uint32_t control = regs_[(base + 0x04u) / 4u];
         pending = pending || ((control & SspInterruptStatus(base) & kInterruptEnableBits) != 0u);
     }
-    auto& bridge = emu_.Get<SiemensSimaticMp377SmiBridge>();
+    auto& bridge = smi_bridge_.Get();
     if (pending)
         bridge.AssertPending();
     else
@@ -446,9 +446,7 @@ void SiemensSimaticMp377Sm501Regs::RefreshSm501InterruptLine() {
     std::lock_guard<std::mutex> lock(sm501_irq_mutex_);
     const uint32_t active = regs_[kSm501IrqStatusReg / 4u] & regs_[kSm501IrqMaskReg / 4u] &
                             kSm501LatchedIrqBits;
-    emu_.Get<IrqController>().SetSharedIrqLevel(kMp377Sm501IrqSource,
-                                                kMp377Sm501IrqContributor,
-                                                active != 0u);
+    irq_->SetSharedIrqLevel(kMp377Sm501IrqSource, kMp377Sm501IrqContributor, active != 0u);
 }
 void SiemensSimaticMp377Sm501Regs::RaiseSm501InterruptBits(uint32_t bits) {
     bits &= kSm501LatchedIrqBits;
@@ -468,6 +466,12 @@ void SiemensSimaticMp377Sm501Regs::ClearSm501InterruptBits(uint32_t bits) {
         regs_[kSm501IrqStatusReg / 4u] &= ~bits;
     }
     RefreshSm501InterruptLine();
+}
+
+void SiemensSimaticMp377Sm501Regs::PostRestore() {
+    RefreshSm501InterruptLine();
+    ac97_.Get().PostRestore();
+    touch_panel_.Get().PostRestore();
 }
 
 REGISTER_SERVICE(SiemensSimaticMp377Sm501Regs);

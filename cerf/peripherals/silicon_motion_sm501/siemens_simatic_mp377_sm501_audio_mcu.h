@@ -14,6 +14,7 @@ namespace siemens_simatic_mp377 {
 
 class SiemensSimaticMp377Sm501Regs;
 class SiemensSimaticMp377Sm501Ac97;
+class SiemensSimaticMp377Sm501AudioOutput;
 
 // SM501 Databook ch. 12 controller: 8051 core, SRAM ownership and the
 // CPU/8051 protocol mailbox used by the MP377 VGXaudio firmware.
@@ -38,7 +39,7 @@ public:
     void WriteSramByte(uint32_t offset, uint8_t value);
     void RunMmioSlice(uint32_t budget);
     void SignalAc97Interrupt();
-    void RunAc97Frames(uint32_t frames);
+    void ServiceAc97Frame();
     void SaveState(StateWriter& writer) const;
     void RestoreState(StateReader& reader);
 
@@ -64,7 +65,6 @@ private:
     void ResetDevice();
     void RunSlice(uint32_t budget, bool clock_ac97);
     uint32_t StepCore(bool clock_ac97 = true);
-    void RunOneAc97Frame();
     void RunUntilMailboxReady(uint8_t target);
     void RunUntilMailboxBusy();
     void RunMailboxCommand();
@@ -78,6 +78,9 @@ private:
     [[noreturn]] void Fault(const char* what, uint32_t detail) override;
 
     sm501_8051::Core core_;
+    SiemensSimaticMp377Sm501Regs* registers_ = nullptr;
+    SiemensSimaticMp377Sm501Ac97* ac97_ = nullptr;
+    SiemensSimaticMp377Sm501AudioOutput* output_ = nullptr;
     std::atomic<bool> enabled_{false};
     std::atomic<bool> from_cpu_irq_pending_{false};
     std::atomic<bool> to_cpu_irq_pending_{false};

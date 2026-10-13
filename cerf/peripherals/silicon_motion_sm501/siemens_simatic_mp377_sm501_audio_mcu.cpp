@@ -32,6 +32,9 @@ bool SiemensSimaticMp377Sm501AudioMcu::ShouldRegister() {
 }
 
 void SiemensSimaticMp377Sm501AudioMcu::OnReady() {
+    registers_ = &emu_.Get<SiemensSimaticMp377Sm501Regs>();
+    ac97_ = &emu_.Get<SiemensSimaticMp377Sm501Ac97>();
+    output_ = &emu_.Get<SiemensSimaticMp377Sm501AudioOutput>();
     ResetDevice();
     emu_.Get<GuestCpuReset>().RegisterResetListener([this](ResetLineKind) {
         if (emu_.Get<GuestCpuReset>().DeliveredResetWasResume()) return;
@@ -57,7 +60,7 @@ bool SiemensSimaticMp377Sm501AudioMcu::IsEnabled() const {
 
 uint32_t SiemensSimaticMp377Sm501AudioMcu::ReadControl(uint32_t, uint32_t off) {
     std::lock_guard<std::recursive_mutex> lock(core_mutex_);
-    auto& regs = emu_.Get<SiemensSimaticMp377Sm501Regs>();
+    auto& regs = *registers_;
     switch (off) {
     case kResetReg: return enabled_.load(std::memory_order_acquire) ? 1u : 0u;
     case kModeReg: return regs.regs_[kModeReg / 4u] & 0xFFu;
@@ -73,7 +76,7 @@ uint32_t SiemensSimaticMp377Sm501AudioMcu::ReadControl(uint32_t, uint32_t off) {
 
 uint32_t SiemensSimaticMp377Sm501AudioMcu::ReadSramWord(uint32_t address, uint32_t off) {
     std::lock_guard<std::recursive_mutex> lock(core_mutex_);
-    auto& regs = emu_.Get<SiemensSimaticMp377Sm501Regs>();
+    auto& regs = *registers_;
     const bool mailbox_state = (off & ~3u) == (kMailboxReady & ~3u);
     /* siemens_mp377_v1040 SM501 8051 firmware: CODE:017C and CODE:03F5
        expose the two startup phases through XDATA 3FFF.  Synchronize the
@@ -101,7 +104,7 @@ uint32_t SiemensSimaticMp377Sm501AudioMcu::ReadSramWord(uint32_t address, uint32
 
 void SiemensSimaticMp377Sm501AudioMcu::WriteControl(uint32_t off, uint32_t old_value, uint32_t value) {
     std::lock_guard<std::recursive_mutex> lock(core_mutex_);
-    auto& regs = emu_.Get<SiemensSimaticMp377Sm501Regs>();
+    auto& regs = *registers_;
     switch (off) {
     case kResetReg: {
         const bool old_enabled = enabled_.load(std::memory_order_acquire);
@@ -140,7 +143,7 @@ void SiemensSimaticMp377Sm501AudioMcu::WriteControl(uint32_t off, uint32_t old_v
 
 void SiemensSimaticMp377Sm501AudioMcu::WriteSramWord(uint32_t address, uint32_t off, uint32_t old_value, uint32_t value) {
     std::lock_guard<std::recursive_mutex> lock(core_mutex_);
-    auto& regs = emu_.Get<SiemensSimaticMp377Sm501Regs>();
+    auto& regs = *registers_;
     if (IsProgramSram(off) && IsEnabled()) {
         regs.regs_[off / 4u] = old_value;
         LOG(Caution,
@@ -168,7 +171,7 @@ void SiemensSimaticMp377Sm501AudioMcu::Reset() {
 
 void SiemensSimaticMp377Sm501AudioMcu::ResetDevice() {
     std::lock_guard<std::recursive_mutex> lock(core_mutex_);
-    auto& regs = emu_.Get<SiemensSimaticMp377Sm501Regs>();
+    auto& regs = *registers_;
     enabled_.store(false, std::memory_order_release);
     from_cpu_irq_pending_.store(false, std::memory_order_release);
     to_cpu_irq_pending_.store(false, std::memory_order_release);
@@ -192,9 +195,8 @@ void SiemensSimaticMp377Sm501AudioMcu::RunSlice(uint32_t budget, bool clock_ac97
 uint32_t SiemensSimaticMp377Sm501AudioMcu::StepCore(bool clock_ac97) {
     const uint32_t cycles = core_.Step(*this);
     if (clock_ac97) {
-        const auto& regs = emu_.Get<SiemensSimaticMp377Sm501Regs>();
-        const uint8_t mode = static_cast<uint8_t>(regs.regs_[kModeReg / 4u]);
-        emu_.Get<SiemensSimaticMp377Sm501Ac97>().AdvanceMachineCycles(cycles, mode);
+        const uint8_t mode = static_cast<uint8_t>(registers_->regs_[kModeReg / 4u]);
+        ac97_->AdvanceMachineCycles(cycles, mode);
     }
     return cycles;
 }
@@ -268,8 +270,11 @@ void SiemensSimaticMp377Sm501AudioMcu::SignalAc97Interrupt() {
     core_.SignalAc97Interrupt();
 }
 
-void SiemensSimaticMp377Sm501AudioMcu::RunOneAc97Frame() {
-    emu_.Get<SiemensSimaticMp377Sm501Ac97>().ClockFrame();
+void SiemensSimaticMp377Sm501AudioMcu::ServiceAc97Frame() {
+    std::lock_guard<std::recursive_mutex> lock(core_mutex_);
+    if (!IsEnabled() || !core_.CanTakeAc97Interrupt()) return;
+    /* SM501 MMCC Databook v1.02, chapters 11/12; siemens_mp377_v1040
+       SM501 firmware CODE:09A2..0A43, XDATA 3FFCh/9008h. */
     constexpr uint64_t kInstructionWatchdog = 4096u;
     const uint64_t first_instruction = core_.Executed();
     bool entered = false;
@@ -281,14 +286,6 @@ void SiemensSimaticMp377Sm501AudioMcu::RunOneAc97Frame() {
     emu_.Get<Fatal>().Die(
         "[MP377 SM501 audio MCU] AC97 frame watchdog pc=0x%04X instructions=%llu",
         core_.ProgramCounter(), static_cast<unsigned long long>(core_.Executed() - first_instruction));
-}
-
-void SiemensSimaticMp377Sm501AudioMcu::RunAc97Frames(uint32_t frames) {
-    std::lock_guard<std::recursive_mutex> lock(core_mutex_);
-    if (!IsEnabled()) return;
-    /* SM501 MMCC Databook v1.02, chapters 11/12; siemens_mp377_v1040
-       SM501 firmware CODE:09A2..0A43, XDATA 3FFCh/9008h. */
-    for (uint32_t frame = 0u; frame < frames; ++frame) RunOneAc97Frame();
 }
 
 void SiemensSimaticMp377Sm501AudioMcu::SaveState(StateWriter& w) const {
@@ -327,14 +324,14 @@ void SiemensSimaticMp377Sm501AudioMcu::Fault(const char* what, uint32_t detail) 
 }
 
 uint8_t SiemensSimaticMp377Sm501AudioMcu::FetchCode(uint16_t address) const {
-    const auto& regs = emu_.Get<SiemensSimaticMp377Sm501Regs>();
+    const auto& regs = *registers_;
     /* SM501 Databook v1.02, Appendix B-1, Figure 12-2. */
     const uint16_t sram_address = static_cast<uint16_t>(address & 0x3FFFu);
     return static_cast<uint8_t>(regs.regs_[(kProgramBase + sram_address) / 4u] >> ((sram_address & 3u) * 8u));
 }
 
 uint8_t SiemensSimaticMp377Sm501AudioMcu::ReadExternal(uint16_t address) {
-    auto& regs = emu_.Get<SiemensSimaticMp377Sm501Regs>();
+    auto& regs = *registers_;
     if (address < 0x4000u) return AudioByte(kProgramBase + address);
     if (address >= 0x9004u && address < 0x9010u) {
         const uint32_t byte = address & 3u;
@@ -351,25 +348,21 @@ uint8_t SiemensSimaticMp377Sm501AudioMcu::ReadExternal(uint16_t address) {
         }
     }
     if (address >= 0x9100u && address < 0x9184u) {
-        return emu_.Get<SiemensSimaticMp377Sm501Ac97>().ReadByte(SiemensSimaticMp377Sm501Ac97::kBase + address - 0x9100u,
-                                                          address == 0x9181u);
+        return ac97_->ReadByte(SiemensSimaticMp377Sm501Ac97::kBase + address - 0x9100u, address == 0x9181u);
     }
     emu_.Get<Fatal>().Die("[MP377 SM501 8051] XREAD of unmodelled address 0x%04X at PC 0x%04X", address,
                           core_.ProgramCounter());
 }
 
 void SiemensSimaticMp377Sm501AudioMcu::WriteExternal(uint16_t address, uint8_t value) {
-    auto& regs = emu_.Get<SiemensSimaticMp377Sm501Regs>();
+    auto& regs = *registers_;
     if (address < 0x4000u) {
         SetAudioByte(kProgramBase + address, value);
         /* siemens_mp377_v1040 SM501 8051 firmware command 07,
            CODE:0F46..0F6D, XDATA 3FF1. */
         if (address == static_cast<uint16_t>(kMailboxStatus - kProgramBase) && value != 0u) {
             const uint8_t command = AudioByte(kMailboxCmd);
-            if (command == 0x07u)
-                emu_.Get<SiemensSimaticMp377Sm501AudioOutput>().SetPlaybackEnabled(AudioByte(kMailboxArg0) != 0u);
-            else if (command == 0x0Eu)
-                emu_.Get<SiemensSimaticMp377Sm501AudioOutput>().SetCaptureEnabled(AudioByte(kMailboxArg0) != 0u);
+            if (command == 0x07u) output_->SetPlaybackEnabled(AudioByte(kMailboxArg0) != 0u);
         }
         return;
     }
@@ -397,7 +390,7 @@ void SiemensSimaticMp377Sm501AudioMcu::WriteExternal(uint16_t address, uint8_t v
         }
     }
     if (address >= 0x9100u && address < 0x9184u) {
-        emu_.Get<SiemensSimaticMp377Sm501Ac97>().WriteByte(SiemensSimaticMp377Sm501Ac97::kBase + address - 0x9100u, value);
+        ac97_->WriteByte(SiemensSimaticMp377Sm501Ac97::kBase + address - 0x9100u, value);
         return;
     }
     emu_.Get<Fatal>().Die("[MP377 SM501 8051] XWRITE of unmodelled address 0x%04X = 0x%02X "
@@ -406,19 +399,19 @@ void SiemensSimaticMp377Sm501AudioMcu::WriteExternal(uint16_t address, uint8_t v
 }
 
 uint8_t SiemensSimaticMp377Sm501AudioMcu::AudioByte(uint32_t off) const {
-    const auto& regs = emu_.Get<SiemensSimaticMp377Sm501Regs>();
+    const auto& regs = *registers_;
     return static_cast<uint8_t>(regs.regs_[(off & ~3u) / 4u] >> ((off & 3u) * 8u));
 }
 
 void SiemensSimaticMp377Sm501AudioMcu::SetAudioByte(uint32_t off, uint8_t value) {
-    auto& regs = emu_.Get<SiemensSimaticMp377Sm501Regs>();
+    auto& regs = *registers_;
     auto& word = regs.regs_[(off & ~3u) / 4u];
     const uint32_t shift = (off & 3u) * 8u;
     word = (word & ~(0xFFu << shift)) | (static_cast<uint32_t>(value) << shift);
 }
 
 void SiemensSimaticMp377Sm501AudioMcu::ClearProtocolInterrupt() {
-    auto& regs = emu_.Get<SiemensSimaticMp377Sm501Regs>();
+    auto& regs = *registers_;
     regs.ClearSm501InterruptBits(kOutputIrqBit);
     to_cpu_irq_pending_.store(false, std::memory_order_release);
 }

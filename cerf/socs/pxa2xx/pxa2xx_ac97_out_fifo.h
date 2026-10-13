@@ -78,7 +78,7 @@ private:
     Pxa2xxAc97Interrupt* irq_   = nullptr;
 
     DmaBurstFifo       tx_;
-    Pxa2xxFrameSlotLaw law_{Pxa2xxAc97Link::kFrameRateHz};
+    Pxa2xxFrameSlotLaw law_{Ac97Codec::kFrameRateHz};
     bool     primed_      = false;
     uint64_t prime_frame_ = 0;
     uint64_t out_frames_  = 0;

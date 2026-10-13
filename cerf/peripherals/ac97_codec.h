@@ -21,6 +21,12 @@ class Ac97Codec : public Service {
 public:
     using Service::Service;
 
+    /* AC '97 Component Specification Revision 2.2 section 4.2 (page 27): "SYNC, fixed at 48 kHz, is
+       derived by dividing down the serial bit clock (BIT_CLK). BIT_CLK, fixed at 12.288 MHz". */
+    static constexpr uint64_t kBitClockHz   = 12288000u;
+    static constexpr uint32_t kFrameRateHz  = 48000u;
+    static constexpr uint64_t kBitsPerFrame = kBitClockHz / kFrameRateHz;
+
     void AttachFrameSource(Ac97FrameSource* source) { frames_ = source; }
 
     virtual uint16_t ReadReg(uint32_t reg, uint64_t frame) = 0;
@@ -89,6 +95,6 @@ protected:
 private:
     uint16_t NearestSupported(uint16_t value) const;
 
-    uint32_t dac_rate_ = 48000u;
-    uint32_t adc_rate_ = 48000u;
+    uint32_t dac_rate_ = kFrameRateHz;
+    uint32_t adc_rate_ = kFrameRateHz;
 };

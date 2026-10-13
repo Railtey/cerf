@@ -33,12 +33,15 @@ public:
     /* siemens_mp377_v1040 SM501 8051 firmware: CODE:0030/0033/003B/0043,
        handlers CODE:08AF..0A80 and CODE:0E9D..0EEF, XDATA 900Ch. */
     void SignalProtocolInterrupt() { sfr_.SignalExtended(1u); }
-    void SignalAc97Interrupt() { sfr_.SignalExtended(2u); }
+    void SignalAc97Interrupt() { sfr_.SignalExtended(kAc97Line); }
+    bool CanTakeAc97Interrupt() const { return sfr_.CanTakeExtended(kAc97Line); }
 
     void SaveState(StateWriter& writer) const { sfr_.SaveState(writer); }
     void RestoreState(StateReader& reader) { sfr_.RestoreState(reader); }
 
 private:
+    static constexpr uint8_t kAc97Line = 2u;
+
     uint8_t Fetch(Bus& bus) { return bus.FetchCode(sfr_.TakePcByte()); }
     uint16_t Fetch16(Bus& bus);
 

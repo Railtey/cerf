@@ -38,7 +38,7 @@ uint32_t Pxa2xxAc97Pcm::Request() const { return kRequestTx; }
 /* AC '97 Component Specification Revision 2.2 section 4.2.1.2 (page 28): "SLOTREQ bits for fixed rate,
    powered down, and all unsupported Slots should be driven with 0s". */
 Pxa2xxSlotPace Pxa2xxAc97Pcm::SlotPace() {
-    if (codec_->PcmOutEveryFrame()) return Pxa2xxSlotPace{Pxa2xxAc97Link::kFrameRateHz, 1u};
+    if (codec_->PcmOutEveryFrame()) return Pxa2xxSlotPace{Ac97Codec::kFrameRateHz, 1u};
     return Pxa2xxSlotPace{codec_->DacRateHz(), codec_->ConverterDivider()};
 }
 
@@ -47,7 +47,7 @@ uint32_t Pxa2xxAc97Pcm::HostRate() {
     const GuestCycleClock::Rate bit = bit_clock_->Internal() ? bit_clock_->Rate() : codec_->BitClockRate();
     const Pxa2xxSlotPace        pace = SlotPace();
     return static_cast<uint32_t>(
-        bit.Scaled(pace.rate, static_cast<uint64_t>(pace.div) * Pxa2xxAc97Link::kBitClockHz).RoundedHz());
+        bit.Scaled(pace.rate, static_cast<uint64_t>(pace.div) * Ac97Codec::kBitClockHz).RoundedHz());
 }
 
 void Pxa2xxAc97Pcm::OnWord(uint32_t value) { QueueHost(&value, sizeof(value)); }

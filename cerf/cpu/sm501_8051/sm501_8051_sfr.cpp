@@ -129,6 +129,11 @@ bool Sfr::TakeVectorBlock() {
     return blocked;
 }
 
+bool Sfr::CanTakeExtended(uint8_t line) const {
+    const uint8_t mask = static_cast<uint8_t>(1u << line);
+    return (state_.ie & kIeGlobal) != 0u && (state_.eie & mask) != 0u && CanTakeLevel((state_.eip & mask) != 0u);
+}
+
 /* MCS-51 Hardware Description, Interrupt Enables/Priorities;
    siemens_mp377_v1040 SM501 firmware CODE:0030/0033/0036. */
 bool Sfr::ServiceInterrupts() {
@@ -137,13 +142,11 @@ bool Sfr::ServiceInterrupts() {
 
     for (uint8_t pass = 0u; pass < 2u; ++pass) {
         const bool want_high = pass == 0u;
-        if (!CanTakeLevel(want_high)) continue;
-
         for (uint8_t line = 0u; line < 8u; ++line) {
             const uint8_t mask = static_cast<uint8_t>(1u << line);
             if ((state_.extended_pending & mask) == 0u) continue;
-            if ((state_.eie & mask) == 0u) continue;
             if (((state_.eip & mask) != 0u) != want_high) continue;
+            if (!CanTakeExtended(line)) continue;
             state_.extended_pending = static_cast<uint8_t>(state_.extended_pending & ~mask);
             EnterVector(static_cast<uint16_t>(kVectorExtendedBase + kVectorStride * line),
                         want_high);
