@@ -26,7 +26,7 @@
 
 ## Downloads
 
-To use the newest features, download the WIP build (7.0) from the artifacts [![build](https://github.com/gweslab/cerf/actions/workflows/build.yml/badge.svg)](https://github.com/gweslab/cerf/actions/workflows/build.yml). For a stable version, go to the [latest release](https://github.com/gweslab/cerf/releases/latest).
+To use the newest features, download the WIP build (8.0) from the artifacts [![build](https://github.com/gweslab/cerf/actions/workflows/build.yml/badge.svg)](https://github.com/gweslab/cerf/actions/workflows/build.yml). For a stable version, go to the [latest release](https://github.com/gweslab/cerf/releases/latest).
 
 If you need any additional help, e.g. what to run and how to use the emulator - visit [cerf.cx](https://cerf.cx/articles).
 
@@ -373,6 +373,13 @@ run_claude.cmd
   </thead>
   <tbody>
     <tr>
+      <td>v8.0</td>
+      <td>TBA</td>
+      <td>
+
+      </td>
+    </tr>
+    <tr>
       <td>v7.0</td>
       <td>14 Oct 2026</td>
       <td>
@@ -441,36 +448,6 @@ run_claude.cmd
           ✅ Shared folders no longer crash Explorer on Windows CE .NET<br/>
           ✅ Fixed memory errors on Windows CE 6 branch<br/>
           ✅ Fixed shared storage caps</p>
-      </td>
-    </tr>
-    <tr>
-      <td>v6.7</td>
-      <td>23 Jul 2026</td>
-      <td>
-        <p><b>📱 Devices</b><br/>
-          🆕 Casio Cassiopeia EM-500 support (bare bones)<br/>
-          ✅ Sharp Mobilon HC-4100: fixed suspend crash</p>
-        <p><b>💿 Emulator</b><br/>
-          🆕 Discord Rich Presence - shows the current device and OS in your Discord profile<br/>
-          🆕 UI updates<br/>
-          ✅ Fixed framebuffer not relatching on suspend/resume<br/>
-          ✅ Fixed 100% CPU usage and UI deadlocks on Windows XP on non-framebuffer tabs</p>
-        <p><b>🚀 Launcher</b><br/>
-          🆕 UI refresh<br/>
-          ✅ Metadata-only remote updates no longer re-download the entire ROM<br/>
-          ✅ Fixed the command-line interface producing no output<br/>
-          ✅ Configuration, updates and removal are now blocked while a device is running<br/>
-          ✅ Single click on a device preview now launches it everywhere<br/>
-          ✅ Merged the two launcher builds into a single Windows Vista+ executable<br/>
-          ❌ Removed the redundant soc_family and board_name fields from cerf.json</p>
-        <p><b>💾 CE Apps</b><br/>
-          ✅ CerfDemo: UI and performance improvements</p>
-        <p><b>✨ Guest Additions</b><br/>
-          🆕 High refresh rate support - use Windows CE with 240 hz display! (Or whatever Hz you have). Yes, this should be taken LITERALLY. WinCE WILL render 240 fps on your 240 hz monitor. The guest video mode and host window scanout follow the host monitor&#x27;s refresh rate<br/>
-          🆕 --screen-refresh-rate flag to set the refresh rate manually<br/>
-          🆕 Touch-calibration helper - offers to switch to the stock input device when the guest opens a calibration screen, and switches back afterwards<br/>
-          🆕 Color scheme overrides - colorize grayscale devices with a forced system color scheme<br/>
-          ✅ Input devices now run at the proper priority, staying responsive under heavy guest CPU load</p>
       </td>
     </tr>
     <tr>
