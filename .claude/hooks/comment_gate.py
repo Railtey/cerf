@@ -81,8 +81,9 @@ def names_repo_path(text, tree):
     return False
 
 
-def c_block_comments(lines):
+def c_comments(lines):
     blocks = []
+    tails = []
     in_block = False
     start = None
     for idx, line in enumerate(lines, start=1):
@@ -113,6 +114,8 @@ def c_block_comments(lines):
                 continue
             if c == "/" and i + 1 < n:
                 if line[i + 1] == "/":
+                    if line[:i].strip():
+                        tails.append((idx, i))
                     i = n
                     continue
                 if line[i + 1] == "*":
@@ -121,7 +124,7 @@ def c_block_comments(lines):
                     i += 2
                     continue
             i += 1
-    return blocks
+    return blocks, tails
 
 
 def whole_line_runs(lines, marker, covered, skip_shebang):
@@ -162,6 +165,10 @@ def py_docstrings(src):
     return found
 
 
+def joined(lines, start, end):
+    return "\n".join(lines[start - 1:end])
+
+
 def comment_blocks(lower, lines, src):
     spans = []
     if lower.endswith(PY_EXTS):
@@ -169,19 +176,31 @@ def comment_blocks(lower, lines, src):
         for start, end, sole in py_docstrings(src):
             for ln in range(start, end + 1):
                 covered.add(ln)
-            spans.append((start, end, "pass" if sole else None))
+            spans.append((start, end, "pass" if sole else None,
+                          joined(lines, start, end)))
         for start, end in whole_line_runs(lines, "#", covered, True):
-            spans.append((start, end, None))
+            spans.append((start, end, None, joined(lines, start, end)))
         return spans
 
     covered = set()
-    for sl, sc, el, ec in c_block_comments(lines):
+    blocks, tails = c_comments(lines)
+    for sl, sc, el, ec in blocks:
         for ln in range(sl, el + 1):
             covered.add(ln)
         keep = (lines[sl - 1][:sc] + lines[el - 1][ec:]).rstrip()
-        spans.append((sl, el, keep if keep.strip() else None))
+        if sl == el:
+            comment = lines[sl - 1][sc:ec]
+        else:
+            comment = "\n".join([lines[sl - 1][sc:]] + lines[sl:el - 1]
+                                + [lines[el - 1][:ec]])
+        spans.append((sl, el, keep if keep.strip() else None, comment))
+    for idx, col in tails:
+        if idx in covered:
+            continue
+        spans.append((idx, idx, lines[idx - 1][:col].rstrip(),
+                      lines[idx - 1][col:]))
     for start, end in whole_line_runs(lines, "//", covered, False):
-        spans.append((start, end, None))
+        spans.append((start, end, None, joined(lines, start, end)))
     return spans
 
 
@@ -267,8 +286,8 @@ def main() -> int:
     no_citation = []
     verify = []
     tree = None
-    for start, end, keep in comment_blocks(lower, lines, src):
-        text = "\n".join(lines[start - 1:end])
+    for start, end, keep, comment in comment_blocks(lower, lines, src):
+        text = joined(lines, start, end)
         if text not in blob:
             continue
         if old_blob and text in old_blob:
@@ -276,17 +295,17 @@ def main() -> int:
         if end - start + 1 > MAX_LINES:
             too_long.append((start, end, keep))
             continue
-        if REFERENCES_PATH_RE.search(text):
+        if REFERENCES_PATH_RE.search(comment):
             ref_paths.append((start, end, keep))
             continue
         if tree is None:
             tree = repo_tree(file_path)
-        if names_repo_path(text, tree):
+        if names_repo_path(comment, tree):
             repo_paths.append((start, end, keep))
-        elif not cited(text):
+        elif not cited(comment):
             no_citation.append((start, end, keep))
         else:
-            verify.append((start, end, text))
+            verify.append((start, end, comment))
 
     try:
         rel = os.path.relpath(file_path).replace("\\", "/")
