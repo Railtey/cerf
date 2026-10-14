@@ -171,7 +171,7 @@ void SerialPcCard::RestoreState(StateReader& r) {
 }
 
 void SerialPcCard::PostRestore() {
-    uart_->RepublishIrq();
+    uart_->PostRestoreLine();
 }
 
 void SerialPcCard::WriteIo16(uint32_t offset, uint16_t value) {

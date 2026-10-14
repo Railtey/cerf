@@ -3,9 +3,11 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "../../socs/uart_line_device.h"
+
 class SerialLine;
 
-class SerialEndpoint {
+class SerialEndpoint : public UartLineDevice {
 public:
     virtual ~SerialEndpoint() = default;
 
@@ -27,6 +29,8 @@ public:
 
     /* The line cleared its modem-status register on a reset; re-assert the inputs. */
     virtual void ResendModemInputs() {}
+
+    virtual void PostRestore() {}
 
 protected:
     SerialLine* uart_ = nullptr;

@@ -10,7 +10,7 @@ uint16_t MapAxis(int v, int v_max, uint16_t lo, uint16_t hi) {
     if (v_max <= 0) return lo;
     if (v <= 0)     return lo;
     if (v >= v_max) return hi;
-    return static_cast<uint16_t>(lo + (uint32_t)v * (hi - lo) / (uint32_t)v_max);
+    return static_cast<uint16_t>(lo + static_cast<int64_t>(v) * (hi - lo) / v_max);
 }
 
 }

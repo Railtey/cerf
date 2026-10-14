@@ -1,117 +1,63 @@
-#define NOMINMAX
-
-#include "../../host/touch_input.h"
-
-#include <windows.h>
+#include "../../peripherals/touch/guest_clock_touch_input.h"
 
 #include "../../core/cerf_emulator.h"
 #include "../../core/log.h"
-#include "../../state/emulation_freeze.h"
 #include "../board_context.h"
 #include "nec_mobilepro_900_series_family_id.h"
 #include "nec_mobilepro_900_series_pco_companion.h"
 
-#include <atomic>
-#include <cstdint>
-#include <mutex>
-#include <thread>
-
 namespace {
 
-/* The PIC streams 0x04 position continuously while the pen is down (Linux mp900
-   driver). The pacer re-emits the held position so a motionless hold keeps
-   feeding pco; without it touch.dll's slow internal poll makes gwes read quick
-   taps as long holds (context menu) and breaks double-tap. */
-class NecMobilepro900SeriesTouchInput : public TouchInput {
-public:
-    using TouchInput::TouchInput;
+/* nec_mobilepro_900_hpc2000 XIP.BIN default.reg HARDWARE\DEVICEMAP\TOUCH CalibrationData
+   "504,435 135,687 131,175 856,179 852,690" at touch.dll sub_1141878's five 640x240 targets. */
+constexpr GuestClockTouchInput::PanelRange kPanel{45u, 945u, 753u, 116u};
 
-    ~NecMobilepro900SeriesTouchInput() override {
-        shutdown_.store(true, std::memory_order_release);
-        if (wake_) SetEvent(wake_);
-        if (pacer_.joinable()) pacer_.join();
-        if (wake_) CloseHandle(wake_);
-    }
+class NecMobilepro900SeriesTouchInput : public GuestClockTouchInput {
+public:
+    using GuestClockTouchInput::GuestClockTouchInput;
 
     bool ShouldRegister() override {
         auto* bd = emu_.TryGet<BoardContext>();
         return bd && bd->GetBoardFamilyId() == BoardFamilyId::NecMobilepro900Series;
     }
 
-    void OnReady() override {
-        wake_  = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-        pacer_ = std::thread([this] { PacerMain(); });
+protected:
+    void OnTouchReady() override {
+        pco_ = &emu_.Get<NecMobilepro900SeriesPcoCompanion>();
+        pco_->AttachTouch([this] { SetSampleRate(pco_->ReportRate()); },
+                          [this] { ClearOnRestore(); });
     }
 
-    void OnPenDown(int x, int y) override {
-        LOG(Board, "[NEC-TOUCH] OnPenDown %d,%d\n", x, y);
-        {
-            std::lock_guard<std::mutex> lk(mtx_);
-            down_ = true;
-            x_ = static_cast<uint16_t>(x);
-            y_ = static_cast<uint16_t>(y);
+    void ApplyHostPen(const HostPen& pen) override {
+        if (pen.kind == kPenDown) {
+            LOG(Board, "[NEC-TOUCH] pen down %d,%d\n", pen.x, pen.y);
+            SendPosition(pen.x, pen.y);
+            StartSamples(pco_->ReportRate());
+            return;
         }
-        SetEvent(wake_);
+        LOG(Board, "[NEC-TOUCH] pen up\n");
+        StopSamples();
+        pco_->SendPenUp();
     }
 
-    void OnPenMove(int x, int y) override {
-        std::lock_guard<std::mutex> lk(mtx_);
-        x_ = static_cast<uint16_t>(x);
-        y_ = static_cast<uint16_t>(y);
+    void OnSample() override {
+        int x = 0;
+        int y = 0;
+        LatestPosition(&x, &y);
+        SendPosition(x, y);
     }
-
-    void OnPenUp(int, int) override {
-        LOG(Board, "[NEC-TOUCH] OnPenUp\n");
-        {
-            std::lock_guard<std::mutex> lk(mtx_);
-            down_ = false;
-            up_pending_ = true;
-        }
-        SetEvent(wake_);
-    }
-
-    void OnCaptureLost() override { OnPenUp(0, 0); }
 
 private:
-    /* Stream period while down. The driver does not fix the PIC scan rate, so
-       this is sized to stay faster than touch.dll's default 16.7 ms acquire
-       poll (rate 300) - the [TOUCH-RATE] hook reports the live rate to confirm. */
-    static constexpr DWORD kStreamPeriodMs = 15u;
-
-    void PacerMain() {
-        auto& freeze = emu_.Get<EmulationFreeze>();
-        auto& pco    = emu_.Get<NecMobilepro900SeriesPcoCompanion>();
-        while (!shutdown_.load(std::memory_order_acquire)) {
-            bool down, up_pending;
-            uint16_t x, y;
-            {
-                std::lock_guard<std::mutex> lk(mtx_);
-                down = down_;
-                up_pending = up_pending_;
-                up_pending_ = false;
-                x = x_;
-                y = y_;
-            }
-            if (down) {
-                auto frozen = freeze.WorkerSection();
-                pco.SendTouch(x, y);
-            } else if (up_pending) {
-                auto frozen = freeze.WorkerSection();
-                pco.SendPenUp();
-            }
-            WaitForSingleObject(wake_, down ? kStreamPeriodMs : INFINITE);
-        }
+    void SendPosition(int x, int y) {
+        uint16_t adc_x = 0u;
+        uint16_t adc_y = 0u;
+        MapToPanel(x, y, kPanel, &adc_x, &adc_y);
+        pco_->SendTouch(adc_x, adc_y);
     }
 
-    std::mutex        mtx_;
-    bool              down_ = false;
-    bool              up_pending_ = false;
-    uint16_t          x_ = 0, y_ = 0;
-    std::atomic<bool> shutdown_{false};
-    HANDLE            wake_ = nullptr;
-    std::thread       pacer_;
+    NecMobilepro900SeriesPcoCompanion* pco_ = nullptr;
 };
 
-}  /* namespace */
+}
 
 REGISTER_SERVICE_AS(NecMobilepro900SeriesTouchInput, TouchInput);

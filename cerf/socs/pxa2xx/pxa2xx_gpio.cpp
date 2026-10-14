@@ -68,49 +68,116 @@ void Pxa2xxGpio::CaptureLevels(uint32_t* levels) const {
     for (uint32_t b = 0; b < BankCount(); ++b) levels[b] = PinLevelLocked(b);
 }
 
+bool Pxa2xxGpio::OutputPins::operator==(const OutputPins& o) const {
+    for (uint32_t b = 0; b < kMaxBanks; ++b)
+        if (level[b] != o.level[b] || driven[b] != o.driven[b]) return false;
+    return true;
+}
+
+/* PXA255 Dev Man section 4.1.2, Figure 4-1 (page 4-2): the GPDR enables the output buffer, the
+   GAFR selects the Pin Set and Clear Registers as function 0; "If a GPIO is used for an alternate
+   function, then it cannot be used as a GPIO at the same time." */
+void Pxa2xxGpio::CaptureOutputsLocked(OutputPins* pins) const {
+    for (uint32_t b = 0; b < BankCount(); ++b) {
+        const uint32_t alternate = AlternatePins(gafr_[2u * b]) |
+                                   (AlternatePins(gafr_[2u * b + 1u]) << 16);
+        pins->driven[b] = (gpdr_[b] & ~alternate) | held_mask_[b];
+        pins->level[b]  = PinLevelLocked(b) & pins->driven[b];
+    }
+}
+
+uint32_t Pxa2xxGpio::AlternatePins(uint32_t gafr) {
+    uint32_t x = (gafr | (gafr >> 1)) & 0x55555555u;
+    x = (x | (x >> 1)) & 0x33333333u;
+    x = (x | (x >> 2)) & 0x0F0F0F0Fu;
+    x = (x | (x >> 4)) & 0x00FF00FFu;
+    return (x | (x >> 8)) & 0x0000FFFFu;
+}
+
+void Pxa2xxGpio::NotifyOutputs(const OutputPins& pins, bool resync) {
+    for (auto& fn : output_observers_) fn(pins, resync);
+}
+
+Pxa2xxGpio::OutputPins Pxa2xxGpio::CurrentOutputs() const {
+    OutputPins pins;
+    std::lock_guard<std::mutex> g(mtx_);
+    CaptureOutputsLocked(&pins);
+    return pins;
+}
+
+void Pxa2xxGpio::RegisterOutputObserver(OutputObserver fn) {
+    fn(CurrentOutputs(), true);
+    output_observers_.push_back(std::move(fn));
+}
+
+void Pxa2xxGpio::PostRestore() {
+    NotifyOutputs(CurrentOutputs(), true);
+}
+
+template <typename Fn>
+void Pxa2xxGpio::ChangeOutputs(Fn&& mutate_locked) {
+    if (output_observers_.empty()) {
+        std::lock_guard<std::mutex> g(mtx_);
+        mutate_locked();
+        return;
+    }
+    OutputPins before;
+    OutputPins after;
+    {
+        std::lock_guard<std::mutex> g(mtx_);
+        CaptureOutputsLocked(&before);
+        mutate_locked();
+        CaptureOutputsLocked(&after);
+    }
+    if (!(after == before)) NotifyOutputs(after, false);
+}
+
 /* PXA255 Dev Man §3.5.10: "When the processor re-enters the run mode, these
    GPIO pins retain the programmed sleep state until software resets PSSR[PH]." */
 void Pxa2xxGpio::ResetRegisters(bool sleep_exit) {
-    std::lock_guard<std::mutex> g(mtx_);
-    for (uint32_t b = 0; b < kMaxBanks; ++b) {
-        if (sleep_exit) {
-            const uint32_t mask = gpdr_[b] | held_mask_[b];
-            held_level_[b] = PinLevelLocked(b) & mask;
-            held_mask_[b]  = mask;
-        } else {
-            held_mask_[b]  = 0u;
-            held_level_[b] = 0u;
+    ChangeOutputs([this, sleep_exit] {
+        for (uint32_t b = 0; b < kMaxBanks; ++b) {
+            if (sleep_exit) {
+                const uint32_t mask = gpdr_[b] | held_mask_[b];
+                held_level_[b] = PinLevelLocked(b) & mask;
+                held_mask_[b]  = mask;
+            } else {
+                held_mask_[b]  = 0u;
+                held_level_[b] = 0u;
+            }
+            out_[b]  = 0u;
+            gpdr_[b] = 0u;
+            grer_[b] = 0u;
+            gfer_[b] = 0u;
+            gedr_[b] = 0u;
         }
-        out_[b]  = 0u;
-        gpdr_[b] = 0u;
-        grer_[b] = 0u;
-        gfer_[b] = 0u;
-        gedr_[b] = 0u;
-    }
-    for (uint32_t i = 0; i < kMaxGafr; ++i) gafr_[i] = 0u;
-    UpdateIntcLocked();
+        for (uint32_t i = 0; i < kMaxGafr; ++i) gafr_[i] = 0u;
+        UpdateIntcLocked();
+    });
 }
 
 /* PXA255 Dev Man §3.5.10: "the contents of the PGSR registers are loaded into
    the GPIO output data registers ... All bits in the output registers are
    loaded." */
 void Pxa2xxGpio::LoadSleepOutputs(const uint32_t* pgsr, uint32_t banks) {
-    std::lock_guard<std::mutex> g(mtx_);
-    uint32_t before[kMaxBanks] = {};
-    CaptureLevels(before);
-    for (uint32_t b = 0; b < banks && b < BankCount(); ++b) out_[b] = pgsr[b];
-    ApplyEdgesLocked(before);
+    ChangeOutputs([this, pgsr, banks] {
+        uint32_t before[kMaxBanks] = {};
+        CaptureLevels(before);
+        for (uint32_t b = 0; b < banks && b < BankCount(); ++b) out_[b] = pgsr[b];
+        ApplyEdgesLocked(before);
+    });
 }
 
 void Pxa2xxGpio::ReleaseSleepHold() {
-    std::lock_guard<std::mutex> g(mtx_);
-    uint32_t before[kMaxBanks] = {};
-    CaptureLevels(before);
-    for (uint32_t b = 0; b < kMaxBanks; ++b) {
-        held_mask_[b]  = 0u;
-        held_level_[b] = 0u;
-    }
-    ApplyEdgesLocked(before);
+    ChangeOutputs([this] {
+        uint32_t before[kMaxBanks] = {};
+        CaptureLevels(before);
+        for (uint32_t b = 0; b < kMaxBanks; ++b) {
+            held_mask_[b]  = 0u;
+            held_level_[b] = 0u;
+        }
+        ApplyEdgesLocked(before);
+    });
 }
 
 void Pxa2xxGpio::SetInputLevel(uint32_t gpio, bool high) {
@@ -171,12 +238,13 @@ void Pxa2xxGpio::WriteWord(uint32_t addr, uint32_t value) {
     uint32_t i = 0;
     const Reg reg = Decode(off, &i);
     if (reg == Reg::kNone) HaltUnsupportedAccess("WriteWord", addr, value);
-    if (!WriteLocked(reg, i, off, value)) return;
+    bool config_changed = false;
+    ChangeOutputs([&] { config_changed = ApplyWriteLocked(reg, i, off, value); });
+    if (!config_changed) return;
     for (auto& fn : pin_config_listeners_) fn();
 }
 
-bool Pxa2xxGpio::WriteLocked(Reg reg, uint32_t i, uint32_t off, uint32_t value) {
-    std::lock_guard<std::mutex> g(mtx_);
+bool Pxa2xxGpio::ApplyWriteLocked(Reg reg, uint32_t i, uint32_t off, uint32_t value) {
     switch (reg) {
     /* Table 24-33 (page 24-29) GPLR0 0x40E0_0000, "<31:9> R PL x": "This
        read-only field indicates the current value of each GPIO." */

@@ -50,7 +50,7 @@ public:
 
     void SaveState(StateWriter& w) override    { Serial16550::SaveState(w); }
     void RestoreState(StateReader& r) override { Serial16550::RestoreState(r); }
-    void PostRestore() override                { RepublishIrq(); }
+    void PostRestore() override                { PostRestoreLine(); }
 
 protected:
     virtual uint32_t    RegStride() const = 0;

@@ -88,10 +88,7 @@ public:
     void ResetRegisters();
     void ResendEndpointInputs();
 
-    /* Re-drive the INTR line from restored register state. Call only once every
-       peripheral is restored: an edge-latching INTC whose own registers are not back yet
-       latches or loses the transition. */
-    void RepublishIrq();
+    void PostRestoreLine();
 
 protected:
     /* One guest TX byte leaving THR. The default hands it to the attached personality;

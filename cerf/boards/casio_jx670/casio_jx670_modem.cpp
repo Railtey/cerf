@@ -87,5 +87,5 @@ void CasioJx670Modem::RestoreState(StateReader& r) {
 }
 
 void CasioJx670Modem::PostRestore() {
-    uart_->RepublishIrq();
+    uart_->PostRestoreLine();
 }
