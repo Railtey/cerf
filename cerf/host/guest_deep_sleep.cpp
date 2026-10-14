@@ -1,4 +1,5 @@
 #include "guest_deep_sleep.h"
+#include "ui_language.h"
 
 #include "../boot/guest_cold_boot.h"
 #include "../core/cerf_emulator.h"
@@ -160,7 +161,7 @@ void GuestDeepSleep::ObserveAsleep(bool asleep) {
     auto& stack = emu_.Get<NotificationStack>();
     if (asleep)
         stack.Show(NotificationId::GuestSleeping, NotificationKind::Warning,
-                   L"Guest is in sleep mode");
+                   emu_.Get<UiLanguage>().Text("shutdown.guest_is_in_sleep_mode"));
     else
         stack.Close(NotificationId::GuestSleeping);
 }
