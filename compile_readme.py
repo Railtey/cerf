@@ -29,8 +29,8 @@ from board_database import (FEATURE_SPECS, family_of, soc_family_of, soc_of,
 from board_info import (SUPPORT_BOOTABLE_PARTIAL, board_sort_key,
                         running_boards)
 
-UNMODELED_MARK = '``*``'
-UNMODELED_LEGEND = (f'{UNMODELED_MARK} Supported, but CERF does not model this '
+UNMODELED_MARK = '*'
+UNMODELED_LEGEND = (f'``{UNMODELED_MARK}`` Supported, but CERF does not model this '
                     'board\'s differences.')
 
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
@@ -89,7 +89,7 @@ def _grouped_boards():
 
 
 def _board_cell(board):
-    mark = (f' {UNMODELED_MARK}'
+    mark = (f' <code>{UNMODELED_MARK}</code>'
             if board.get('support_level') == SUPPORT_BOOTABLE_PARTIAL else '')
     return (f'{icon_img("board", "PDA", 16)} <b>{board["name"]}</b>{mark} '
             f'<code>{board["id"]}</code>')
