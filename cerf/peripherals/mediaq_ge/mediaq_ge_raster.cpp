@@ -17,19 +17,31 @@ uint32_t MediaQGe::MonoPatternPixel(uint32_t pat0, uint32_t pat1, uint32_t pat_f
     return MonoBit(reinterpret_cast<const uint8_t*>(p), (y & 7u) * 8u + (x & 7u)) ? pat_fg : pat_bg;
 }
 
+uint32_t MediaQGe::PatternBit(const uint32_t* r, uint32_t lx, uint32_t ly) const {
+    const Layout& L = Lyt();
+    const uint32_t col = ((r[kGe02DstXY] >> 13) + lx) & 7u;
+    const uint32_t row = ((r[kGe02DstXY] >> 29) + ly) & 7u;
+    const uint32_t p[2] = { r[L.mono_pat0_index], r[L.mono_pat1_index] };
+    return MonoBit(reinterpret_cast<const uint8_t*>(p), row * 8u + col);
+}
+
+uint32_t MediaQGe::PatternColor(const uint32_t* r, uint32_t bit) const {
+    const uint32_t mask = cerf::ByteWidthMask(DepthBytes(r[kGe0ADstStride]));
+    return (bit ? r[Lyt().pat_fg_index] : r[Lyt().pat_bg_index]) & mask;
+}
+
+/* MQ-200 Data Book Table 5-77: 8x8 colour pattern packed 4 / 2 / 1 pixels per register at
+   8 / 16 / 32 bpp, 8x4 at 32 bpp; Tables 5-78 .. 5-81: mono pattern and its colours. */
 uint32_t MediaQGe::PatternOperand(const uint32_t* r, uint32_t lx, uint32_t ly) const {
     const Layout& L = Lyt();
-    const uint32_t col = ((r[kGe02DstXY] >> 13) + lx) & 7u;   /* GE02R[15:13] x-order */
-    const uint32_t row = ((r[kGe02DstXY] >> 29) + ly) & 7u;   /* GE02R[31:29] y-order */
-    if (r[kGe00Command] & kCmdMonoPat)
-        return MonoPatternPixel(r[L.mono_pat0_index], r[L.mono_pat1_index],
-                                r[L.pat_fg_index] & 0xFFFFu, r[L.pat_bg_index] & 0xFFFFu, col, row);
-    /* color_pat_base==0 = part has no colour-pattern register array (MQ-1132 GE
-       ends at GE13R); its pattern fills are mono, and a non-mono P here is only a
-       P-ignored screen copy, so 0 is harmless. */
+    if (r[kGe00Command] & kCmdMonoPat) return PatternColor(r, PatternBit(r, lx, ly));
     if (L.color_pat_base == 0u) return 0u;
-    return cerf::le::U16(reinterpret_cast<const uint8_t*>(r + L.color_pat_base),
-                         (row * 8u + col) * 2u);
+    const uint32_t bpp  = DepthBytes(r[kGe0ADstStride]);
+    const uint32_t col  = ((r[kGe02DstXY] >> 13) + lx) & 7u;
+    const uint32_t rows = (bpp == 4u) ? 4u : 8u;
+    const uint32_t row  = ((r[kGe02DstXY] >> 29) + ly) & (rows - 1u);
+    return static_cast<uint32_t>(cerf::le::UN(
+        reinterpret_cast<const uint8_t*>(r + L.color_pat_base) + (row * 8u + col) * bpp, bpp));
 }
 
 /* Flat rectangle fill: pattern and source are both the fill colour, so each
@@ -208,7 +220,7 @@ void MediaQGe::BlitMonoFromDisplay(uint32_t cmd) {
 
 /* Bresenham hardware line draw (GE00R type[10:8]=100; MQ-200 Data Book
    Table 5-64..5-66 field decode cited inline). */
-void MediaQGe::DrawLine(uint32_t cmd) {
+void MediaQGe::DrawBresenhamLine(uint32_t cmd, uint32_t line_color) {
     const uint32_t bpp    = BytesPerPixel();
     const uint32_t stride = DestStrideBytes();
     const uint32_t base   = BaseAddr();
@@ -219,7 +231,7 @@ void MediaQGe::DrawLine(uint32_t cmd) {
     }
 
     const uint32_t pmask = cerf::ByteWidthMask(bpp);
-    const uint32_t color = LineColor(cmd) & pmask;
+    const uint32_t color = line_color & pmask;
 
     /* GE00R[25] ROP2: the ROP byte is the low nibble duplicated into [7:4]. */
     uint8_t rop = static_cast<uint8_t>(cmd & kCmdRopMask);

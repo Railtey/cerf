@@ -44,6 +44,7 @@ public:
     uint32_t Stride()         const { return panel_.Stride(); }
     uint32_t PaletteEntry(uint32_t index) const { return panel_.Palette(index); }
     HwCursor PanelCursor()    const { return panel_.Cursor(fb_blocked_ == nullptr); }
+    MediaQMq200Gc::Window PanelImage() const { return panel_.Image(); }
     const uint8_t* FbBytes()  const { return fb_.data(); }
     uint8_t*       FbMutableBytes() override { return fb_.data(); }
     uint32_t       FbSize()   const override { return kFbSize; }
@@ -66,13 +67,11 @@ private:
     void     RegWrite(uint32_t roff, uint32_t value);
     uint32_t RegReadLocked(uint32_t roff);
     bool     RegWriteLocked(uint32_t roff, uint32_t value);
-    void     CheckFbRead(uint32_t addr) const;
+    bool     FbReadServed(uint32_t addr) const;
     bool     FbWriteServed(uint32_t addr, uint32_t value, uint32_t width);
-    void     CheckNarrowRegWrite(uint32_t addr, uint32_t width) const;
     bool     SettleLocked();
     void     Settle(bool rescale);
     void     RefreshGatesLocked();
-    void     CheckDisplaysLocked() const;
     void     CheckGc1ObservedLocked() const;
 
     bool      UpdateGc1ScanLocked();

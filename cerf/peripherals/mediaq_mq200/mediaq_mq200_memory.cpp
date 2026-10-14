@@ -20,9 +20,7 @@ constexpr uint32_t kMm00MiuResetOff = 1u << 1;
 constexpr uint32_t kMm00Reserved    = 0xFFFFFFF8u;
 constexpr uint32_t kMm01BusClock    = 1u << 0;
 constexpr uint32_t kMm01Reserved    = 0x3C000F00u;
-constexpr uint32_t kMm03Reserved    = 0xFFFFFFFEu;
 constexpr uint32_t kMm04Reserved    = 0xFFF0E0E0u;
-constexpr uint32_t kMm04BankActMask = 0x300u;
 
 bool Mm02ThresholdsLegal(uint32_t v) {
     const uint32_t fifo4[] = {(v >> 10) & 0xFu, (v >> 14) & 0xFu, (v >> 18) & 0xFu,
@@ -31,11 +29,6 @@ bool Mm02ThresholdsLegal(uint32_t v) {
         if (t == 0u) return false;
     }
     return ((v >> 26) & 7u) != 0u && ((v >> 29) & 7u) != 0u;
-}
-
-bool Mm04LatencyLegal(uint32_t v) {
-    const uint32_t lat = v & 7u;
-    return lat == 1u || lat == 5u || lat == 7u;
 }
 
 }
@@ -85,16 +78,11 @@ void MediaQMq200Memory::Write(uint32_t roff, uint32_t value) {
             mm02_ = value;
             return;
         case kMm03R:
-            if (value & kMm03Reserved) {
-                emu_.Get<Fatal>().Die("MediaQMq200Memory: MM03R 0x%08X sets reserved bits", value);
-            }
             mm03_ = value;
             return;
         case kMm04R:
-            if ((value & kMm04Reserved) || !Mm04LatencyLegal(value) ||
-                (value & kMm04BankActMask) == 0u) {
-                emu_.Get<Fatal>().Die("MediaQMq200Memory: MM04R 0x%08X sets reserved bits or a "
-                                      "reserved latency / bank-activate encoding", value);
+            if (value & kMm04Reserved) {
+                emu_.Get<Fatal>().Die("MediaQMq200Memory: MM04R 0x%08X sets reserved bits", value);
             }
             mm04_ = value;
             return;

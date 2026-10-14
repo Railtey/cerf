@@ -78,19 +78,11 @@ void MediaQMq200::RefreshGatesLocked() {
     if (!ge_blocked_) ge_blocked_ = fb_blocked_;
 }
 
-void MediaQMq200::CheckFbRead(uint32_t addr) const {
-    if (fb_blocked_) {
-        emu_.Get<Fatal>().Die("MediaQMq200: frame buffer access at 0x%08X while %s", addr,
-                              fb_blocked_);
-    }
-}
-
-void MediaQMq200::CheckDisplaysLocked() const {
-    for (uint32_t gc = MediaQMq200Gc::kGc1; gc <= MediaQMq200Gc::kGc2; ++gc) {
-        if (const char* why = gc_.DisplayUnmodeled(gc)) {
-            emu_.Get<Fatal>().Die("MediaQMq200: GC%u displays %s; not modeled", gc + 1u, why);
-        }
-    }
+bool MediaQMq200::FbReadServed(uint32_t addr) const {
+    if (!fb_blocked_) return true;
+    if (power_.InD3() || memory_.MiuPoweredDown()) return false;
+    emu_.Get<Fatal>().Die("MediaQMq200: frame buffer access at 0x%08X while %s", addr,
+                          fb_blocked_);
 }
 
 void MediaQMq200::CheckGc1ObservedLocked() const {
@@ -101,16 +93,16 @@ void MediaQMq200::CheckGc1ObservedLocked() const {
 }
 
 uint32_t MediaQMq200::RegRead(uint32_t roff) {
-    if (MediaQMq200GeWindow::Owns(roff)) return ge_window_.Read(roff, ge_blocked_);
+    if (MediaQMq200GeWindow::Owns(roff)) {
+        if (power_.InD3()) return 0u;
+        return ge_window_.Read(roff, ge_blocked_);
+    }
     std::lock_guard<std::mutex> lk(state_mtx_);
     return RegReadLocked(roff);
 }
 
 uint32_t MediaQMq200::RegReadLocked(uint32_t roff) {
-    if (power_.InD3() && !MediaQMq200Power::D3Readable(roff)) {
-        emu_.Get<Fatal>().Die("MediaQMq200: read of register 0x%05X while the chip is in D3",
-                              roff);
-    }
+    if (power_.InD3() && !MediaQMq200Power::D3Readable(roff)) return 0u;
     if (MediaQMq200Power::Owns(roff)) return power_.Read(roff);
     if (roff == kCc00R) return cc00_;
     if (roff == kCc01R) {
@@ -136,7 +128,7 @@ uint32_t MediaQMq200::RegReadLocked(uint32_t roff) {
 
 void MediaQMq200::RegWrite(uint32_t roff, uint32_t value) {
     if (MediaQMq200GeWindow::Owns(roff) && !power_.InD3()) {
-        ge_window_.Write(roff, value, ge_blocked_);
+        if (!memory_.MiuPoweredDown()) ge_window_.Write(roff, value, ge_blocked_);
         return;
     }
     bool rescale = false;
@@ -152,7 +144,6 @@ bool MediaQMq200::SettleLocked() {
     if (ge_powered_ && !ge_powered) ge_.PowerDownReset();
     ge_powered_ = ge_powered;
     RefreshGatesLocked();
-    CheckDisplaysLocked();
     return UpdateGc1ScanLocked();
 }
 
@@ -168,10 +159,7 @@ bool MediaQMq200::FbWriteServed(uint32_t addr, uint32_t value, uint32_t width) {
         emu_.Get<Fatal>().Die("MediaQMq200: frame buffer write at 0x%08X while %s", addr,
                               fb_blocked_);
     }
-    if (width != 4u) {
-        emu_.Get<Fatal>().Die("MediaQMq200: %u-byte frame buffer write at 0x%08X while the chip "
-                              "is in D3; not modeled", width, addr);
-    }
+    if (width != 4u) return false;
     bool rescale = false;
     {
         std::lock_guard<std::mutex> lk(state_mtx_);
@@ -180,13 +168,6 @@ bool MediaQMq200::FbWriteServed(uint32_t addr, uint32_t value, uint32_t width) {
     }
     Settle(rescale);
     return false;
-}
-
-void MediaQMq200::CheckNarrowRegWrite(uint32_t addr, uint32_t width) const {
-    if (power_.InD3()) {
-        emu_.Get<Fatal>().Die("MediaQMq200: %u-byte register write at 0x%08X while the chip is in "
-                              "D3; not modeled", width, addr);
-    }
 }
 
 bool MediaQMq200::RegWriteLocked(uint32_t roff, uint32_t value) {
@@ -269,7 +250,11 @@ bool MediaQMq200::UpdateGc1ScanLocked() {
                               t.why);
     }
     if (t.line != gc1_applied_.line || t.frame != gc1_applied_.frame || t.vde != gc1_applied_.vde) {
-        emu_.Get<Fatal>().Die("MediaQMq200: GC1 frame geometry changes while its scan runs");
+        CatchUpLocked(now);
+        gc1_applied_ = t;
+        StartScanLocked(now);
+        gc1_scan_ = Gc1Scan::Live;
+        return false;
     }
     const bool rescale = gc1_scan_ == Gc1Scan::Live && !(t.rate == gc1_applied_.rate);
     gc1_applied_       = t;
@@ -337,10 +322,7 @@ void MediaQMq200::PublishScreenSizeOnEnableEdge() {
 
 uint8_t MediaQMq200::ReadByte(uint32_t addr) {
     const uint32_t off = addr - MmioBase();
-    if (off < kFbSize) {
-        CheckFbRead(addr);
-        return fb_[off];
-    }
+    if (off < kFbSize) return FbReadServed(addr) ? fb_[off] : 0u;
     if (off >= kRegWinOff && off < kRegWinOff + kRegSize) {
         const uint32_t roff = off - kRegWinOff;
         return static_cast<uint8_t>(RegRead(roff & ~0x3u) >> ((roff & 0x3u) * 8u));
@@ -350,10 +332,7 @@ uint8_t MediaQMq200::ReadByte(uint32_t addr) {
 
 uint16_t MediaQMq200::ReadHalf(uint32_t addr) {
     const uint32_t off = addr - MmioBase();
-    if (off + 2u <= kFbSize) {
-        CheckFbRead(addr);
-        return cerf::le::U16(fb_.data(), off);
-    }
+    if (off + 2u <= kFbSize) return FbReadServed(addr) ? cerf::le::U16(fb_.data(), off) : 0u;
     if (off >= kRegWinOff && off < kRegWinOff + kRegSize && (off & 1u) == 0u) {
         const uint32_t roff = off - kRegWinOff;
         return static_cast<uint16_t>(RegRead(roff & ~0x3u) >> ((roff & 0x2u) * 8u));
@@ -363,10 +342,7 @@ uint16_t MediaQMq200::ReadHalf(uint32_t addr) {
 
 uint32_t MediaQMq200::ReadWord(uint32_t addr) {
     const uint32_t off = addr - MmioBase();
-    if (off + 4u <= kFbSize) {
-        CheckFbRead(addr);
-        return cerf::le::U32(fb_.data(), off);
-    }
+    if (off + 4u <= kFbSize) return FbReadServed(addr) ? cerf::le::U32(fb_.data(), off) : 0u;
     if (off >= kRegWinOff && off < kRegWinOff + kRegSize && (off & 3u) == 0u) {
         return RegRead(off - kRegWinOff);
     }
@@ -381,7 +357,7 @@ void MediaQMq200::WriteByte(uint32_t addr, uint8_t value) {
     }
     if (off >= kRegWinOff && off < kRegWinOff + kRegSize &&
         PartialWriteAllowed((off - kRegWinOff) & ~0x3u)) {
-        CheckNarrowRegWrite(addr, 1u);
+        if (power_.InD3()) return;
         const uint32_t roff  = off - kRegWinOff;
         const uint32_t shift = (roff & 0x3u) * 8u;
         const uint32_t word  = RegRead(roff & ~0x3u);
@@ -400,7 +376,7 @@ void MediaQMq200::WriteHalf(uint32_t addr, uint16_t value) {
     }
     if (off >= kRegWinOff && off < kRegWinOff + kRegSize && (off & 1u) == 0u &&
         PartialWriteAllowed((off - kRegWinOff) & ~0x3u)) {
-        CheckNarrowRegWrite(addr, 2u);
+        if (power_.InD3()) return;
         const uint32_t roff  = off - kRegWinOff;
         const uint32_t shift = (roff & 0x2u) * 8u;
         const uint32_t word  = RegRead(roff & ~0x3u);

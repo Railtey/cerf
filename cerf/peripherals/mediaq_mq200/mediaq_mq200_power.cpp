@@ -71,9 +71,15 @@ uint32_t PowerDependencies(uint32_t module) {
         case MediaQMq200Power::kModWin1:
         case MediaQMq200Power::kModCursor1:
             return MediaQMq200Power::kModGc1 | MediaQMq200Power::kModMiu;
+        case MediaQMq200Power::kModAltWin1:
+            return MediaQMq200Power::kModWin1 | MediaQMq200Power::kModGc1 |
+                   MediaQMq200Power::kModMiu;
         case MediaQMq200Power::kModWin2:
         case MediaQMq200Power::kModCursor2:
             return MediaQMq200Power::kModGc2 | MediaQMq200Power::kModMiu;
+        case MediaQMq200Power::kModAltWin2:
+            return MediaQMq200Power::kModWin2 | MediaQMq200Power::kModGc2 |
+                   MediaQMq200Power::kModMiu;
         default:
             return 0u;
     }
@@ -177,6 +183,14 @@ bool MediaQMq200Power::Powered(uint32_t module) const {
     }
     const uint32_t needed = module | PowerDependencies(module);
     return (enables & needed) == needed;
+}
+
+bool MediaQMq200Power::StateEnables(uint32_t module) const {
+    switch (state_) {
+        case 1u: return (pm01_ & module) != 0u;
+        case 2u: return (pm02_ & module) != 0u;
+        default: return false;
+    }
 }
 
 MediaQMq200Power::ClockState MediaQMq200Power::OscState() const {

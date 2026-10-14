@@ -1,232 +1,170 @@
 #include "mediaq_mq200_ge.h"
 
+#include "mediaq_mq200_ge_pixel.h"
 #include "../../core/byte_order.h"
-#include "../../core/log.h"
 
 namespace {
 
-constexpr uint32_t kCmdAlphaMask        = 3u << 21;
 constexpr uint32_t kCmdSrcStrideSelect  = 1u << 24;
 constexpr uint32_t kCmdAutoExecute      = 1u << 27;
-constexpr uint32_t kRopSrcCopy          = 0xCCu;
 constexpr uint32_t kGe01NoLastPixel     = 1u << 30;
-constexpr uint32_t kGe0AStrideLowBits   = 0xFu;
 constexpr uint32_t kBitBltGe01Reserved  = 0x7000F000u;
 constexpr uint32_t kBitBltGe02Reserved  = 0x10001000u;
-constexpr uint32_t kLineGe02Reserved    = 0xE0000000u;
-constexpr uint32_t kGe02PatternOffsets  = 0xE000E000u;
-constexpr uint32_t kGe02DstPatternPhase = 0x00070007u;
+constexpr uint32_t kSourceLineStride    = 0xFFFu;
+constexpr uint64_t kLinedRowAlignBytes  = 16u;
 
-bool RopReadsPattern(uint32_t rop) {
-    return ((rop >> 4) & 0xFu) != (rop & 0xFu);
-}
+/* MQ-200 Data Book Table 5-72: GE09R packed fields [2:0] bit, [5:3] byte, [31:25] mono bit
+   space, [31:28] colour byte space (bit 31 zero on a 32-bit CPU interface); lined [30:28]. */
+uint32_t MonoBitOffset(uint32_t g09)                { return ((g09 >> 3) & 7u) * 8u + (g09 & 7u); }
+uint32_t MonoPitchBits(uint32_t g09, uint32_t w)    { return w + ((g09 >> 25) & 0x7Fu); }
+uint32_t PackedColorOffset(uint32_t g09)            { return (g09 >> 3) & 7u; }
+uint32_t PackedColorSpace(uint32_t g09)             { return (g09 >> 28) & 7u; }
+uint32_t LinedLeadBytes(uint32_t g09)               { return (g09 >> 28) & 7u; }
 
-bool RopReadsSource(uint32_t rop) {
-    return ((rop >> 2) & 0x33u) != (rop & 0x33u);
+uint64_t LinedRowBytes(uint32_t g09, uint32_t w, uint32_t bpp) {
+    const uint64_t used = LinedLeadBytes(g09) + static_cast<uint64_t>(w) * bpp;
+    return (used + kLinedRowAlignBytes - 1u) / kLinedRowAlignBytes * kLinedRowAlignBytes;
 }
 
 }
 
 const MediaQGe::Layout& MediaQMq200Ge::Lyt() const {
-    /* fg=GE42R, bg=GE43R, pat_fg=GE42R; src_stride=GE09R; GE0AR stride[11:0]
-       (Table 5-73), GE0BR base[20:0] (Table 5-74). */
-    static const Layout kL{0x42u, 0x43u, 0x42u, 0x09u, 0xFFFu, 0x1FFFFFu,
+    static const Layout kL{0x07u, 0x08u, 0x42u, 0x09u, 0xFFFu, 0x1FFFF8u,
                            0x43u, 0x40u, 0x41u, 0x40u};
     return kL;
 }
 
-/* ddi.dll's rectangle fill (sub_13458A0 / sub_1345944) issues a BitBLT with
-   mono pattern (GE00R[15]) + solid (GE00R[23]); the pattern colour is GE42R. */
-bool MediaQMq200Ge::IsSolidFill(uint32_t cmd) const {
-    return (cmd & kCmdMonoPat) != 0u && (cmd & kCmdSolidSrc) != 0u;
+bool MediaQMq200Ge::AutoExecute() const {
+    return (reg_[kGe00Command] & kCmdAutoExecute) != 0u;
 }
 
-uint32_t MediaQMq200Ge::SolidFillColor() const {
-    return reg_[kGe42PatFg];
-}
-
-uint32_t MediaQMq200Ge::LineColor(uint32_t cmd) const {
-    if ((cmd & kCmdMonoPat) || (cmd & kCmdMonoSrc)) return reg_[kGe42PatFg];
-    if (cmd & kCmdSolidSrc) return reg_[kGe07FgColor];
-    LOG(Caution, "MediaQ MQ200 GE: non-solid line source (cmd=0x%08X)\n", cmd);
-    CerfFatalExit(CERF_FATAL_RUNTIME_ERROR);
-}
-
-/* Dwords a system-source blit consumes before it draws. Mono = packed 1-bpp
-   bitstream; colour = packed byte stream (see BlitColorSource). */
 uint32_t MediaQMq200Ge::ExpectedSourceDwords() const {
     const uint32_t w = reg_[kGe01Size] & 0xFFFu;
     const uint32_t h = (reg_[kGe01Size] >> 16) & 0xFFFu;
     if (w == 0u || h == 0u) return 0u;
-    if (reg_[kGe00Command] & kCmdMonoSrc) {
-        /* Packed 1-bpp bitstream, byte-aligned rows (GE09R packed: [5:3] byte,
-           [2:0] bit initial offset, Data Book Table 5-72); the driver may pad
-           the tail, but the blit needs only enough dwords to cover the bits. */
-        const uint32_t g09 = reg_[kGe09SrcOff];
-        const uint32_t bit_off0 = ((g09 >> 3) & 7u) * 8u + (g09 & 7u);
-        const uint32_t stride_bits = ((w + 7u) / 8u) * 8u;
-        const uint32_t total_bits = bit_off0 + (h - 1u) * stride_bits + w;
-        return (total_bits + 31u) / 32u;
-    }
-    const uint32_t bpp = BytesPerPixel() ? BytesPerPixel() : 2u;
     const uint32_t g09 = reg_[kGe09SrcOff];
-    /* Non-packed CM2SLKBlt16 (gpe4Bpp, ddi.dll sub_1347E64): per row ulDWords =
-       ((srcLeft&1)+w)*bpp padded to a 128-bit boundary, h rows; GE09 carries only
-       the (srcLeft&1) pixel lead in [29], no byte-space field. */
-    if ((reg_[kGe00Command] & kCmdPacked) == 0u) {
-        const uint32_t lead_px = (g09 >> 29) & 1u;
-        uint32_t dwords = ((lead_px + w) * bpp + 3u) >> 2;
-        dwords += (4u - (dwords & 3u)) & 3u;
-        return dwords * h;
+    if (reg_[kGe00Command] & kCmdMonoSrc) {
+        const uint64_t bits = MonoBitOffset(g09) +
+                              static_cast<uint64_t>(h - 1u) * MonoPitchBits(g09, w) + w;
+        return static_cast<uint32_t>((bits + 31u) / 32u);
     }
-    const uint32_t offset = (g09 >> 3) & 0x1Fu;
-    const uint32_t byte_space = (g09 >> 28) & 0xFu;
-    const uint32_t src_bytes = w * bpp;
-    const uint32_t total_bytes = offset + (src_bytes + byte_space) * (h - 1u) + src_bytes;
-    return (total_bytes + 3u) >> 2;
+    const uint32_t bpp = BytesPerPixel();
+    if (reg_[kGe00Command] & kCmdPacked) {
+        const uint64_t row   = static_cast<uint64_t>(w) * bpp;
+        const uint64_t bytes = PackedColorOffset(g09) +
+                               static_cast<uint64_t>(h - 1u) * (row + PackedColorSpace(g09)) + row;
+        return static_cast<uint32_t>((bytes + 3u) / 4u);
+    }
+    return static_cast<uint32_t>(static_cast<uint64_t>(h) * LinedRowBytes(g09, w, bpp) / 4u);
 }
 
-void MediaQMq200Ge::BlitColorSource(const uint32_t* r) {
-    const uint32_t bpp    = BytesPerPixel();
-    const uint32_t stride = r[kGe0ADstStride] & Lyt().stride_mask;
-    const uint32_t base   = r[kGe0BBase] & Lyt().base_mask;
-    if (bpp != 2u || stride == 0u) {
-        LOG(Caution, "MediaQ MQ200 GE: colour-source blit unsupported depth/stride "
-                     "(bpp=%u stride=%u)\n", bpp, stride);
-        CerfFatalExit(CERF_FATAL_RUNTIME_ERROR);
-    }
-
-    const uint32_t size = r[kGe01Size];
-    const uint32_t w = size & 0xFFFu;
-    const uint32_t h = (size >> 16) & 0xFFFu;
-    if (w == 0u || h == 0u) return;
-
-    const uint32_t g09        = r[kGe09SrcOff];
-    /* PACKED CM2SBlt16 vs non-packed CM2SLKBlt16 (gpe4Bpp, ddi.dll sub_1347E64):
-       packed GE09[7:3] = per-row lead bytes, [31:28] = trailing pad; non-packed
-       GE09[29] = (srcLeft&1) pixel lead, per-row stride = ulDWords padded to a
-       128-bit boundary, no byte-space field. */
-    const bool     packed     = (r[kGe00Command] & kCmdPacked) != 0u;
-    const uint32_t byte_space = (g09 >> 28) & 0xFu;
-    uint32_t offset, row_bytes;
-    if (packed) {
-        offset    = (g09 >> 3) & 0x1Fu;
-        row_bytes = w * bpp + byte_space;
-    } else {
-        const uint32_t lead_px = (g09 >> 29) & 1u;
-        offset = lead_px * bpp;
-        uint32_t dwords = ((lead_px + w) * bpp + 3u) >> 2;
-        dwords += (4u - (dwords & 3u)) & 3u;
-        row_bytes = dwords * 4u;
-    }
-    const size_t   fifo_bytes = src_fifo_.size() * 4u;
-
-    const uint8_t rop = static_cast<uint8_t>(r[kGe00Command] & kCmdRopMask);
-
-    const uint32_t xy = r[kGe02DstXY];
-    const uint32_t dx = xy & 0xFFFu;
-    const uint32_t dy = (xy >> 16) & 0xFFFu;
-
-    const bool trans = (r[kGe00Command] & kCmdColorTrans) != 0u;
-    const uint32_t key = r[kGe04ColorCmp] & 0xFFFFu;
-
-    uint8_t* const fb     = Fb();
-    const uint32_t fbsize = FbBytes();
-
-    for (uint32_t row = 0; row < h; ++row) {
-        const uint32_t row_pos = offset + row * row_bytes;
-        for (uint32_t col = 0; col < w; ++col) {
-            const uint32_t pos = row_pos + col * bpp;
-            if (static_cast<size_t>(pos) + bpp > fifo_bytes) break;  /* source under-delivered. */
-            const uint32_t px = cerf::le::U16(SrcFifoBytes(), pos);
-            if (trans && px == key) continue;
-            const uint64_t addr = static_cast<uint64_t>(base) +
-                static_cast<uint64_t>(dy + row) * stride +
-                static_cast<uint64_t>(dx + col) * bpp;
-            RopPixel(fb, fbsize, addr, bpp, 0xFFFFu, rop, PatternOperand(r, col, row), px);
-        }
-    }
+void MediaQMq200Ge::BlitScreen(const uint32_t* r) {
+    Blit(r, false);
 }
 
-/* Mono->colour BitBLT, packed 1-bpp source via Source FIFO (GE00R[20]=1). Bit for
-   dest (row,col) = bit_off0 + row*stride_bits + col, MSB-first per byte; bit_off0
-   = GE09R[5:3]*8 + [2:0], stride_bits = ceil(w/8)*8 (byte-aligned rows). Set bit
-   -> GE42R fg, clear -> GE43R bg. */
-void MediaQMq200Ge::BlitMonoSource(const uint32_t* r) {
-    const uint32_t bpp    = BytesPerPixel();
-    const uint32_t stride = r[kGe0ADstStride] & Lyt().stride_mask;
-    const uint32_t base   = r[kGe0BBase] & Lyt().base_mask;
-    if (bpp != 2u || stride == 0u) {
-        LOG(Caution, "MediaQ MQ200 GE: mono-source blit unsupported depth/stride "
-                     "(bpp=%u stride=%u)\n", bpp, stride);
-        CerfFatalExit(CERF_FATAL_RUNTIME_ERROR);
-    }
+void MediaQMq200Ge::BlitSystem(const uint32_t* r) {
+    Blit(r, true);
+}
 
-    const uint32_t size = r[kGe01Size];
-    const uint32_t w = size & 0xFFFu;
-    const uint32_t h = (size >> 16) & 0xFFFu;
-    if (w == 0u || h == 0u) return;
-
+uint32_t MediaQMq200Ge::MonoSourceBit(const uint32_t* r, uint32_t col, uint32_t row,
+                                      bool& present) const {
     const uint32_t g09 = r[kGe09SrcOff];
-    const uint32_t bit_off0 = ((g09 >> 3) & 7u) * 8u + (g09 & 7u);
-    const uint32_t stride_bits = ((w + 7u) / 8u) * 8u;
-    const uint32_t total_bits = bit_off0 + (h - 1u) * stride_bits + w;
-    if (src_fifo_.size() < (total_bits + 31u) / 32u) return;
+    const uint64_t bit = MonoBitOffset(g09) +
+                         static_cast<uint64_t>(row) * MonoPitchBits(g09, r[kGe01Size] & 0xFFFu) + col;
+    present = bit < static_cast<uint64_t>(src_fifo_.size()) * 32u;
+    return present ? MonoBit(SrcFifoBytes(), bit) : 0u;
+}
 
-    const uint8_t  rop = static_cast<uint8_t>(r[kGe00Command] & kCmdRopMask);
-    const uint32_t fg  = r[kGe07FgColor] & 0xFFFFu;
-    const uint32_t bg  = r[kGe08BgColor] & 0xFFFFu;
-    const bool mono_trans  = (r[kGe00Command] & kCmdMonoTrans) != 0u;
-    const bool trans_clear = mono_trans && (r[kGe00Command] & kCmdMonoTrPol) == 0u;
-    const bool trans_set   = mono_trans && (r[kGe00Command] & kCmdMonoTrPol) != 0u;
+uint32_t MediaQMq200Ge::ColorSourcePixel(const uint32_t* r, uint32_t col, uint32_t row,
+                                         bool& present) const {
+    const uint32_t g09 = r[kGe09SrcOff];
+    const uint32_t w   = r[kGe01Size] & 0xFFFu;
+    const uint32_t bpp = DepthBytes(r[kGe0ADstStride]);
+    const uint64_t pos = (r[kGe00Command] & kCmdPacked)
+        ? PackedColorOffset(g09) +
+              static_cast<uint64_t>(row) * (static_cast<uint64_t>(w) * bpp + PackedColorSpace(g09)) +
+              static_cast<uint64_t>(col) * bpp
+        : static_cast<uint64_t>(row) * LinedRowBytes(g09, w, bpp) + LinedLeadBytes(g09) +
+              static_cast<uint64_t>(col) * bpp;
+    present = pos + bpp <= static_cast<uint64_t>(src_fifo_.size()) * 4u;
+    return present ? static_cast<uint32_t>(cerf::le::UN(SrcFifoBytes() + pos, bpp)) : 0u;
+}
 
-    const uint32_t xy = r[kGe02DstXY];
-    const uint32_t dx = xy & 0xFFFu;
-    const uint32_t dy = (xy >> 16) & 0xFFFu;
+void MediaQMq200Ge::Blit(const uint32_t* r, bool system_source) {
+    const uint32_t cmd = r[kGe00Command];
+    const uint32_t w = r[kGe01Size] & 0xFFFu;
+    const uint32_t h = (r[kGe01Size] >> 16) & 0xFFFu;
+    if (w == 0u || h == 0u) return;
+    Pixel px(r, Lyt(), Fb(), FbBytes());
 
-    const bool clip = (r[kGe00Command] & kCmdEnClip) != 0u;
-    const uint32_t cl = r[kGe05ClipLT] & 0xFFFu;
-    const uint32_t ct = (r[kGe05ClipLT] >> 16) & 0xFFFu;
-    const uint32_t cr = r[kGe06ClipRB] & 0xFFFu;
-    const uint32_t cb = (r[kGe06ClipRB] >> 16) & 0xFFFu;
+    const int dx   = static_cast<int>(r[kGe02DstXY] & 0xFFFu);
+    const int dy   = static_cast<int>((r[kGe02DstXY] >> 16) & 0xFFFu);
+    const int xdir = (cmd & kCmdXNeg) ? -1 : 1;
+    const int ydir = (cmd & kCmdYNeg) ? -1 : 1;
 
-    const bool     pat_en = (r[kGe00Command] & kCmdMonoPat) != 0u;
-    const uint32_t pat_fg = r[kGe42PatFg] & 0xFFFFu;
-    const uint32_t pat_bg = r[kGe43PatBg] & 0xFFFFu;
-    const uint32_t mono_pat[2] = { r[kGe40MonoPat0], r[kGe41MonoPat1] };
+    const bool     mono_src  = (cmd & kCmdMonoSrc) != 0u;
+    const bool     mono_pat  = (cmd & kCmdMonoPat) != 0u;
+    const bool     solid     = (cmd & kCmdSolidSrc) != 0u;
+    const uint32_t trans_bit = (cmd & kCmdMonoTrPol) ? 1u : 0u;
+    const bool     src_trans = (cmd & kCmdMonoTrans) && mono_src;
+    const bool     pat_trans = (cmd & kCmdMonoTrans) && mono_pat && !mono_src;
+    const bool     need_s    = px.ReadsSource() || src_trans;
+    const bool     need_p    = px.ReadsPattern() || pat_trans;
+    const uint32_t fg        = r[kGe07FgColor] & px.Mask();
+    const uint32_t bg        = r[kGe08BgColor] & px.Mask();
 
-    uint8_t* const fb     = Fb();
-    const uint32_t fbsize = FbBytes();
+    const int64_t src_line = (cmd & kCmdSrcStrideSelect) ? (r[kGe09SrcOff] & kSourceLineStride)
+                                                         : px.Stride();
+    const int64_t src_first = static_cast<int64_t>(px.Base()) +
+        static_cast<int64_t>((r[kGe03SrcXY] >> 16) & 0xFFFu) * px.Stride() +
+        static_cast<int64_t>(r[kGe03SrcXY] & 0xFFFu) * px.Bpp();
 
     for (uint32_t row = 0; row < h; ++row) {
-        const uint32_t yy = dy + row;
-        if (clip && (yy < ct || yy > cb)) continue;
+        const int y = dy + ydir * static_cast<int>(row);
         for (uint32_t col = 0; col < w; ++col) {
-            const uint32_t xx = dx + col;
-            if (clip && (xx < cl || xx > cr)) continue;
-            const uint32_t bit = MonoBit(SrcFifoBytes(), bit_off0 + row * stride_bits + col);
-            if (bit && trans_set) continue;
-            if (!bit && trans_clear) continue;
-            const uint32_t color = bit ? fg : bg;
-            const uint64_t addr = static_cast<uint64_t>(base) +
-                static_cast<uint64_t>(yy) * stride + static_cast<uint64_t>(xx) * bpp;
-            const uint32_t pat = pat_en
-                ? MonoPatternPixel(mono_pat[0], mono_pat[1], pat_fg, pat_bg, xx, yy) : 0u;
-            RopPixel(fb, fbsize, addr, bpp, 0xFFFFu, rop, pat, color);
+            const int x = dx + xdir * static_cast<int>(col);
+            if (px.Outside(x, y)) continue;
+            uint32_t s = 0u;
+            if (need_s) {
+                bool present = true;
+                if (mono_src) {
+                    const uint32_t bit = solid ? 1u : MonoSourceBit(r, col, row, present);
+                    if (!present || (src_trans && bit == trans_bit)) continue;
+                    s = bit ? fg : bg;
+                } else if (system_source) {
+                    s = ColorSourcePixel(r, col, row, present);
+                    if (!present) continue;
+                } else if (!px.Fetch(src_first + ydir * static_cast<int64_t>(row) * src_line +
+                                     xdir * static_cast<int64_t>(col) * px.Bpp(), s)) {
+                    continue;
+                }
+            }
+            uint32_t p = 0u;
+            if (need_p) {
+                const uint32_t lx = static_cast<uint32_t>(x - dx);
+                const uint32_t ly = static_cast<uint32_t>(y - dy);
+                if (mono_pat) {
+                    const uint32_t bit = solid ? 1u : PatternBit(r, lx, ly);
+                    if (pat_trans && bit == trans_bit) continue;
+                    p = PatternColor(r, bit);
+                } else {
+                    p = PatternOperand(r, lx, ly);
+                }
+            }
+            px.Put(x, y, p, s);
         }
     }
 }
 
 void MediaQMq200Ge::DrawLine(uint32_t cmd) {
-    const uint32_t bpp    = BytesPerPixel();
-    const uint32_t stride = DestStrideBytes();
-    const uint32_t base   = BaseAddr();
-    if (bpp == 0u || stride == 0u) {
-        LOG(Caution, "MediaQ MQ200 GE: line draw unsupported depth/stride "
-                     "(GE0AR=0x%08X)\n", reg_[kGe0ADstStride]);
-        CerfFatalExit(CERF_FATAL_RUNTIME_ERROR);
-    }
-    const uint32_t pmask = cerf::ByteWidthMask(bpp);
+    Pixel px(reg_, Lyt(), Fb(), FbBytes());
+    const bool mono_src = (cmd & kCmdMonoSrc) != 0u;
+    const bool mono_pat = (cmd & kCmdMonoPat) != 0u;
+    const bool solid    = (cmd & kCmdSolidSrc) != 0u;
+    const bool mono_trans_fg = (cmd & kCmdMonoTrans) && (cmd & kCmdMonoTrPol) && (mono_src || mono_pat);
+    if (mono_trans_fg) return;
+    const uint32_t s = (mono_src && solid) ? (reg_[kGe07FgColor] & px.Mask()) : 0u;
+    const uint32_t p = (mono_pat && solid) ? PatternColor(reg_, 1u) : 0u;
 
     const uint32_t ge01 = reg_[kGe01Size];    /* LINE_DRAW   */
     const uint32_t ge02 = reg_[kGe02DstXY];   /* LINE_MAJOR_X */
@@ -246,30 +184,14 @@ void MediaQMq200Ge::DrawLine(uint32_t cmd) {
     const long dN = s17((ge03 >> 12) & 0x1FFFFu);     /* GE03R[28:12] minor delta */
     const int step_x = (cmd & 0x800u)  ? -1 : 1;      /* GE00R X_DIR */
     const int step_y = (cmd & 0x1000u) ? -1 : 1;      /* GE00R Y_DIR */
-
-    uint8_t rop = static_cast<uint8_t>(cmd & kCmdRopMask);
-    if (cmd & kCmdRop2)
-        rop = static_cast<uint8_t>((cmd & 0x0Fu) | ((cmd & 0x0Fu) << 4));
-    const uint32_t color = reg_[kGe07FgColor] & pmask;
-
-    const bool clip = (cmd & kCmdEnClip) != 0u;
-    const int cl = static_cast<int>(reg_[kGe05ClipLT] & 0xFFFu);
-    const int ct = static_cast<int>((reg_[kGe05ClipLT] >> 16) & 0xFFFu);
-    const int cr = static_cast<int>(reg_[kGe06ClipRB] & 0xFFFu);
-    const int cb = static_cast<int>((reg_[kGe06ClipRB] >> 16) & 0xFFFu);
-
-    uint8_t* const fb     = Fb();
-    const uint32_t fbsize = FbBytes();
+    const uint32_t count = cPels - ((ge01 & kGe01NoLastPixel) && cPels ? 1u : 0u);
 
     long accum = dN + gamma;
     const long axstp = dN;
     const long dgstp = dN - dM;
-    for (uint32_t i = 0; i < cPels; ++i) {
-        if (x >= 0 && y >= 0 && !(clip && (x < cl || x > cr || y < ct || y > cb)))
-            RopPixel(fb, fbsize, static_cast<uint64_t>(base) +
-                     static_cast<uint64_t>(y) * stride + static_cast<uint64_t>(x) * bpp,
-                     bpp, pmask, rop, 0u, color);
-        if (i + 1u >= cPels) break;
+    for (uint32_t i = 0; i < count; ++i) {
+        if (!px.Outside(x, y)) px.Put(x, y, p, s);
+        if (i + 1u >= count) break;
         if (y_major) y += step_y; else x += step_x;   /* major-axis step */
         if (axstp != 0) {
             if (accum < 0) accum += axstp;
@@ -281,76 +203,30 @@ void MediaQMq200Ge::DrawLine(uint32_t cmd) {
 const char* MediaQMq200Ge::CommandUnmodeled(uint32_t cmd) const {
     const CommandPath path = PathOf(cmd);
     if (path == CommandPath::Nop || path == CommandPath::Unmodeled) return nullptr;
-    if (cmd & kCmdAutoExecute) return "requests auto-execution at the GE02R write";
-    if (BytesPerPixel() == 4u && (cmd & kCmdAlphaMask)) return "selects a 32 bpp alpha byte mask";
-    if ((cmd & kCmdEnClip) && (reg_[kGe0ADstStride] & kGe0AStrideLowBits)) {
-        return "clips with a destination stride off the 16-byte boundary";
-    }
-    const bool mono_pat_trans = (cmd & kCmdMonoTrans) && (cmd & kCmdMonoPat);
-    const bool src_compare    = (cmd & kCmdColorTrans) &&
-                                ((cmd & kCmdColorTrPol) || (cmd & kCmdRopMask) != kRopSrcCopy);
+    const uint8_t rop      = Pixel::Rop(cmd);
+    const bool    mono_src = (cmd & kCmdMonoSrc) != 0u;
+    const bool    mono_pat = (cmd & kCmdMonoPat) != 0u;
+    const bool    solid    = (cmd & kCmdSolidSrc) != 0u;
+    const bool    need_s   = Pixel::ReadsSource(rop) || ((cmd & kCmdMonoTrans) && mono_src);
+    const bool    need_p   = Pixel::ReadsPattern(rop) || ((cmd & kCmdMonoTrans) && mono_pat && !mono_src);
     if (path == CommandPath::Line) {
-        if (reg_[kGe02DstXY] & kLineGe02Reserved) return "starts a line with GE02R reserved bits set";
-        if (reg_[kGe01Size] & kGe01NoLastPixel) return "skips the last line pixel";
-        if (cmd & (kCmdColorTrans | kCmdMonoTrans)) return "enables transparency on a line";
-        if (!(cmd & kCmdMonoSrc) || !(cmd & kCmdSolidSrc)) {
-            return "draws a line whose source is not the solid foreground colour";
-        }
-        if (cmd & (kCmdSrcSystem | kCmdPacked | kCmdSrcStrideSelect)) {
-            return "selects a source memory, packing or source stride on a line";
-        }
-        if (!(cmd & kCmdRop2) && RopReadsPattern(cmd & kCmdRopMask)) {
-            return "draws a line with a raster operation that reads the pattern";
-        }
+        if (need_s && !(mono_src && solid)) return "draws a line from a source other than the solid colour";
+        if (need_p && !(mono_pat && solid)) return "draws a line from a pattern other than the solid colour";
         return nullptr;
     }
     if ((reg_[kGe01Size] & kBitBltGe01Reserved) || (reg_[kGe02DstXY] & kBitBltGe02Reserved)) {
         return "starts a BitBLT with GE01R / GE02R reserved bits set";
     }
-    if ((cmd & kCmdMonoSrc) && (cmd & kCmdXNeg)) return "sets the negative X direction with a mono source";
-    if (cmd & kCmdRop2) return "selects ROP2 on a BitBLT";
-    switch (path) {
-        case CommandPath::SolidFill:
-            if (cmd & (kCmdMonoSrc | kCmdColorTrans)) return "fills with a mono source or transparency";
-            if ((cmd & kCmdMonoTrans) && (cmd & kCmdMonoTrPol)) return "makes the solid fill transparent";
-            if (RopReadsSource(cmd & kCmdRopMask)) return "fills with a raster operation that reads the source";
-            return nullptr;
-        case CommandPath::ScreenMono:
-            return "reads a mono source from display memory";
-        case CommandPath::ScreenColor:
-            if ((cmd & (kCmdSrcStrideSelect | kCmdPacked)) || src_compare || mono_pat_trans) {
-                return "selects a source stride, packed mode or a transparency the screen BitBLT does "
-                       "not apply";
-            }
-            if (RopReadsPattern(cmd & kCmdRopMask) &&
-                ((cmd & (kCmdXNeg | kCmdYNeg)) || (!(cmd & kCmdMonoPat) && BytesPerPixel() != 2u))) {
-                return "reads a pattern in a negative-direction or non-16 bpp screen BitBLT";
-            }
-            return nullptr;
-        case CommandPath::SystemColor:
-            if (cmd & (kCmdXNeg | kCmdYNeg | kCmdEnClip | kCmdSrcStrideSelect)) {
-                return "selects a direction, clipping or a source stride on a system colour BitBLT";
-            }
-            if (src_compare || mono_pat_trans || ((cmd & kCmdSolidSrc) && (cmd & kCmdMonoPat))) {
-                return "selects a transparency or solid pattern the system colour BitBLT does not apply";
-            }
-            return nullptr;
-        case CommandPath::SystemMono:
-            if (cmd & (kCmdYNeg | kCmdColorTrans | kCmdSolidSrc | kCmdSrcStrideSelect)) {
-                return "selects a direction, transparency, solid source or source stride on a system "
-                       "mono BitBLT";
-            }
-            if (!(cmd & kCmdPacked)) return "sends a lined mono source";
-            if (RopReadsPattern(cmd & kCmdRopMask) &&
-                (!(cmd & kCmdMonoPat) ||
-                 (reg_[kGe02DstXY] & (kGe02PatternOffsets | kGe02DstPatternPhase)))) {
-                return "reads a pattern the system mono BitBLT does not apply";
-            }
-            return nullptr;
-        case CommandPath::Nop:
-        case CommandPath::Line:
-        case CommandPath::Unmodeled:
-            return nullptr;
+    if (mono_src && (cmd & kCmdXNeg)) return "sets the negative X direction with a mono source";
+    if (path == CommandPath::ScreenMono) {
+        return (need_s && !solid) ? "reads a mono source from display memory" : nullptr;
     }
+    if (path == CommandPath::ScreenColor) {
+        return (need_s && (cmd & kCmdPacked)) ? "reads a packed colour source from display memory" : nullptr;
+    }
+    if (cmd & (kCmdXNeg | kCmdYNeg)) return "streams a system memory source in a negative direction";
+    if (cmd & kCmdSrcStrideSelect) return "selects a source line stride for a system memory source";
+    if (path == CommandPath::SystemMono && !(cmd & kCmdPacked)) return "streams a lined mono source";
+    if (path == CommandPath::SystemMono && solid) return "streams a mono source the solid colour replaces";
     return nullptr;
 }

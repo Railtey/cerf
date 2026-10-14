@@ -24,6 +24,17 @@ public:
         uint64_t              vde     = 0;
     };
 
+    struct Window {
+        uint32_t depth        = 0;
+        uint32_t x            = 0;
+        uint32_t y            = 0;
+        uint32_t w            = 0;
+        uint32_t h            = 0;
+        uint32_t start        = 0;
+        int32_t  stride       = 0;
+        uint32_t palette_base = 0;
+    };
+
     static constexpr uint32_t kCtrl       = 0x00u;
     static constexpr uint32_t kHDisp      = 0x08u;
     static constexpr uint32_t kVDisp      = 0x0Cu;
@@ -55,8 +66,10 @@ public:
     uint32_t Reg(uint32_t gc, uint32_t off) const { return regs_[gc][off / 4u]; }
     uint32_t Palette(uint32_t index) const { return palette_[index & 0xFFu]; }
     bool     Displays(uint32_t gc) const;
-    const char* DisplayUnmodeled(uint32_t gc) const;
-    uint32_t    Bpp(uint32_t gc) const;
+    Window   ActiveWindow(uint32_t gc, const MediaQMq200Power& power) const;
+    static uint32_t DepthBits(uint32_t depth);
+    static bool     DepthIndexed(uint32_t depth);
+    static bool     DepthUsesPalette(uint32_t depth);
     uint32_t    DisplayWidth(uint32_t gc) const;
     uint32_t    DisplayHeight(uint32_t gc) const;
     ScanTiming  Gc1ScanTiming(const MediaQMq200Power& power) const;
@@ -66,9 +79,6 @@ public:
 
 private:
     static constexpr uint32_t kRegsPerGc = 0x20u;
-
-    uint32_t Depth(uint32_t gc) const;
-    bool     PaletteShared() const;
 
     CerfEmulator& emu_;
 

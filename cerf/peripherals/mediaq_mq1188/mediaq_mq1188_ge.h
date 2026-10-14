@@ -16,14 +16,18 @@ public:
 
 protected:
     const Layout& Lyt() const override;
-    bool          IsSolidFill(uint32_t cmd) const override;
-    uint32_t      SolidFillColor() const override;
-    uint32_t      LineColor(uint32_t cmd) const override;
     uint32_t      ExpectedSourceDwords() const override;
-    void          BlitColorSource(const uint32_t* r) override;
-    void          BlitMonoSource(const uint32_t* r) override;
+    void          BlitScreen(const uint32_t* r) override;
+    void          BlitSystem(const uint32_t* r) override;
+    void          DrawLine(uint32_t cmd) override;
 
 private:
+    bool          IsSolidFill(uint32_t cmd) const;
+    uint32_t      SolidFillColor() const;
+    uint32_t      LineColor(uint32_t cmd) const;
+    void          BlitColorSource(const uint32_t* r);
+    void          BlitMonoSource(const uint32_t* r);
+
     /* MQ-1132 GE register dword indices (Table 4-11). */
     enum : uint32_t {
         kGe07FgColor   = 7,   /* foreground, mono source (Reg 4-93). */

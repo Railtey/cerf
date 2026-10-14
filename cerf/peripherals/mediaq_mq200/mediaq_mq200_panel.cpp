@@ -14,19 +14,24 @@ uint32_t ModuleBit(uint32_t gc, uint32_t gc1_bit, uint32_t gc2_bit) {
 
 bool MediaQMq200Panel::Shown(bool fb_served) const {
     const uint32_t gc = fp_.PanelGc();
-    if (gc == MediaQMq200Fp::kNoPanel || !fb_served) return false;
+    if (gc == MediaQMq200Fp::kNoPanel || !fb_served || !fp_.PanelPinsHigh()) return false;
     if (!power_.Powered(MediaQMq200Power::kModFp) ||
         !power_.Powered(ModuleBit(gc, MediaQMq200Power::kModGc1, MediaQMq200Power::kModGc2)) ||
         !power_.Powered(ModuleBit(gc, MediaQMq200Power::kModWin1, MediaQMq200Power::kModWin2))) {
         return false;
     }
-    return gc_.Displays(gc) && Width() > 1u && Height() > 1u && Stride() != 0u;
+    return gc_.Displays(gc) && Width() > 1u && Height() > 1u;
+}
+
+MediaQMq200Gc::Window MediaQMq200Panel::Image() const {
+    const uint32_t gc = fp_.PanelGc();
+    if (gc == MediaQMq200Fp::kNoPanel) return MediaQMq200Gc::Window{};
+    return gc_.ActiveWindow(gc, power_);
 }
 
 uint32_t MediaQMq200Panel::Bpp() const {
-    const uint32_t gc = fp_.PanelGc();
-    if (gc == MediaQMq200Fp::kNoPanel) return 0u;
-    return gc_.Bpp(gc);
+    if (fp_.PanelGc() == MediaQMq200Fp::kNoPanel) return 0u;
+    return MediaQMq200Gc::DepthBits(Image().depth);
 }
 
 uint32_t MediaQMq200Panel::Width() const {
@@ -42,15 +47,11 @@ uint32_t MediaQMq200Panel::Height() const {
 }
 
 uint32_t MediaQMq200Panel::WindowOffset() const {
-    const uint32_t gc = fp_.PanelGc();
-    if (gc == MediaQMq200Fp::kNoPanel) return 0u;
-    return gc_.Reg(gc, MediaQMq200Gc::kStart) & 0x1FFFFFu;
+    return Image().start;
 }
 
 uint32_t MediaQMq200Panel::Stride() const {
-    const uint32_t gc = fp_.PanelGc();
-    if (gc == MediaQMq200Fp::kNoPanel) return 0u;
-    return gc_.Reg(gc, MediaQMq200Gc::kStride) & 0xFFFFu;
+    return static_cast<uint16_t>(Image().stride);
 }
 
 uint32_t MediaQMq200Panel::Palette(uint32_t index) const {

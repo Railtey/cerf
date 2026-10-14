@@ -19,6 +19,7 @@ public:
     void     Write(uint32_t roff, uint32_t value);
 
     uint32_t PanelGc() const;
+    bool     PanelPinsHigh() const;
 
     void SaveState(StateWriter& w) const;
     void RestoreState(StateReader& r);

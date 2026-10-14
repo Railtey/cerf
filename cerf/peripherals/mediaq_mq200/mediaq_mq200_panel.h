@@ -1,9 +1,10 @@
 #pragma once
 
+#include "mediaq_mq200_gc.h"
+
 #include <cstdint>
 
 class MediaQMq200Fp;
-class MediaQMq200Gc;
 class MediaQMq200Power;
 
 class MediaQMq200Panel {
@@ -24,6 +25,7 @@ public:
     uint32_t Height() const;
     uint32_t WindowOffset() const;
     uint32_t Stride() const;
+    MediaQMq200Gc::Window Image() const;
     uint32_t Palette(uint32_t index) const;
     HwCursor Cursor(bool fb_served) const;
 

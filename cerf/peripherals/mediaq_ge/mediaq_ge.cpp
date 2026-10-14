@@ -8,13 +8,13 @@
 void MediaQGe::WriteReg(uint32_t g, uint32_t value) {
     if (g >= kNumRegs) return;
     reg_[g] = value;
-    if (g == kGe00Command) Execute();
+    if (g == (AutoExecute() ? kGe02DstXY : kGe00Command)) Execute();
 }
 
-uint32_t MediaQGe::BytesPerPixel() const {
+uint32_t MediaQGe::DepthBytes(uint32_t ge0a) {
     /* GE0AR[31:30] colour depth (MQ-200 Data Book Table 5-73): 00=8, 01=16,
        11=32 bpp; 10 reserved. */
-    switch ((reg_[kGe0ADstStride] >> 30) & 3u) {
+    switch ((ge0a >> 30) & 3u) {
         case 0:  return 1u;
         case 1:  return 2u;
         case 3:  return 4u;
@@ -41,7 +41,6 @@ void MediaQGe::Execute() {
     if (pending_active_) ExecutePending();
 
     const uint32_t cmd = reg_[kGe00Command];
-    const uint8_t  rop = static_cast<uint8_t>(cmd & kCmdRopMask);
 
     switch (PathOf(cmd)) {
         case CommandPath::Nop:
@@ -57,21 +56,16 @@ void MediaQGe::Execute() {
             pending_active_  = true;
             if (expected_dwords_ == 0u) ExecutePending();
             return;
-        case CommandPath::SolidFill:
-            FillSolid(rop, SolidFillColor(), cmd);
-            return;
         case CommandPath::ScreenMono:
-            BlitMonoFromDisplay(cmd);
-            return;
         case CommandPath::ScreenColor:
-            BlitColorFromDisplay(cmd);
+            BlitScreen(reg_);
             return;
         case CommandPath::Unmodeled:
             break;
     }
 
     LOG(Caution, "MediaQ GE: unimplemented command 0x%08X (type=%u rop=0x%02X)\n",
-        cmd, (cmd >> kCmdTypeShift) & kCmdTypeMask, rop);
+        cmd, (cmd >> kCmdTypeShift) & kCmdTypeMask, cmd & kCmdRopMask);
     CerfFatalExit(CERF_FATAL_RUNTIME_ERROR);
 }
 
@@ -83,7 +77,6 @@ MediaQGe::CommandPath MediaQGe::PathOf(uint32_t cmd) const {
     if (cmd & kCmdSrcSystem) {
         return (cmd & kCmdMonoSrc) ? CommandPath::SystemMono : CommandPath::SystemColor;
     }
-    if (IsSolidFill(cmd)) return CommandPath::SolidFill;
     return (cmd & kCmdMonoSrc) ? CommandPath::ScreenMono : CommandPath::ScreenColor;
 }
 
@@ -110,8 +103,7 @@ void MediaQGe::PowerOnReset() {
 
 void MediaQGe::ExecutePending() {
     pending_active_ = false;
-    if (pending_reg_[kGe00Command] & kCmdMonoSrc) BlitMonoSource(pending_reg_);
-    else                                          BlitColorSource(pending_reg_);
+    BlitSystem(pending_reg_);
     src_fifo_.clear();
 }
 

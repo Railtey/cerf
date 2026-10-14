@@ -28,9 +28,11 @@ public:
     static constexpr uint32_t kModFp      = 1u << 9;
     static constexpr uint32_t kModGc1     = 1u << 16;
     static constexpr uint32_t kModWin1    = 1u << 17;
+    static constexpr uint32_t kModAltWin1 = 1u << 18;
     static constexpr uint32_t kModCursor1 = 1u << 19;
     static constexpr uint32_t kModGc2     = 1u << 24;
     static constexpr uint32_t kModWin2    = 1u << 25;
+    static constexpr uint32_t kModAltWin2 = 1u << 26;
     static constexpr uint32_t kModCursor2 = 1u << 27;
 
     explicit MediaQMq200Power(CerfEmulator& emu) : emu_(emu) {}
@@ -48,6 +50,7 @@ public:
 
     bool       InD3() const { return state_ == kD3; }
     bool       Powered(uint32_t module) const;
+    bool       StateEnables(uint32_t module) const;
     ClockState State(uint32_t clock) const;
     bool        GePowered() const;
     const char* GeBlocked() const;

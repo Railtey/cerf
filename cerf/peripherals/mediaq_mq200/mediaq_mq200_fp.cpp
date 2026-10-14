@@ -23,7 +23,7 @@ constexpr uint32_t kFp10R = 16u;
 /* MQ-200 Data Book Table 5-51 .. Table 5-59. */
 constexpr uint32_t kFp00Unmodeled  = 0xF0000C10u;
 constexpr uint32_t kFp01Unmodeled  = 0xF8000801u;
-constexpr uint32_t kFp02Unmodeled  = 0xFFE003FFu;
+constexpr uint32_t kFp02Unmodeled  = 0xFFE002AAu;
 constexpr uint32_t kFp03Unmodeled  = 0xF8F8FFFFu;
 constexpr uint32_t kFp03ReadOnly   = 0x07000000u;
 constexpr uint32_t kFp0FMustBeZero = 0x00080008u;
@@ -83,6 +83,19 @@ void MediaQMq200Fp::Write(uint32_t roff, uint32_t value) {
                               "unmodeled pin mode, panel type or test mode", i, value);
     }
     regs_[i] = value;
+}
+
+bool MediaQMq200Fp::PanelPinsHigh() const {
+    constexpr uint32_t kPinGpo = 1u;
+    constexpr struct {
+        uint32_t mode_shift;
+        uint32_t data_bit;
+    } kPanelPins[] = {{0u, 16u}, {2u, 17u}, {8u, 20u}};
+    const uint32_t v = regs_[kFp02R];
+    for (const auto& pin : kPanelPins) {
+        if (((v >> pin.mode_shift) & 3u) == kPinGpo && !((v >> pin.data_bit) & 1u)) return false;
+    }
+    return true;
 }
 
 uint32_t MediaQMq200Fp::PanelGc() const {

@@ -25,7 +25,12 @@ constexpr uint32_t kAltVWin  = 0x2Cu;
 constexpr uint32_t kAltStart = 0x34u;
 
 /* MQ-200 Data Book Table 5-8 .. Table 5-29, Table 5-32. */
-constexpr uint32_t kCtrlUnmodeled      = 0x008C0E06u;
+constexpr uint32_t kCtrlUnmodeled      = 0x008C0606u;
+constexpr uint32_t kCtrlAltWindow      = 1u << 11;
+constexpr uint32_t kCtrlDepthShift     = 4u;
+constexpr uint32_t kCtrlAltDepthShift  = 12u;
+constexpr uint32_t kWinField           = 0xFFFu;
+constexpr uint32_t kStartMask          = 0x001FFFFFu;
 constexpr uint32_t kCtrlFdShift        = 20u;
 constexpr uint32_t kCtrlFdReserved     = 7u;
 constexpr uint32_t kGc01MustBeZero     = 0xE8000000u;
@@ -40,12 +45,9 @@ constexpr uint32_t kCursorAddrReserved = 0xC0C0F800u;
 constexpr uint32_t kColorReserved      = 0xFF000000u;
 constexpr uint32_t kPaletteImplemented = 0x00FFFFFFu;
 
-constexpr uint32_t kDepth8Indexed       = 0x3u;
+constexpr uint32_t kDepth565Palette     = 0x4u;
 constexpr uint32_t kDepthReservedLo     = 0x8u;
 constexpr uint32_t kDepthReservedHi     = 0xBu;
-constexpr uint32_t kDepthPaletteBypass  = 0xCu;
-constexpr uint32_t kDepth565Bypass      = 0xCu;
-constexpr uint32_t kStrideNegative      = 1u << 15;
 
 bool DepthReserved(uint32_t depth) {
     return depth >= kDepthReservedLo && depth <= kDepthReservedHi;
@@ -81,10 +83,6 @@ uint32_t MediaQMq200Gc::Read(uint32_t roff) const {
 
 void MediaQMq200Gc::Write(uint32_t roff, uint32_t value) {
     if (roff >= kPaletteLo && roff < kPaletteHi) {
-        if (PaletteShared()) {
-            emu_.Get<Fatal>().Die("MediaQMq200Gc: palette write 0x%08X at 0x%05X while both "
-                                  "controllers use the palette; not modeled", value, roff);
-        }
         palette_[(roff - kPaletteLo) / 4u] = value & kPaletteImplemented;
         return;
     }
@@ -100,9 +98,8 @@ void MediaQMq200Gc::Write(uint32_t roff, uint32_t value) {
             if ((value & kCtrlUnmodeled) || ((value >> kCtrlFdShift) & 7u) == kCtrlFdReserved ||
                 DepthReserved((value >> 4) & 0xFu) || DepthReserved((value >> 12) & 0xFu)) {
                 emu_.Get<Fatal>().Die("MediaQMq200Gc: GC%u control 0x%08X sets a counter reset, "
-                                      "the alternate window, a test mode, a reserved bit, the "
-                                      "reserved FD 111 or a reserved colour depth; not modeled",
-                                      gc + 1u, value);
+                                      "a test mode, a reserved bit, the reserved FD 111 or a "
+                                      "reserved colour depth; not modeled", gc + 1u, value);
             }
             break;
         case kCrtOrCrc:
@@ -150,41 +147,43 @@ bool MediaQMq200Gc::Displays(uint32_t gc) const {
     return (ctrl & kCtrlEnable) && (ctrl & kCtrlWindowEnable);
 }
 
-const char* MediaQMq200Gc::DisplayUnmodeled(uint32_t gc) const {
-    if (!Displays(gc)) return nullptr;
-    if (Bpp(gc) == 0u) {
-        return "a colour depth other than 8 bpp indexed or RGB565 with the palette bypassed";
+MediaQMq200Gc::Window MediaQMq200Gc::ActiveWindow(uint32_t gc,
+                                                  const MediaQMq200Power& power) const {
+    const uint32_t* r    = regs_[gc];
+    const uint32_t  ctrl = r[kCtrl / 4u];
+    const bool alt = (ctrl & kCtrlAltWindow) ||
+                     power.StateEnables(gc == kGc1 ? MediaQMq200Power::kModAltWin1
+                                                   : MediaQMq200Power::kModAltWin2);
+    const uint32_t hwin   = r[(alt ? kAltHWin : kHWin) / 4u];
+    const uint32_t vwin   = r[(alt ? kAltVWin : kVWin) / 4u];
+    const uint32_t stride = r[kStride / 4u];
+    Window win;
+    win.depth  = (ctrl >> (alt ? kCtrlAltDepthShift : kCtrlDepthShift)) & 0xFu;
+    win.x      = hwin & kWinField;
+    win.w      = ((hwin >> 16) & kWinField) + 1u;
+    win.y      = vwin & kWinField;
+    win.h      = ((vwin >> 16) & kWinField) + 1u;
+    win.start  = r[(alt ? kAltStart : kStart) / 4u] & kStartMask;
+    win.stride = static_cast<int16_t>(static_cast<uint16_t>(alt ? stride >> 16 : stride));
+    const uint32_t bits = DepthBits(win.depth);
+    if (alt && DepthIndexed(win.depth) && bits < 8u) {
+        win.palette_base = (r[kAltStart / 4u] >> 24) & ~((1u << bits) - 1u) & 0xFFu;
     }
-    const uint32_t hwin = regs_[gc][kHWin / 4u];
-    const uint32_t vwin = regs_[gc][kVWin / 4u];
-    if ((hwin & 0xFFFu) != 0u || (vwin & 0xFFFu) != 0u) {
-        return "an image window that does not start at the display origin";
-    }
-    if (((hwin >> 16) & 0xFFFu) + 1u != DisplayWidth(gc) ||
-        ((vwin >> 16) & 0xFFFu) + 1u != DisplayHeight(gc)) {
-        return "an image window whose size differs from the display area";
-    }
-    if (regs_[gc][kStride / 4u] & kStrideNegative) return "a negative window stride";
-    return nullptr;
+    return win;
 }
 
-uint32_t MediaQMq200Gc::Depth(uint32_t gc) const {
-    return (regs_[gc][kCtrl / 4u] >> 4) & 0xFu;
+/* MQ-200 Data Book Table 5-8 (GCD / AGCD). */
+uint32_t MediaQMq200Gc::DepthBits(uint32_t depth) {
+    static constexpr uint8_t kBits[16] = {1, 2, 4, 8, 16, 24, 32, 32, 0, 0, 0, 0, 16, 24, 32, 32};
+    return kBits[depth & 0xFu];
 }
 
-uint32_t MediaQMq200Gc::Bpp(uint32_t gc) const {
-    switch (Depth(gc)) {
-        case kDepth8Indexed:  return 8u;
-        case kDepth565Bypass: return 16u;
-        default:              return 0u;
-    }
+bool MediaQMq200Gc::DepthIndexed(uint32_t depth) {
+    return depth < kDepth565Palette;
 }
 
-bool MediaQMq200Gc::PaletteShared() const {
-    for (uint32_t gc = kGc1; gc <= kGc2; ++gc) {
-        if (!(regs_[gc][kCtrl / 4u] & kCtrlEnable) || Depth(gc) >= kDepthPaletteBypass) return false;
-    }
-    return true;
+bool MediaQMq200Gc::DepthUsesPalette(uint32_t depth) {
+    return depth < kDepthReservedLo;
 }
 
 uint32_t MediaQMq200Gc::DisplayWidth(uint32_t gc) const {

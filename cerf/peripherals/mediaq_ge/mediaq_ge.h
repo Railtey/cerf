@@ -102,25 +102,23 @@ protected:
     };
 
     enum class CommandPath : uint8_t {
-        Nop, Line, SystemColor, SystemMono, SolidFill, ScreenMono, ScreenColor, Unmodeled
+        Nop, Line, SystemColor, SystemMono, ScreenMono, ScreenColor, Unmodeled
     };
     CommandPath PathOf(uint32_t cmd) const;
 
-    /* Part-specific hooks. */
     virtual const Layout& Lyt() const = 0;
-    virtual bool          IsSolidFill(uint32_t cmd) const = 0;   /* this command is a flat fill. */
-    virtual uint32_t      SolidFillColor() const = 0;            /* its source colour. */
-    virtual uint32_t      LineColor(uint32_t cmd) const = 0;     /* solid colour for a Bresenham line. */
     virtual uint32_t      ExpectedSourceDwords() const = 0;
-    virtual void          BlitColorSource(const uint32_t* r) = 0;/* colour BitBLT, source via FIFO. */
-    virtual void          BlitMonoSource(const uint32_t* r) = 0; /* mono->colour BitBLT, source via FIFO. */
+    virtual void          BlitScreen(const uint32_t* r) = 0;
+    virtual void          BlitSystem(const uint32_t* r) = 0;
+    virtual void          DrawLine(uint32_t cmd) = 0;
+    virtual bool          AutoExecute() const { return false; }
 
     /* Destination colour depth, GE0AR[31:30]: 00=8bpp, 01=16bpp, 11=32bpp. */
-    uint32_t BytesPerPixel() const;
+    static uint32_t DepthBytes(uint32_t ge0a);
+    uint32_t BytesPerPixel() const { return DepthBytes(reg_[kGe0ADstStride]); }
     uint32_t DestStrideBytes() const { return reg_[kGe0ADstStride] & Lyt().stride_mask; }
     uint32_t BaseAddr()        const { return reg_[kGe0BBase] & Lyt().base_mask; }
 
-    /* 3-operand raster op: result bit = rop[(P<<2)|(S<<1)|D], bitwise. */
     static uint32_t Rop3(uint8_t rop, uint32_t p, uint32_t s, uint32_t d);
 
     /* ROP pattern operand P for a MONO_PATTERN blit: the 8x8 mono pattern
@@ -129,6 +127,8 @@ protected:
     static uint32_t MonoPatternPixel(uint32_t pat0, uint32_t pat1, uint32_t pat_fg,
                                      uint32_t pat_bg, uint32_t x, uint32_t y);
 
+    uint32_t PatternBit(const uint32_t* r, uint32_t lx, uint32_t ly) const;
+    uint32_t PatternColor(const uint32_t* r, uint32_t bit) const;
     uint32_t PatternOperand(const uint32_t* r, uint32_t lx, uint32_t ly) const;
 
     static void RopPixel(uint8_t* fb, uint32_t fbsize, uint64_t addr, uint32_t bpp,
@@ -141,7 +141,10 @@ protected:
         return reinterpret_cast<const uint8_t*>(src_fifo_.data());
     }
 
-    virtual void DrawLine(uint32_t cmd);
+    void FillSolid(uint8_t rop, uint32_t color, uint32_t cmd);
+    void BlitColorFromDisplay(uint32_t cmd);
+    void BlitMonoFromDisplay(uint32_t cmd);
+    void DrawBresenhamLine(uint32_t cmd, uint32_t color);
 
     uint8_t*      Fb()     { return host_.FbMutableBytes(); }
     uint32_t      FbBytes() const { return host_.FbSize(); }
@@ -153,9 +156,6 @@ protected:
 private:
     void Execute();
     void ExecutePending();
-    void FillSolid(uint8_t rop, uint32_t color, uint32_t cmd);
-    void BlitColorFromDisplay(uint32_t cmd);
-    void BlitMonoFromDisplay(uint32_t cmd);
 
     MediaQGeHost&         host_;
     uint32_t              pending_reg_[kNumRegs] = {};

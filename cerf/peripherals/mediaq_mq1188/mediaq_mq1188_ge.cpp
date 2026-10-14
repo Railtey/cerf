@@ -13,6 +13,26 @@ const MediaQGe::Layout& MediaQMq1188Ge::Lyt() const {
     return kL;
 }
 
+void MediaQMq1188Ge::BlitScreen(const uint32_t* r) {
+    const uint32_t cmd = r[kGe00Command];
+    if (IsSolidFill(cmd)) {
+        FillSolid(static_cast<uint8_t>(cmd & kCmdRopMask), SolidFillColor(), cmd);
+    } else if (cmd & kCmdMonoSrc) {
+        BlitMonoFromDisplay(cmd);
+    } else {
+        BlitColorFromDisplay(cmd);
+    }
+}
+
+void MediaQMq1188Ge::BlitSystem(const uint32_t* r) {
+    if (r[kGe00Command] & kCmdMonoSrc) BlitMonoSource(r);
+    else                               BlitColorSource(r);
+}
+
+void MediaQMq1188Ge::DrawLine(uint32_t cmd) {
+    DrawBresenhamLine(cmd, LineColor(cmd));
+}
+
 bool MediaQMq1188Ge::IsSolidFill(uint32_t cmd) const {
     return (cmd & kCmdSolidPat) != 0u;
 }
