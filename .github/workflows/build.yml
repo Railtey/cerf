@@ -177,7 +177,9 @@ jobs:
       - name: Publish the installer to R2
         if: >-
           ${{ github.event_name == 'push' &&
-              matrix.configuration == 'Release' && matrix.platform == 'Win32' }}
+              matrix.configuration == 'Release' && matrix.platform == 'Win32' &&
+              (contains(github.event.head_commit.message, '[release cerf]') ||
+               contains(github.event.head_commit.message, '[release installer]')) }}
         shell: pwsh
         env:
           R2_ACCOUNT_ID:        ${{ secrets.R2_ACCOUNT_ID }}
