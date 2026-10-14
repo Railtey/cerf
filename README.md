@@ -376,7 +376,8 @@ run_claude.cmd
       <td>v8.0</td>
       <td>TBA</td>
       <td>
-
+        <p><b>📝 Changes</b><br/>
+          -</p>
       </td>
     </tr>
     <tr>
