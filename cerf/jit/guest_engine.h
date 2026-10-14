@@ -8,9 +8,6 @@
 class StateWriter;
 class StateReader;
 
-/* The guest CPU engine JitRunner drives. ArmJit and MipsJit implement it; the
-   active engine registers itself in OnReady (Provide<GuestEngine>) and JitRunner
-   resolves Get<GuestEngine>(). */
 class GuestEngine : public Service {
 public:
     using Service::Service;

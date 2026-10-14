@@ -29,7 +29,20 @@ core work of the project, which is board bring-up. Print the other skills after
 it, in alphabetical order by name. If `/start-board-implementation` is absent,
 print all the skills in alphabetical order.
 
-## Step 2 - offer the environment doctor
+## Step 2 - note forks for an external contributor
+
+Run `git remote get-url origin` in the repo root and in every initialized
+submodule that `.gitmodules` lists. The upstream of the root is
+`gweslab/cerf`. The upstream of a submodule is its URL in `.gitmodules`.
+
+If an origin points at its upstream, write a note of two lines at most: an
+external contributor works from forks, as `agent_docs/submodules.md` § Forks
+describes.
+
+If every origin points at a fork, write nothing. This step reads the remotes
+and nothing else.
+
+## Step 3 - offer the environment doctor
 
 After the index, write one short line that offers the doctor. For example: "I
 can run the environment doctor (`setup.ps1 -Check`) for a health report on this
@@ -41,7 +54,7 @@ Note: git does not clone `.git/hooks/`. `core.hooksPath` lives in the local
 `.git/config`, which git also does not clone. A fresh clone runs no git hooks
 until `setup.cmd` writes this configuration.
 
-## Step 3 - run the doctor
+## Step 4 - run the doctor
 
 Run this step only when the user agrees.
 
@@ -107,4 +120,4 @@ git configuration and it can initialize submodules.
   purpose in a few words. Keep the column short.
 - If a subdirectory has no `SKILL.md`, or the frontmatter does not parse, print
   the name of the directory with `(no description)`. Do not omit the directory.
-- Ask no questions, except the offer in Step 2 and the offer in Step 3.
+- Ask no questions, except the offer in Step 3 and the offer in Step 4.

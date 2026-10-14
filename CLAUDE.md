@@ -56,6 +56,7 @@ The following pages are authoritative project knowledge; their full contents are
 - **[agent_docs/launcher.md](agent_docs/launcher.md)** - launcher, config files, transactional mode.
 - **[agent_docs/database.md](agent_docs/database.md)** - the shared board / SoC / OS database.
 - **[agent_docs/leds.md](agent_docs/leds.md)** - LEDs and LED buttons.
+- **[agent_docs/submodules.md](agent_docs/submodules.md)** - the core library submodules, their commit and push order, and forks.
 
 ## Build
 

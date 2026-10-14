@@ -1,6 +1,7 @@
 #include "../../core/cerf_emulator.h"
 #include "../../core/device_config.h"
 #include "../../core/cerf_paths.h"
+#include "../../core/log.h"
 #include "../../core/string_utils.h"
 #include "../../boards/board_context.h"
 #include "ford_sync_gen2_family_id.h"

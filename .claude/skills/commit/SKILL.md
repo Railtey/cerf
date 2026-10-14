@@ -12,8 +12,9 @@ Fewer words is better. A one-line title is the target, not a minimum.
 ## Procedure
 
 1. Run `git status`, then `git diff` (staged and unstaged). Read what actually changed.
-2. Stage only the paths this work touched.
-3. Commit with a message written under the rules below.
+2. If `git status` lists a core library submodule as changed, commit in the order of `agent_docs/submodules.md` § Commits.
+3. Stage only the paths this work touched.
+4. Commit with a message written under the rules below.
 
 ## The message
 
@@ -77,6 +78,6 @@ If your reading of the request is incorrect, the user sees that line and stops y
 
 ## Hard stops
 
-- **Never run git unless the user asked.** `/commit` is that ask, and it covers this one commit. Do not `git push`, which needs separate approval.
+- **Never run git unless the user asked.** `/commit` is that ask. It covers this one commit and the library commits of the same change. Do not `git push`, which needs separate approval.
 - **Never force past `.gitignore`** with `git add -f`. The ignore is a STOP signal.
 - **Stage only what this session changed.** Other agents and the user work in this tree at the same time, so `git status` often lists edits that are not yours. If you did not make a change, leave it unstaged and say it is there.

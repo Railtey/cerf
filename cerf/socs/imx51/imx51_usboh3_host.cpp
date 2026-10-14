@@ -3,6 +3,7 @@
 #include "../../core/byte_order.h"
 #include "../../core/cerf_emulator.h"
 #include "../../core/fatal.h"
+#include "../../core/log.h"
 #include "../../cpu/emulated_memory.h"
 #include "../../peripherals/usb/usb_device.h"
 #include "../irq_controller.h"

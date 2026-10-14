@@ -38,8 +38,15 @@ state are forbidden.
   `ShouldRegister`↔`Get` cycle. You need no defensive check around `Get<>`.
 - **`ShouldRegister()`** can call `Get<>`/`TryGet<>` through the same lazy
   path. The idiom is `emu_.Get<BoardContext>().GetSocId() == SocId::X`.
+- **`Get<Foo>()` resolves the `Base` slot first when
+  `REGISTER_SERVICE_AS(Foo, Base)` registers `Foo`.**
+- **Slot resolution runs on the boot thread only.** If a second thread must
+  resolve a slot before boot ends, CERF halts. After boot, no slot is left to
+  resolve, and any thread can call `Get<>`.
+- **The locator is the `libservicelocator` submodule.**
 
-- `cerf/core/cerf_emulator.h`, `cerf/core/service.h`
+- `cerf/core/cerf_emulator.h`, `cerf/core/service.h`,
+  `libservicelocator/include/servicelocator/`
 
 ## Guest CPU JIT
 

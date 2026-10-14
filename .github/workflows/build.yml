@@ -32,6 +32,9 @@ jobs:
         with:
           submodules: false
 
+      - name: Fetch libservicelocator
+        run: git submodule update --init libservicelocator
+
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v2
 
