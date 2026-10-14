@@ -175,7 +175,7 @@ private:
         SendTouchPress(adc_x, adc_y);
     }
 
-    void Push(uint8_t b) { emu_.Get<Sa11xxSp1Uart>().PushRxByte(b); }
+    void Push(uint8_t b) { emu_.Get<Sa11xxSp1Uart>().PushRxBurstNow(&b, 1u); }
 
     void SendFrame(uint8_t msg_id, const uint8_t* data, uint8_t len) {
         const uint8_t hdr = static_cast<uint8_t>(

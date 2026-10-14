@@ -217,6 +217,14 @@ void Sa11xxUartReceiver::Push(uint32_t port, const uint8_t* data, size_t n) {
     if (line_->Push(ch_[port]->line, data, n)) requests_->Request();
 }
 
+void Sa11xxUartReceiver::PushNow(uint32_t port, const uint8_t* data, size_t n) {
+    Channel& c = *ch_[port];
+    const uint64_t now = clock_->Cycles();
+    line_->Receive(c.line, c.ctl, data, n, now);
+    Arm(c, now);
+    if (c.fifo->Supplied()) requests_->Request();
+}
+
 /* §11.11.5.1 (printed 11-116): "If the RXE bit is cleared to zero while the UART is actively
    receiving data, reception is stopped immediately"; "all entries within the receive FIFO are
    reset (all other control/status/flag bits remain intact)". */

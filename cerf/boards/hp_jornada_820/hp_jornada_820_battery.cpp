@@ -2,33 +2,27 @@
 
 #include "../../core/byte_order.h"
 #include "../../core/cerf_emulator.h"
-#include "../../core/log.h"
 #include "../../host/host_widget_registry.h"
 #include "../../socs/sa11xx/sa11xx_intc.h"
 #include "../../socs/sa11xx/sa11xx_sp1_uart.h"
-#include "../../state/emulation_freeze.h"
+#include "../../state/state_stream.h"
 #include "../board_context.h"
 #include "hp_jornada_820_family_id.h"
 
 #include <array>
-#include <chrono>
 #include <cstdint>
 
 namespace {
 
 constexpr uint8_t kFrameStart = 0xE0u;
 constexpr uint8_t kFrameEnd   = 0xE1u;
-constexpr auto    kStreamPeriod = std::chrono::milliseconds(1000);
+constexpr GuestCycleClock::Rate kPacketRate{1u, 6u};
 
-/* SP1 UART = SA-1100 INTC source 15. The kernel sets ICMR bit15 only when hplib
-   registers SYSINTR 34 (OAL OEMInterruptEnable sub_8005A858 case 0x22). Pushing
-   RX bytes before that asserts an undrained source and storms the OAL. */
+/* jornada820 nk.exe sub_8005A858 case 0x22 (SYSINTR 34, hplib sub_11A25D8): ICMR |= 0x8000. */
 constexpr uint32_t kSp1IntcMask = 1u << 15;
 
-/* gwes sub_8FB14 derives power status from these byte indices (hplib copies the
-   packet to gauge config[0..13]): [2]=BatteryLifePercent; [3,4]=capacity LE,
-   minutes=capacity-5 drives BatteryFlag + BatteryLifeTime; [12] bit2=charging.
-   Minutes mapped 1:1 to percent (host models percent only); bytes 7-11 unused. */
+/* jornada820 gwes sub_8FB14: [2] BatteryLifePercent; [3,4] capacity LE, minutes =
+   capacity - 5 for BatteryLifeTime; [12] bit 2 = charging. */
 std::array<uint8_t, 14> BuildPacket(int percent, bool on_battery) {
     if (percent < 0)   percent = 0;
     if (percent > 100) percent = 100;
@@ -42,7 +36,7 @@ std::array<uint8_t, 14> BuildPacket(int percent, bool on_battery) {
     return p;
 }
 
-}  /* namespace */
+}
 
 bool HpJornada820Battery::ShouldRegister() {
     auto* bd = emu_.TryGet<BoardContext>();
@@ -50,57 +44,55 @@ bool HpJornada820Battery::ShouldRegister() {
 }
 
 void HpJornada820Battery::OnReady() {
-    battery_.SetChangeHandler([this] {
-        {
-            std::lock_guard<std::mutex> lk(mtx_);
-            dirty_ = true;
-        }
-        cv_.notify_all();
-    });
+    clock_         = &emu_.Get<GuestCycleClock>();
+    packet_event_  = clock_->Add([this] { OnPacketEvent(); });
+    clock_->RegisterRateListener([this] { OnCpuRate(); });
+    intc_          = &emu_.Get<Sa11xxIntc>();
+    sp1_           = &emu_.Get<Sa11xxSp1Uart>();
+    sp1_->AttachDevice(this);
     emu_.Get<HostWidgetRegistry>().Register(&battery_);
-    thread_ = std::thread([this] { StreamLoop(); });
+    packets_.SetRate(clock_->ClockRate(), kPacketRate);
+    packets_.Start(clock_->Cycles());
+    ArmNextPacket();
 }
 
-void HpJornada820Battery::OnShutdown() {
-    {
-        std::lock_guard<std::mutex> lk(mtx_);
-        stop_ = true;
-    }
-    cv_.notify_all();
-    if (thread_.joinable()) thread_.join();
+void HpJornada820Battery::SendPacket() {
+    if ((intc_->GetIcmr() & kSp1IntcMask) == 0u) return;
+    const auto pkt = BuildPacket(battery_.FillPercent(), battery_.IsOnBattery());
+    sp1_->PushRxBurstNow(pkt.data(), pkt.size());
 }
 
-void HpJornada820Battery::StreamLoop() {
-    auto& sp1    = emu_.Get<Sa11xxSp1Uart>();
-    auto& intc   = emu_.Get<Sa11xxIntc>();
-    auto& freeze = emu_.Get<EmulationFreeze>();
-#if CERF_DEV_MODE
-    bool logged = false;
-#endif
-    /* Widget getters lock the widget mutex; the change handler locks mtx_ while
-       the UI thread holds the widget mutex. Read the widget WITHOUT mtx_ held to
-       keep the two locks unnested. */
-    for (;;) {
-        {
-            auto frozen = freeze.WorkerSection();
-            if ((intc.GetIcmr() & kSp1IntcMask) != 0) {
-#if CERF_DEV_MODE
-                if (!logged) {
-                    LOG(SocUart, "[J820BATT] SP1 IRQ unmasked (hplib ready) - streaming battery\n");
-                    logged = true;
-                }
-#endif
-                const auto pkt = BuildPacket(battery_.FillPercent(), battery_.IsOnBattery());
-                sp1.PushRxBurst(pkt.data(), pkt.size());
-            }
-        }
+void HpJornada820Battery::ArmNextPacket() {
+    clock_->Arm(packet_event_, packets_.CycleOfTick(next_packet_));
+}
 
-        std::unique_lock<std::mutex> lk(mtx_);
-        if (stop_) return;
-        cv_.wait_for(lk, kStreamPeriod, [this] { return stop_ || dirty_; });
-        if (stop_) return;
-        dirty_ = false;
-    }
+void HpJornada820Battery::OnPacketEvent() {
+    next_packet_ = packets_.TicksAt(clock_->Cycles()) + 1u;
+    SendPacket();
+    ArmNextPacket();
+}
+
+void HpJornada820Battery::OnCpuRate() {
+    packets_.Rescale(clock_->Cycles(), clock_->ClockRate(), kPacketRate);
+    ArmNextPacket();
+}
+
+void HpJornada820Battery::SaveState(StateWriter& w) {
+    const TickPosition pos = packets_.PositionAt(clock_->Cycles());
+    w.Write<uint64_t>("batt_packet_ticks", pos.ticks);
+    w.Write<uint64_t>("batt_packet_phase", pos.phase);
+    w.Write<uint64_t>("batt_packet_phase_den", pos.phase_den);
+}
+
+void HpJornada820Battery::RestoreState(StateReader& r) {
+    TickPosition pos;
+    r.Read("batt_packet_ticks", pos.ticks);
+    r.Read("batt_packet_phase", pos.phase);
+    r.Read("batt_packet_phase_den", pos.phase_den);
+    packets_.SetRate(clock_->ClockRate(), kPacketRate);
+    packets_.PlaceAt(clock_->Cycles(), pos);
+    next_packet_ = packets_.TicksAt(clock_->Cycles()) + 1u;
+    ArmNextPacket();
 }
 
 REGISTER_SERVICE(HpJornada820Battery);

@@ -33,6 +33,8 @@ public:
     uint32_t Attach(Sa11xxUartBase* owner, const char* name);
     bool     Push(uint32_t port, const uint8_t* data, size_t n);
     void     Accept(uint32_t port, const Control& ctl, uint64_t now);
+    void     Receive(uint32_t port, const Control& ctl, const uint8_t* data, size_t n,
+                     uint64_t now);
     void     Loop(uint32_t port, uint8_t byte, const Control& ctl, uint64_t now);
     bool     Break(uint32_t port, bool low, const Control& ctl, uint64_t now);
     bool     Runs(uint32_t port, const Control& ctl) const;

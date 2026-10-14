@@ -14,6 +14,7 @@ class Sa11xxExternalClocks;
 class Sa11xxUartReceiver;
 class Sa11xxUartTransmitter;
 class UartEndpoint;
+class UartLineDevice;
 
 /* SA-1110 §11.9 / §11.11: SP1, SP2 and SP3 share one UART register surface (UTCR0..3, UTDR,
    UTSR0/1). */
@@ -35,9 +36,10 @@ public:
     void RestoreState(StateReader& r) override;
     void PostRestore() override;
 
-    void AttachEndpoint(UartEndpoint* endpoint) { endpoint_ = endpoint; }
-    void PushRxByte(uint8_t b);
+    void AttachEndpoint(UartEndpoint* endpoint);
+    void AttachDevice(UartLineDevice* device);
     void PushRxBurst(const uint8_t* data, size_t n);
+    void PushRxBurstNow(const uint8_t* data, size_t n);
     void OnTransmitted(const std::vector<uint8_t>& out);
     void OnReceived();
     bool BitClock(const sa11xx_uart::Control& ctl, GuestCycleClock::Rate& rate) const;
@@ -60,6 +62,7 @@ private:
     uint32_t utcr3_ = 0;
     uint32_t utcr4_ = 0;
     UartEndpoint*        endpoint_ = nullptr;
+    UartLineDevice*      device_   = nullptr;
     std::vector<uint8_t> tx_line_;
     bool intc_asserted_ = false;
     GuestCycleClock*       clock_   = nullptr;

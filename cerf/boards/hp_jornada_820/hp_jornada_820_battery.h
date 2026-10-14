@@ -2,34 +2,36 @@
 
 #include "../../core/service.h"
 #include "../../host/battery_widget.h"
+#include "../../jit/guest_cycle_clock.h"
+#include "../../socs/rated_tick_count.h"
+#include "../../socs/uart_line_device.h"
 
-#include <condition_variable>
-#include <mutex>
-#include <thread>
+#include <cstdint>
 
-/* HP Jornada 820 main-battery source: streams the HP MCU's 14-byte status
-   packet over SA-1100 SP1 (Sa11xxSp1Uart RX) so hplib.dll's own RX thread
-   fills the gwes power gauge. CERF emulates the chip; it must never write the
-   gauge DRAM itself. Packet layout + guest decode chain in BuildPacket. */
-class HpJornada820Battery : public Service {
+class Sa11xxIntc;
+class Sa11xxSp1Uart;
+
+class HpJornada820Battery : public Service, public UartLineDevice {
 public:
     explicit HpJornada820Battery(CerfEmulator& e) : Service(e), battery_(e) {}
 
     bool ShouldRegister() override;
     void OnReady() override;
-    void OnShutdown() override;
 
-    /* JIT-thread read by the companion ASIC AC-line register (PA 0x18300400
-       bit5, gwes sub_8F770): true = on battery (bit5 set), false = on AC. */
-    bool IsOnBattery() const { return battery_.IsOnBattery(); }
+    void SaveState(StateWriter& w) override;
+    void RestoreState(StateReader& r) override;
 
 private:
-    void StreamLoop();
+    void OnPacketEvent();
+    void OnCpuRate();
+    void ArmNextPacket();
+    void SendPacket();
 
     BatteryWidget           battery_;
-    std::thread             thread_;
-    std::mutex              mtx_;
-    std::condition_variable cv_;
-    bool                    stop_  = false;
-    bool                    dirty_ = false;
+    GuestCycleClock*        clock_         = nullptr;
+    GuestCycleClock::Event* packet_event_  = nullptr;
+    Sa11xxIntc*             intc_          = nullptr;
+    Sa11xxSp1Uart*          sp1_           = nullptr;
+    RatedTickCount          packets_;
+    uint64_t                next_packet_   = 0;
 };

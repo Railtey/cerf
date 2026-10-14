@@ -1,6 +1,7 @@
 #include "sa11xx_uart_base.h"
 
 #include "../../core/cerf_emulator.h"
+#include "../../core/fatal.h"
 #include "../../boards/board_context.h"
 #include "sa1110_id.h"
 #include "sa1100_id.h"
@@ -134,12 +135,22 @@ void Sa11xxUartBase::RefreshIrqLocked() {
     }
 }
 
-void Sa11xxUartBase::PushRxByte(uint8_t b) {
-    rx_->Push(rx_port_, &b, 1u);
+void Sa11xxUartBase::AttachDevice(UartLineDevice* device) {
+    if (device_ != nullptr) emu_.Get<Fatal>().Die("%s: a second line device attached", ChannelName());
+    device_ = device;
+}
+
+void Sa11xxUartBase::AttachEndpoint(UartEndpoint* endpoint) {
+    AttachDevice(endpoint);
+    endpoint_ = endpoint;
 }
 
 void Sa11xxUartBase::PushRxBurst(const uint8_t* data, size_t n) {
     rx_->Push(rx_port_, data, n);
+}
+
+void Sa11xxUartBase::PushRxBurstNow(const uint8_t* data, size_t n) {
+    rx_->PushNow(rx_port_, data, n);
 }
 
 /* §11.11.1 (printed 11-109): "Following hardware reset, the UART is disabled"; "Reset also causes
@@ -255,7 +266,7 @@ void Sa11xxUartBase::SaveState(StateWriter& w) {
     w.Write("intc_asserted", intc_asserted_);
     tx_->Save(port_, w);
     rx_->Save(rx_port_, w);
-    if (endpoint_ != nullptr) endpoint_->SaveState(w);
+    if (device_ != nullptr) device_->SaveState(w);
 }
 
 void Sa11xxUartBase::RestoreState(StateReader& r) {
@@ -268,7 +279,7 @@ void Sa11xxUartBase::RestoreState(StateReader& r) {
     r.Read("intc_asserted", intc_asserted_);
     tx_->Restore(port_, r);
     rx_->Restore(rx_port_, r);
-    if (endpoint_ != nullptr) endpoint_->RestoreState(r);
+    if (device_ != nullptr) device_->RestoreState(r);
 }
 
 void Sa11xxUartBase::PostRestore() {

@@ -30,6 +30,7 @@ public:
     uint32_t Attach(Sa11xxUartBase* owner, uint32_t utdr, uint32_t device_select,
                     const char* name, Sa11xxDmaReceiveFifo& fifo);
     void     Push(uint32_t port, const uint8_t* data, size_t n);
+    void     PushNow(uint32_t port, const uint8_t* data, size_t n);
     void     Loop(uint32_t port, uint8_t byte);
     bool     LoopBreak(uint32_t port, bool low);
     void     WriteControl(uint32_t port, uint64_t now, const Control& c);

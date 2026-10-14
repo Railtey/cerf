@@ -73,9 +73,6 @@ void Sa11xxUartRxLine::StartClock(Line& l, const Control& ctl, uint64_t now) {
     l.last_land  = 0u;
 }
 
-/* §11.11.5.6 (printed 11-117): with LBM=1 "control of the TXD3 and RXD3 pins is given to the
-   peripheral pin control (PPC) unit"; §11.11.1.1 (printed 11-110): "the receiver only tests for one
-   stop bit per frame". */
 void Sa11xxUartRxLine::Accept(uint32_t port, const Control& ctl, uint64_t now) {
     Line& l = *line_[port];
     std::vector<uint8_t> bytes;
@@ -83,26 +80,36 @@ void Sa11xxUartRxLine::Accept(uint32_t port, const Control& ctl, uint64_t now) {
         std::lock_guard<std::mutex> lk(l.wire_mtx);
         bytes.swap(l.wire);
     }
-    if (bytes.empty() || (ctl.utcr3 & kUtcr3Rxe) == 0u) return;
+    if (bytes.empty()) return;
+    Receive(port, ctl, bytes.data(), bytes.size(), now);
+}
+
+/* §11.11.5.6 (printed 11-117): with LBM=1 "control of the TXD3 and RXD3 pins is given to the
+   peripheral pin control (PPC) unit"; §11.11.1.1 (printed 11-110): "the receiver only tests for one
+   stop bit per frame". */
+void Sa11xxUartRxLine::Receive(uint32_t port, const Control& ctl, const uint8_t* data, size_t n,
+                               uint64_t now) {
+    Line& l = *line_[port];
+    if ((ctl.utcr3 & kUtcr3Rxe) == 0u) return;
     if ((ctl.utcr3 & kUtcr3Lbm) != 0u) {
-        LogLoopback(l, bytes.size());
+        LogLoopback(l, n);
         return;
     }
     if (!Runs(port, ctl)) {
-        LogNoClock(l, bytes.size());
+        LogNoClock(l, n);
         return;
     }
-    if (l.entries.size() + bytes.size() > kWireMax) {
+    if (l.entries.size() + n > kWireMax) {
         LOG(Caution, "[UART] %s RX: the guest is not taking received bytes, dropping %zu\n",
-            l.name, bytes.size());
+            l.name, n);
         return;
     }
     StartClock(l, ctl, now);
     const uint64_t f   = FrameBits(ctl.utcr0);
     const uint64_t one = f - ((ctl.utcr0 & kUtcr0Sbs) != 0u ? 1u : 0u);
     uint64_t start = std::max(l.next_start, l.half.TicksAt(now));
-    for (uint8_t b : bytes) {
-        Append(l, b, start + 2u * one - 1u);
+    for (size_t i = 0; i < n; ++i) {
+        Append(l, data[i], start + 2u * one - 1u);
         start += 2u * f;
     }
     l.next_start = start;
