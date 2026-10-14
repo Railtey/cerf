@@ -11,6 +11,9 @@ from cpu_config import (AUTO, CUSTOM_LABEL, TYPE_BOOLEAN, TYPE_ENUM, TYPE_HEX,
                         matching_preset, param_value_label, params_for_arch,
                         parse_text, preset_name, presets_for_arch,
                         resolve_preset, value_label)
+from emulation_speed import CPU_RATE_KEY, CPU_RATE_PRESETS
+from launch_options_multiplier import MultiplierOptionBlock
+from rich_text import plain
 from settings_card import CONTROL_GAP_DIP, SettingsColumn, SettingsGroup, SettingsRow
 from ui_dialogs import show_error
 
@@ -143,12 +146,14 @@ class CpuConfigPage:
 
         page = SettingsColumn(parent)
         self.frame = page.frame
-        head = page.group()
-        head.note(WARNING)
-        row = head.row("Preset")
-        self.preset = ChoiceCombo(row.frame, on_change=self._on_preset)
-        row.control(self.preset.widget)
+        page.group().note(WARNING)
+        self.rate = MultiplierOptionBlock(
+            page.group().row("CPU rate multiplier", [
+                plain("Multiply the guest CPU clock. The guest does more work "
+                      "in each second.")]),
+            CPU_RATE_KEY, CPU_RATE_PRESETS)
         self._holder = page.column().frame
+        self.set_board("")
 
     def set_board(self, board_id: str) -> None:
         if board_id == self._board_id:
@@ -157,8 +162,6 @@ class CpuConfigPage:
         self._arch = board_arch(board_id)
         self._defaults = board_defaults(board_id)
         self._presets = presets_for_arch(self._arch)
-        self.preset.configure([AUTO] + list(range(len(self._presets))),
-                              self._preset_label)
         self._build_rows()
 
     def _build_rows(self) -> None:
@@ -167,6 +170,11 @@ class CpuConfigPage:
         self._group = SettingsGroup(self._holder)
         self._group.frame.grid(row=0, column=0, sticky="ew")
         self._holder.columnconfigure(0, weight=1)
+        row = self._group.row("Preset")
+        self.preset = ChoiceCombo(row.frame, on_change=self._on_preset)
+        row.control(self.preset.widget)
+        self.preset.configure([AUTO] + list(range(len(self._presets))),
+                              self._preset_label)
         self._rows = []
         for param in params_for_arch(self._arch):
             row = self._group.row(param.get("name", param["id"]))
@@ -177,6 +185,7 @@ class CpuConfigPage:
             else:
                 self._rows.append(_TextParam(row, param, default,
                                              self._sync_preset))
+        self._sync_preset()
         self.set_enabled(self._enabled)
         self._bind_wheel(self._group.frame)
 
@@ -223,9 +232,11 @@ class CpuConfigPage:
         for row in self._rows:
             row.set(overrides.get(row.param["id"]))
         self._sync_preset()
+        self.rate.load(model)
 
     def store(self, model: dict) -> None:
         model["cpu_config"] = self._overrides()
+        self.rate.store(model)
 
     def validate(self) -> bool:
         for row in self._rows:
@@ -239,5 +250,6 @@ class CpuConfigPage:
     def set_enabled(self, enabled: bool) -> None:
         self._enabled = enabled
         self.preset.set_enabled(enabled)
+        self.rate.set_enabled(enabled)
         for row in self._rows:
             row.set_enabled(enabled)

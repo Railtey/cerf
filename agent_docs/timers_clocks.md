@@ -22,6 +22,11 @@ rate of the SoC.
   `CoreTiming` model. A slow host therefore slows the whole guest uniformly.
   A host-referenced observer sees the replay of at most one window when a
   busy guest becomes idle, and the guest cannot see it.
+- **Two configuration values change the pace.** The throttle multiplier can let the
+  guest run ahead of wall, and at 0 the emulator never waits. The CPU rate
+  multiplier scales the CPU rate, and with it the guest time of each cycle.
+  Every timer keeps its own rate. At the default of 1, the rules on this page
+  hold as written.
 
 ## What runs on guest time
 

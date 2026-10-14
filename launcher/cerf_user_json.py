@@ -10,6 +10,7 @@ from typing import Dict, Optional, Tuple
 
 from device_state import (DeviceMeta, _load_json_object,
                           parse_cerf_json_object, write_cerf_json)
+from emulation_speed import MULTIPLIER_KEYS, model_multiplier
 
 CERF_USER_JSON_FILENAME = "cerf-user.json"
 LAUNCHER_LINK_KEY = "launcher"
@@ -208,6 +209,10 @@ def _extract_persist_fields(obj) -> dict:
             out["mount_point"] = mp
     if isinstance(obj.get("full_screen"), bool):
         out["full_screen"] = obj["full_screen"]
+    for key in MULTIPLIER_KEYS:
+        value = model_multiplier(obj.get(key))
+        if value is not None:
+            out[key] = value
     if isinstance(obj.get(CPU_CONFIG_KEY), dict):
         out[CPU_CONFIG_KEY] = dict(obj[CPU_CONFIG_KEY])
     board = obj.get("board")
@@ -283,6 +288,11 @@ def write_persist_overrides(device_dir: Path, fields: dict) -> None:
             obj["full_screen"] = fields["full_screen"]
         else:
             obj.pop("full_screen", None)
+        for key in MULTIPLIER_KEYS:
+            if key in fields:
+                obj[key] = fields[key]
+            else:
+                obj.pop(key, None)
         if fields.get(CPU_CONFIG_KEY):
             obj[CPU_CONFIG_KEY] = fields[CPU_CONFIG_KEY]
         else:

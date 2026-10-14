@@ -6,6 +6,7 @@ from typing import Iterable, Optional, Tuple
 from board_database import ga_shared_folder_mount_point
 from board_info import board_panel_size
 from cerf_user_json import read_persist_fields, write_persist_overrides
+from emulation_speed import DEFAULT_MULTIPLIER, MULTIPLIER_KEYS
 from launch_options_presets import (DEFAULT_SCREEN_WIDTH,
                                     DEFAULT_SCREEN_HEIGHT)
 
@@ -13,7 +14,7 @@ from launch_options_presets import (DEFAULT_SCREEN_WIDTH,
 PERSIST_KEYS = ("network_enabled", "guest_additions", "color_scheme",
                 "full_screen", "width", "height", "dpi", "font_size",
                 "cleartype", "bpp", "share_folder", "mount_point",
-                "cpu_config")
+                "cpu_config") + MULTIPLIER_KEYS
 
 EXPLICIT_KEYS = ("width", "height", "bpp")
 
@@ -34,6 +35,8 @@ def resolve_baseline(base: dict) -> dict:
     b["color_scheme"] = base.get("color_scheme", "")
     b["full_screen"] = base.get("full_screen", False)
     b["mount_point"] = base.get("mount_point", ga_shared_folder_mount_point())
+    for key in MULTIPLIER_KEYS:
+        b[key] = base.get(key, DEFAULT_MULTIPLIER)
     for key in ("share_folder", "dpi", "font_size", "cleartype"):
         if key in base:
             b[key] = base[key]

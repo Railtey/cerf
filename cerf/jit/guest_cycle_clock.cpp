@@ -2,12 +2,9 @@
 
 #include "../core/cerf_emulator.h"
 #include "../core/fatal.h"
+#include "../core/log.h"
 #include "../core/tick_scale.h"
 #include "../core/virtual_clock.h"
-
-#if CERF_DEV_MODE
-#include "../core/log.h"
-#endif
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -38,6 +35,37 @@ GuestCycleClock::Rate GuestCycleClock::Normalized(Rate rate) const {
     return rate.Reduced();
 }
 
+GuestCycleClock::Rate GuestCycleClock::WithCpuMultiplier(Rate rate) const {
+    if (cpu_rate_scale_.IsOne()) return rate;
+    if (!rate.ScaleFits(cpu_rate_scale_.num, cpu_rate_scale_.den)) {
+        emu_.Get<Fatal>().Die("GuestCycleClock: the clock rate %llu/%llu Hz times the CPU rate "
+                              "multiplier %llu/%llu does not fit 64 bits",
+                              static_cast<unsigned long long>(rate.num),
+                              static_cast<unsigned long long>(rate.den),
+                              static_cast<unsigned long long>(cpu_rate_scale_.num),
+                              static_cast<unsigned long long>(cpu_rate_scale_.den));
+    }
+    Rate scaled = rate.Scaled(cpu_rate_scale_.num, cpu_rate_scale_.den).Reduced();
+    if (rate.den == 1u && scaled.den != 1u) scaled = Rate{scaled.RoundedHz(), 1u};
+    return Normalized(scaled);
+}
+
+void GuestCycleClock::LogRate() const {
+    LOG(Jit, "[CYCLECLK] rate %llu/%llu Hz, CPU rate multiplier %llu/%llu, throttle multiplier "
+             "%llu/%llu\n",
+        static_cast<unsigned long long>(rate_.num), static_cast<unsigned long long>(rate_.den),
+        static_cast<unsigned long long>(cpu_rate_scale_.num),
+        static_cast<unsigned long long>(cpu_rate_scale_.den),
+        static_cast<unsigned long long>(throttle_scale_.num),
+        static_cast<unsigned long long>(throttle_scale_.den));
+}
+
+uint64_t GuestCycleClock::WallToCycles(int64_t wall_ns) const {
+    if (throttle_scale_.num == 0u) return kNever;
+    return NsToCycles(static_cast<int64_t>(MulDivU64(static_cast<uint64_t>(wall_ns),
+                                                     throttle_scale_.den, throttle_scale_.num)));
+}
+
 uint64_t GuestCycleClock::CpuHz() const {
     if (rate_.den != 1u) {
         emu_.Get<Fatal>().Die("GuestCycleClock: an integral Hz read of the rate %llu/%llu Hz",
@@ -58,7 +86,7 @@ void GuestCycleClock::SetUnits(Rate rate) {
 }
 
 void GuestCycleClock::SetClockRate(Rate rate) {
-    const Rate     r       = Normalized(rate);
+    const Rate     r       = WithCpuMultiplier(Normalized(rate));
     const uint64_t request = ++rate_requests_;
     if (r == rate_) return;
     const uint64_t now = CyclesNow();
@@ -71,6 +99,7 @@ void GuestCycleClock::SetClockRate(Rate rate) {
     guest_ns_      += CyclesToNs(now - guest_ns_cycle_);
     guest_ns_cycle_ = now;
     SetUnits(r);
+    LogRate();
     Arm(throttle_, now + NsToCycles(slice_left_ns));
     for (auto& fn : rate_listeners_) fn();
 }
@@ -94,7 +123,11 @@ void GuestCycleClock::ExitIdle() {
 }
 
 void GuestCycleClock::OnReady() {
-    SetUnits(Normalized(InitialRate()));
+    const auto& speed = emu_.Get<EmulationSpeedConfig>();
+    throttle_scale_   = speed.Throttle();
+    cpu_rate_scale_   = speed.CpuRate();
+    SetUnits(WithCpuMultiplier(Normalized(InitialRate())));
+    LogRate();
     wall_ = &emu_.Get<VirtualClock>();
     timer_ = CreateWaitableTimerExW(nullptr, nullptr,
                                     CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
@@ -170,7 +203,9 @@ void GuestCycleClock::OnDispatch() {
 }
 
 int64_t GuestCycleClock::TargetWallNs(uint64_t cycle) const {
-    return ref_wall_ns_ + CyclesToNs(cycle - ref_cycle_);
+    const auto guest_ns = static_cast<uint64_t>(CyclesToNs(cycle - ref_cycle_));
+    return ref_wall_ns_ +
+           static_cast<int64_t>(MulDivU64(guest_ns, throttle_scale_.num, throttle_scale_.den));
 }
 
 void GuestCycleClock::ArmWaitTimer(int64_t ns) {
@@ -253,7 +288,7 @@ void GuestCycleClock::WaitStep(void* wake_event) {
     uint64_t advanced = next;
     if (wall < target) {
         const int64_t elapsed = wall - TargetWallNs(now);
-        advanced = elapsed > 0 ? std::min(next, now + NsToCycles(elapsed)) : now;
+        advanced = elapsed > 0 ? now + std::min(next - now, WallToCycles(elapsed)) : now;
 #if CERF_DEV_MODE
         ++stat_idle_early_;
 #endif

@@ -136,6 +136,8 @@ device can declare here.**
 | `guest_additions.shared_folder_mount_point` | string | The name of the guest root folder that shows the shared folder. |
 | `guest_additions.autorun` | array of strings | Guest paths. When the shell is up, the guest driver starts each path, in order. `--ga-autorun=PATH` replaces the array. |
 | `full_screen` | boolean | Enter borderless full screen at startup. |
+| `throttle_multiplier` | number | Scales the wall time that CERF gives each guest second. `2` runs the guest at half speed. `0` removes the limit, and the guest runs as fast as the host allows. Default `1`. |
+| `cpu_rate_multiplier` | number | Multiplies the guest CPU clock rate. The guest's timers keep their rates, so the guest does more work in each second. Default `1`. |
 | `adopt_guest_additions_resolution_for_host_screen` | boolean | Size the Guest Additions display to the host monitor instead of the configured resolution. |
 | `additional_packages.compact_flash_cards` | array of `{ file, name, insert_on_launch }` | CF card images that ship with the ROM. Each one appears in the card insert menu. When `insert_on_launch` is `true`, CERF inserts that card automatically at boot. |
 | `meta` | object | Who the device is: `name`, `device_name`, and `os` (`name`, `ver_major`, `ver_minor`). |

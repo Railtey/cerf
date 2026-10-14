@@ -10,6 +10,8 @@ from board_info import board_display_name, board_ga_color_depth
 from board_support_label import apply_support_warning
 from color_schemes import color_scheme_label
 from device_file_types import device_file_types
+from emulation_speed import (CPU_RATE_KEY, THROTTLE_KEY, model_choice,
+                             multiplier_label)
 from launch_options_bpp import bpp_label, model_bpp
 from launch_options_dpi import dpi_label, model_dpi
 from launch_options_font_size import font_size_label, model_font_size
@@ -120,12 +122,16 @@ class ConfigPreviewPanel:
             self._hide(self.display)
 
         if cpu_config.available(board_id):
-            self._fill(self.cpu, self._cpu_rows(board_id,
-                                                values.get("cpu_config")))
+            self._fill(self.cpu,
+                       [("CPU rate multiplier",
+                         multiplier_label(model_choice(values, CPU_RATE_KEY)))] +
+                       self._cpu_rows(board_id, values.get("cpu_config")))
         else:
             self._hide(self.cpu)
 
         self._fill(self.emulator, [
+            ("Throttle multiplier",
+             multiplier_label(model_choice(values, THROTTLE_KEY))),
             ("Borderless full screen", _on_off(values.get("full_screen",
                                                           False))),
             ("Internet connection",

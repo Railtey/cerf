@@ -6,6 +6,7 @@
 #include <numeric>
 #include <vector>
 
+#include "../core/emulation_speed_config.h"
 #include "../core/service.h"
 #include "../core/tick_scale.h"
 
@@ -88,6 +89,9 @@ protected:
 
 private:
     Rate     Normalized(Rate rate) const;
+    Rate     WithCpuMultiplier(Rate rate) const;
+    void     LogRate() const;
+    uint64_t WallToCycles(int64_t wall_ns) const;
     void     SetUnits(Rate rate);
     void     RunDue(uint64_t now);
     uint64_t NextArmed() const;
@@ -113,6 +117,8 @@ private:
     int64_t       ref_wall_ns_ = 0;
     uint64_t      guest_ns_cycle_ = 0;
     int64_t       guest_ns_       = 0;
+    EmulationSpeedConfig::Multiplier throttle_scale_;
+    EmulationSpeedConfig::Multiplier cpu_rate_scale_;
 
 #if CERF_DEV_MODE
     void LogSecond();
