@@ -27,6 +27,8 @@
       Shutdown dialog has received reboot options
       Host key is now reassignable
       Improved UI and added notification cards
+      Catch up throttle multiplier knob (see in launcher)
+      CPU rate multiplier knob (see in launcher)
     fixed: |
       ARM JIT and JIT core full rewrite. ARM JIT/peripherals massive performance optimizations
       Audio systems were reworked - less sound stuttering

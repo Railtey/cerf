@@ -400,6 +400,8 @@ run_claude.cmd
           🆕 Shutdown dialog has received reboot options<br/>
           🆕 Host key is now reassignable<br/>
           🆕 Improved UI and added notification cards<br/>
+          🆕 Catch up throttle multiplier knob (see in launcher)<br/>
+          🆕 CPU rate multiplier knob (see in launcher)<br/>
           ✅ ARM JIT and JIT core full rewrite. ARM JIT/peripherals massive performance optimizations<br/>
           ✅ Audio systems were reworked - less sound stuttering<br/>
           ✅ Media instructions for Zune 30 - music is now playable<br/>
