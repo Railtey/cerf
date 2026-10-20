@@ -2,8 +2,8 @@
 #include "guest_calibration_warning_dialog.h"
 #include "ui_language.h"
 
-#include "../core/cerf_emulator.h"
-#include "../core/device_config.h"
+#include <cerfcore/core/cerf_emulator.h>
+#include <cerfcore/core/device_config.h>
 #include "host_dark_mode.h"
 #include "host_icon_cache.h"
 #include "host_window.h"
@@ -34,8 +34,8 @@ enum : int {
 };
 
 struct BodyBlock {
-    const wchar_t* icon_a;
-    const wchar_t* icon_b;
+    const char*    icon_a;
+    const char*    icon_b;
     const char* message_key;
 };
 
@@ -46,25 +46,24 @@ const BodyBlock kBody[] = {
       "calibration.pointer_warning" },
     { nullptr, nullptr,
       "calibration.manual_hint" },
-    { L"ICON_INPUT_GA_POINTER", nullptr,
+    { "ICON_INPUT_GA_POINTER", nullptr,
       "calibration.guest_pointer_hint" },
-    { L"ICON_INPUT_STYLUS", nullptr,
+    { "ICON_INPUT_STYLUS", nullptr,
       "calibration.stock_pointer_hint" },
-    { L"ICON_GA", L"ICON_GA_DISABLED",
+    { "ICON_GA", "ICON_GA_DISABLED",
       "calibration.resolution_hint" },
-    { L"ICON_DISPLAY", nullptr,
+    { "ICON_DISPLAY", nullptr,
       "calibration.skip_hint" },
 };
 
 }
 
 bool GuestCalibrationWarningDialog::ShouldRegister() {
-    return emu_.Get<DeviceConfig>().guest_additions;
+    return emu_.Get<cerfcore::DeviceConfig>().guest_additions;
 }
 
 void GuestCalibrationWarningDialog::DrawIconPair(HDC dc, const RECT& box,
-                                                 const wchar_t* a,
-                                                 const wchar_t* b) {
+                                                 const char* a, const char* b) {
     RECT ra = { box.left, box.top, box.left + kPairBox, box.top + kPairBox };
     emu_.Get<HostIconCache>().DrawCentered(dc, ra, a);
 

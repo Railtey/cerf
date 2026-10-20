@@ -36,7 +36,7 @@ def validate():
         print("{}: {}/{} messages; {} English fallbacks".format(
             path.stem, len(messages), len(english), len(english.keys() - messages.keys())))
     referenced = set()
-    database = json.loads((ROOT / "bundled" / "db.json").read_text(encoding="utf-8"))
+    database = json.loads((ROOT / "libCerfCore" / "db.json").read_text(encoding="utf-8"))
     for table, rows in database.items():
         if not isinstance(rows, list):
             continue
@@ -69,7 +69,9 @@ def validate():
                                     path.relative_to(ROOT), node.lineno, key))
                         except ValueError:
                             pass
-    for path in list((ROOT / "cerf").rglob("*.cpp")) + list((ROOT / "cerf").rglob("*.h")):
+    source_roots = [ROOT / "cerf-win32", ROOT / "libCerfCore", ROOT / "libCerfFrontend"]
+    for path in [path for source_root in source_roots
+                 for path in list(source_root.rglob("*.cpp")) + list(source_root.rglob("*.h"))]:
         source = path.read_text(encoding="utf-8-sig")
         for call in re.finditer(r'(?:\.|->)(Text|Format)\(\s*"([a-z_][a-z0-9_.]+)"', source):
             method, key = call.groups()
@@ -83,6 +85,8 @@ def validate():
                     pass
         referenced.update(re.findall(r'SourceLabelKey\(\).*?return\s+"([a-z_][a-z0-9_.]+)"', source))
         referenced.update(re.findall(r'display_key\s*=\s*"([a-z_][a-z0-9_.]+)"', source))
+        referenced.update(re.findall(
+            r'(?:GetUiText|FormatUiText)\([^,]+,\s*"([a-z_][a-z0-9_.]+)"', source))
     for key in sorted(referenced - english.keys()):
         errors.append("Message referenced in code but absent from en.yml: " + key)
     if errors:

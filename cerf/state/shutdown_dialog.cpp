@@ -1,17 +1,16 @@
 #define NOMINMAX
 #include "shutdown_dialog.h"
-#include "../host/ui_language.h"
+#include "ui_language.h"
 
-#include "../core/cerf_emulator.h"
-#include "../core/config_loader.h"
-#include "../core/device_config.h"
-#include "../cpu/emulated_memory.h"
-#include "../host/dialog_band.h"
-#include "../host/host_dark_mode.h"
-#include "../host/host_dpi.h"
-#include "../host/host_focus_policy.h"
-#include "../host/host_window.h"
-#include "../version.h"
+#include <cerfcore/core/cerf_emulator.h>
+#include <cerfcore/cpu/emulated_memory.h>
+#include <cerffrontend/version.h>
+#include "dialog_band.h"
+#include <cerffrontend/frontend_config.h>
+#include "host_dark_mode.h"
+#include "host_dpi.h"
+#include "host_focus_policy.h"
+#include "host_window.h"
 
 #include <commctrl.h>
 #include <cstdio>
@@ -113,14 +112,14 @@ void ShutdownDialog::SyncActionBlock() {
 
 void ShutdownDialog::CommitOk() {
     switch (SelectedAction()) {
-        case 1: choice_ = ShutdownChoice::SoftReset; break;
-        case 2: choice_ = ShutdownChoice::HardReset; break;
+        case 1: choice_ = cerfcore::ShutdownChoice::SoftReset; break;
+        case 2: choice_ = cerfcore::ShutdownChoice::HardReset; break;
         default: {
             const bool save =
                 SendMessageW(chk_save_, BM_GETCHECK, 0, 0) == BST_CHECKED;
             if (SendMessageW(chk_remember_, BM_GETCHECK, 0, 0) == BST_CHECKED)
-                emu_.Get<ConfigLoader>().SaveLastSaveStateMode(save);
-            choice_ = save ? ShutdownChoice::ExitSave : ShutdownChoice::Exit;
+                emu_.Get<cerffrontend::FrontendConfig>().SaveLastSaveStateMode(save);
+            choice_ = save ? cerfcore::ShutdownChoice::ExitSave : cerfcore::ShutdownChoice::Exit;
             break;
         }
     }
@@ -141,7 +140,7 @@ void ShutdownDialog::BuildControls(HWND hwnd) {
                                nullptr);
     };
 
-    const wchar_t* intro = (trigger_ == ShutdownTrigger::DeepSleep)
+    const wchar_t* intro = (trigger_ == cerfcore::ShutdownTrigger::DeepSleep)
         ? emu_.Get<UiLanguage>().Text("shutdown.the_guest_os_has_requested_a_shut_down")
         : emu_.Get<UiLanguage>().Text("shutdown.you_have_requested_a_shut_down");
     mk(L"STATIC", intro, SS_LEFT, S(kTextX), cb + S(kIntroDy),
@@ -161,14 +160,14 @@ void ShutdownDialog::BuildControls(HWND hwnd) {
 
     const int block_y = cb + S(kBlockDy);
     const unsigned long long mb =
-        emu_.Get<EmulatedMemory>().VolatileByteCount() >> 20;
+        emu_.Get<cerfcore::EmulatedMemory>().VolatileByteCount() >> 20;
     const std::wstring save_text = emu_.Get<UiLanguage>().Format(
         "shutdown.save_state_size", {{"size", std::to_string(mb)}});
     chk_save_ = mk(L"BUTTON", save_text.c_str(), BS_AUTOCHECKBOX | WS_TABSTOP,
                    S(kTextX), block_y, cw - S(kTextX) - S(kMarginR),
                    S(kRowH), IDC_SAVE);
     SendMessageW(chk_save_, BM_SETCHECK,
-                 emu_.Get<DeviceConfig>().last_save_state_mode
+                 emu_.Get<cerffrontend::FrontendConfig>().LastSaveStateMode()
                      ? BST_CHECKED : BST_UNCHECKED, 0);
 
     const std::wstring version_label = emu_.Get<UiLanguage>().Format(
@@ -194,7 +193,9 @@ void ShutdownDialog::BuildControls(HWND hwnd) {
        cw - S(kMarginR + kBtnGap) - 2 * S(kBtnW), btn_y, S(kBtnW), S(kBtnH),
        IDOK);
     mk(L"BUTTON",
-       trigger_ == ShutdownTrigger::DeepSleep ? emu_.Get<UiLanguage>().Text("shutdown.resume") : emu_.Get<UiLanguage>().Text("common.cancel"),
+       trigger_ == cerfcore::ShutdownTrigger::DeepSleep
+           ? emu_.Get<UiLanguage>().Text("shutdown.resume")
+           : emu_.Get<UiLanguage>().Text("common.cancel"),
        BS_PUSHBUTTON | WS_TABSTOP,
        cw - S(kMarginR) - S(kBtnW), btn_y, S(kBtnW), S(kBtnH), IDCANCEL);
 
@@ -282,7 +283,7 @@ void ShutdownDialog::OnCommand(int id, int notify) {
         return;
     }
     if (id == IDCANCEL) {
-        choice_ = ShutdownChoice::Cancel;
+        choice_ = cerfcore::ShutdownChoice::Cancel;
         Finish();
         return;
     }
@@ -336,13 +337,13 @@ void ShutdownDialog::DismissAsCancel() {
     PostDismiss();
 }
 
-ShutdownChoice ShutdownDialog::Show(ShutdownTrigger trigger) {
-    if (IsOpen()) return ShutdownChoice::Cancel;
+cerfcore::ShutdownChoice ShutdownDialog::Show(cerfcore::ShutdownTrigger trigger) {
+    if (IsOpen()) return cerfcore::ShutdownChoice::Cancel;
 
     HWND owner = emu_.Get<HostWindow>().Hwnd();
     trigger_        = trigger;
-    choice_         = ShutdownChoice::Cancel;
-    timer_on_       = (trigger == ShutdownTrigger::WindowClose);
+    choice_         = cerfcore::ShutdownChoice::Cancel;
+    timer_on_       = (trigger == cerfcore::ShutdownTrigger::WindowClose);
     remaining_ms_   = kTotalMs;
     painted_fill_w_ = -1;
     painted_secs_   = -1;

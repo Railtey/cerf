@@ -22,7 +22,12 @@ def exe_dir() -> Path:
 
 def install_root() -> Path:
     if getattr(sys, "frozen", False):
-        return exe_dir().parent
+        directory = exe_dir()
+        # Older onedir builds placed the real launcher in an extra directory.
+        # The single-file build lives beside cerf.exe and langs/.
+        if directory.name.lower() == LAUNCHER_DIR_NAME:
+            return directory.parent
+        return directory
     return exe_dir()
 
 

@@ -1,4 +1,4 @@
-#include "../../cerf/i18n/translation_catalog.h"
+#include <cerffrontend/i18n/translation_catalog.h>
 
 #ifdef _WIN32
 #define NOMINMAX

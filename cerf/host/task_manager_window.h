@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../core/service.h"
+#include <cerfcore/host/task_manager_view.h>
 #include "task_manager_list_view.h"
 
 #define NOMINMAX
@@ -13,15 +13,14 @@
    top-level windows ("Windows", default) or processes ("Processes"), with
    switch-to / kill / run controls, backed by CerfVirtTaskManager. UI-thread
    only. */
-class TaskManagerWindow : public Service {
+class TaskManagerWindow : public cerfcore::TaskManagerView {
 public:
-    using Service::Service;
+    using cerfcore::TaskManagerView::TaskManagerView;
 
     bool ShouldRegister() override;
     void OnReady() override;
 
-    /* UI thread (widget menu action). Creates the window or raises it. */
-    void Show();
+    void Show() override;
 
 private:
     static LRESULT CALLBACK WndProcStatic(HWND, UINT, WPARAM, LPARAM);
@@ -40,7 +39,7 @@ private:
     void DoRun();
     void ShowRowMenu(int item, POINT screen_pt);
     void SetStatus(const std::wstring& text, COLORREF clr);
-    void UpdateTitle(const CerfVirtTaskManager::Snapshot& snap);
+    void UpdateTitle(const cerfcore::CerfVirtTaskManager::Snapshot& snap);
     const wchar_t* ActionName(uint32_t code) const;
 
     HWND                hwnd_       = nullptr;

@@ -9,7 +9,7 @@ sys.path.insert(0, str(ROOT / "launcher"))
 
 from i18n import available_languages, set_language, t
 from operations import BundleManager
-from app_paths import resolve_version
+from app_paths import install_root, resolve_version
 from launcher_app import LauncherApp
 from settings_dialog import SettingsDialog
 from properties_page_ga import GuestAdditionsPage
@@ -158,6 +158,46 @@ class LauncherLanguageTest(unittest.TestCase):
             targets, packages = filter_update_all_targets(None, [small, large], [])
         self.assertEqual(targets, [small])
         self.assertEqual(packages, [])
+
+
+class LauncherPathTest(unittest.TestCase):
+    def test_single_file_launcher_uses_its_own_directory_as_install_root(self):
+        import app_paths
+        with patch.object(app_paths.sys, "frozen", True, create=True), \
+                patch.object(app_paths.sys, "executable",
+                             r"C:\CERF\launcher.exe"):
+            self.assertEqual(install_root(), Path(r"C:\CERF"))
+
+    def test_legacy_onedir_launcher_uses_parent_as_install_root(self):
+        import app_paths
+        with patch.object(app_paths.sys, "frozen", True, create=True), \
+                patch.object(app_paths.sys, "executable",
+                             r"C:\CERF\launcher\launcher.exe"):
+            self.assertEqual(install_root(), Path(r"C:\CERF"))
+
+
+class LauncherUpgradeTest(unittest.TestCase):
+    def test_single_file_upgrade_removes_legacy_launcher_folder(self):
+        from upgrade_install import install_upgrade
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            staged = root / "staged"
+            installed = root / "installed"
+            staged.mkdir()
+            installed.mkdir()
+            (staged / "launcher.exe").write_bytes(b"new launcher")
+            (staged / "cerf.json").write_text("{}", encoding="utf-8")
+            legacy_exe = installed / "launcher" / "launcher.exe"
+            legacy_exe.parent.mkdir()
+            legacy_exe.write_bytes(b"old launcher")
+
+            with patch("upgrade_install.migrate_cerf_json"):
+                install_upgrade(staged, installed, lambda _: None,
+                                lambda *_: False)
+
+            self.assertTrue((installed / "launcher.exe").is_file())
+            self.assertFalse((installed / "launcher").exists())
 
 
 if __name__ == "__main__":

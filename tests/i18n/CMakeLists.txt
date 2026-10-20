@@ -4,8 +4,9 @@ project(cerf_i18n_tests LANGUAGES CXX)
 find_package(yaml-cpp CONFIG REQUIRED)
 add_executable(catalog_test
     catalog_test.cpp
-    ../../cerf/i18n/message_format.cpp
-    ../../cerf/i18n/translation_catalog.cpp)
+    ../../cerf/host/message_format.cpp
+    ../../cerf/host/translation_catalog.cpp)
+target_include_directories(catalog_test PRIVATE ../../libCerfFrontend/include)
 target_compile_features(catalog_test PRIVATE cxx_std_20)
 target_link_libraries(catalog_test PRIVATE yaml-cpp::yaml-cpp)
 if(MSVC)

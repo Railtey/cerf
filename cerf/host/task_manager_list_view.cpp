@@ -1,5 +1,6 @@
 #define NOMINMAX
 #include "task_manager_list_view.h"
+#include <cerfcore/platform/wide_text_win32.h>
 #include "ui_language.h"
 
 #include <commctrl.h>
@@ -9,8 +10,8 @@
 
 namespace {
 
-bool SameProcs(const std::vector<CerfVirtTaskManager::ProcEntry>& a,
-               const std::vector<CerfVirtTaskManager::ProcEntry>& b) {
+bool SameProcs(const std::vector<cerfcore::CerfVirtTaskManager::ProcEntry>& a,
+               const std::vector<cerfcore::CerfVirtTaskManager::ProcEntry>& b) {
     if (a.size() != b.size()) return false;
     for (size_t i = 0; i < a.size(); ++i) {
         const auto& x = a[i];
@@ -24,8 +25,8 @@ bool SameProcs(const std::vector<CerfVirtTaskManager::ProcEntry>& a,
     return true;
 }
 
-bool SameWins(const std::vector<CerfVirtTaskManager::WinEntry>& a,
-              const std::vector<CerfVirtTaskManager::WinEntry>& b) {
+bool SameWins(const std::vector<cerfcore::CerfVirtTaskManager::WinEntry>& a,
+              const std::vector<cerfcore::CerfVirtTaskManager::WinEntry>& b) {
     if (a.size() != b.size()) return false;
     for (size_t i = 0; i < a.size(); ++i) {
         const auto& x = a[i];
@@ -139,7 +140,7 @@ void TaskManagerListView::SetColumns() {
     }
 }
 
-bool TaskManagerListView::Update(const CerfVirtTaskManager::Snapshot& snap) {
+bool TaskManagerListView::Update(const cerfcore::CerfVirtTaskManager::Snapshot& snap) {
     if (snap.gen == shown_gen_) return false;
     const bool first = shown_gen_ == 0;
     shown_gen_ = snap.gen;
@@ -167,7 +168,7 @@ void TaskManagerListView::Fill() {
            walk IS the process list - same one-per-PID collapse xplorer's task
            manager does). The representative is the process's best top-level
            window: a visible, titled one wins over a hidden helper window. */
-        std::vector<CerfVirtTaskManager::WinEntry> rows;
+        std::vector<cerfcore::CerfVirtTaskManager::WinEntry> rows;
         std::vector<int> score;
         for (const auto& wd : wins_) {
             const int s = (wd.visible ? 2 : 0) + (wd.title.empty() ? 0 : 1);
@@ -183,7 +184,7 @@ void TaskManagerListView::Fill() {
             it.mask    = LVIF_TEXT | LVIF_PARAM;
             it.iItem   = i;
             it.pszText = (LPWSTR)(wd.title.empty() ? language_->Text("task_manager.column.no_title")
-                                                   : wd.title.c_str());
+                                                   : cerfcore::AsWide(wd.title));
             it.lParam  = (LPARAM)wd.hwnd;
             ListView_InsertItem(list_, &it);
             _snwprintf_s(buf, _TRUNCATE, L"0x%08X", wd.hwnd);
@@ -201,7 +202,7 @@ void TaskManagerListView::Fill() {
             LVITEMW it = {};
             it.mask    = LVIF_TEXT | LVIF_PARAM;
             it.iItem   = i;
-            it.pszText = (LPWSTR)p.name.c_str();
+            it.pszText = (LPWSTR)cerfcore::AsWide(p.name);
             it.lParam  = (LPARAM)p.pid;
             ListView_InsertItem(list_, &it);
             _snwprintf_s(buf, _TRUNCATE, L"0x%08X", p.pid);

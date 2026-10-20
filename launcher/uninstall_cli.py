@@ -49,8 +49,13 @@ def _uninstall_dir_argument(argv: List[str]) -> Optional[Path]:
 def _relaunch_from_temp(install_dir: Path) -> None:
     copy_dir = Path(tempfile.mkdtemp(prefix="cerf-uninstall-"))
     launcher_dir = copy_dir / LAUNCHER_DIR_NAME
-    shutil.copytree(str(exe_dir()), str(launcher_dir))
-    copy = launcher_dir / Path(sys.executable).name
+    if exe_dir() == install_root():
+        launcher_dir.mkdir(parents=True)
+        copy = launcher_dir / Path(sys.executable).name
+        shutil.copy2(sys.executable, str(copy))
+    else:
+        shutil.copytree(str(exe_dir()), str(launcher_dir))
+        copy = launcher_dir / Path(sys.executable).name
     spawn_stage(copy, [UNINSTALL_FLAG,
                        UNINSTALL_DIR_PREFIX + str(install_dir),
                        WAIT_FOR_PID_PREFIX + str(os.getpid())], copy_dir)

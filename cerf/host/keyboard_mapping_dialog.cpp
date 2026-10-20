@@ -2,19 +2,19 @@
 #include "keyboard_mapping_dialog.h"
 #include "ui_language.h"
 
-#include "../core/cerf_emulator.h"
+#include <cerfcore/core/cerf_emulator.h>
+#include <cerfcore/platform/wide_text_win32.h>
 #include "host_dark_mode.h"
 #include "host_window.h"
-#include "keyboard_map.h"
 #include "pc_keyboard_layout.h"
+#include <cerfcore/host/keyboard_map.h>
 
 #include <cstdio>
-#include "../core/string_utils.h"
 
 #include <cwchar>
 #include <string>
 
-REGISTER_SERVICE(KeyboardMappingDialog);
+REGISTER_SERVICE_AS(KeyboardMappingDialog, cerfcore::KeyboardMappingView);
 
 namespace {
 
@@ -58,7 +58,7 @@ Palette MakePalette(bool dark) {
 }  /* namespace */
 
 bool KeyboardMappingDialog::ShouldRegister() {
-    return emu_.TryGet<KeyboardMap>() != nullptr;
+    return emu_.TryGet<cerfcore::KeyboardMap>() != nullptr;
 }
 
 void KeyboardMappingDialog::OnReady() {
@@ -77,12 +77,12 @@ void KeyboardMappingDialog::OnShutdown() {
     if (cap_font_) { DeleteObject(cap_font_); cap_font_ = nullptr; }
 }
 
-const KeyBinding* KeyboardMappingDialog::FindBinding(uint8_t vk,
-                                                     uint8_t layer) const {
-    const KeyBinding* base      = nullptr;
-    const KeyBinding* layer_hit = nullptr;
-    for (const KeyBinding& b : emu_.Get<KeyboardMap>().Bindings()) {
-        if (b.host_vk != vk) continue;
+const cerfcore::KeyBinding* KeyboardMappingDialog::FindBinding(uint8_t vk,
+                                                               uint8_t layer) const {
+    const cerfcore::KeyBinding* base      = nullptr;
+    const cerfcore::KeyBinding* layer_hit = nullptr;
+    for (const cerfcore::KeyBinding& b : emu_.Get<cerfcore::KeyboardMap>().Bindings()) {
+        if (b.vk != vk) continue;
         if (b.layer == layer) layer_hit = &b;
         if (b.layer == 0)     base = &b;
     }
@@ -112,7 +112,7 @@ void KeyboardMappingDialog::DrawCap(HDC dc, const KeyCap& cap) {
     const Palette pal  = MakePalette(dark);
     const RECT    rc   = CapRect(cap);
 
-    const KeyBinding* b = FindBinding(cap.vk, active_layer_);
+    const cerfcore::KeyBinding* b = FindBinding(cap.vk, active_layer_);
     const bool mapped   = (b != nullptr);
     const bool modifier = mapped && b->holds_layer != 0;   /* clickable layer */
     const bool is_active = modifier && b->holds_layer == active_layer_;
@@ -152,7 +152,8 @@ void KeyboardMappingDialog::DrawCap(HDC dc, const KeyCap& cap) {
     /* A modifier already reads as special via its fill+border; an ordinary remap
        accents the guest action so it stands out from identity keys. */
     SetTextColor(dc, modifier ? pal.text : pal.accent);
-    DrawTextW(dc, b->guest_label, -1, &bot, DT_CENTER | DT_TOP | DT_SINGLELINE);
+    const std::wstring label = cerfcore::Utf8ToWide(b->guest_label);
+    DrawTextW(dc, label.c_str(), -1, &bot, DT_CENTER | DT_TOP | DT_SINGLELINE);
 }
 
 void KeyboardMappingDialog::Paint(HDC dc) {
@@ -170,14 +171,16 @@ void KeyboardMappingDialog::Paint(HDC dc) {
 
     /* Header line - lists the board's modifiers (it may have more than one) and
        only then offers the layer preview. */
-    const auto     toggles = emu_.Get<KeyboardMap>().ToggleLayers();
+    const auto     toggles = emu_.Get<cerfcore::KeyboardMap>().ToggleLayers();
     std::wstring   mods;
     uint32_t       seen_layers = 0;
-    const wchar_t* active_name = nullptr;
+    std::wstring   active_name;
     bool           active_is_toggle = false;
-    for (const KeyBinding& b : emu_.Get<KeyboardMap>().Bindings()) {
+    for (const cerfcore::KeyBinding& b : emu_.Get<cerfcore::KeyboardMap>().Bindings()) {
         if (b.holds_layer == 0) continue;
-        const wchar_t* name = b.guest_label ? b.guest_label : emu_.Get<UiLanguage>().Text("keyboard.modifier");
+        const std::wstring name = b.guest_label
+            ? cerfcore::Utf8ToWide(b.guest_label)
+            : emu_.Get<UiLanguage>().Text("keyboard.modifier");
         if (b.holds_layer == active_layer_) active_name = name;
         if (b.holds_layer < 32 && !(seen_layers & (1u << b.holds_layer))) {
             seen_layers |= 1u << b.holds_layer;
@@ -185,19 +188,25 @@ void KeyboardMappingDialog::Paint(HDC dc) {
             mods += name;
         }
     }
-    if (!active_name)
-        for (const KeyboardToggleLayer& t : toggles)
-            if (t.layer == active_layer_) { active_name = t.name; active_is_toggle = true; break; }
+    if (active_name.empty())
+        for (const cerfcore::KeyboardToggleLayer& t : toggles)
+            if (t.layer == active_layer_) {
+                active_name = cerfcore::Utf8ToWide(t.name);
+                active_is_toggle = true;
+                break;
+            }
 
     std::wstring header;
     if (active_layer_ != 0) {
-        const wchar_t* m = active_name ? active_name : emu_.Get<UiLanguage>().Text("keyboard.the_modifier");
+        const std::wstring m = active_name.empty()
+            ? emu_.Get<UiLanguage>().Text("keyboard.the_modifier")
+            : active_name;
         header = emu_.Get<UiLanguage>().Format(
             active_is_toggle ? "keyboard.preview_toggle" : "keyboard.preview_modifier",
-            {{"modifier", WideToUtf8(m)}});
+            {{"modifier", cerfcore::WideToUtf8(m)}});
     } else if (!mods.empty()) {
         header = emu_.Get<UiLanguage>().Format("keyboard.preview_hint",
-                                              {{"modifiers", WideToUtf8(mods)}});
+                                              {{"modifiers", cerfcore::WideToUtf8(mods)}});
     } else {
         header = emu_.Get<UiLanguage>().Text(
             "keyboard.dimmed_keys_are_unmapped_blue_shows_the_guest_action");
@@ -232,7 +241,8 @@ void KeyboardMappingDialog::Paint(HDC dc) {
         }
         RECT tr = { box.right + 6, r.top, r.right, r.bottom };
         SetTextColor(dc, pal.text);
-        DrawTextW(dc, toggles[i].name, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        DrawTextW(dc, cerfcore::Utf8ToWide(toggles[i].name).c_str(), -1, &tr,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     }
 
     if (!cap_font_)
@@ -247,7 +257,7 @@ void KeyboardMappingDialog::Paint(HDC dc) {
 void KeyboardMappingDialog::OnClick(int x, int y) {
     POINT pt = { x, y };
 
-    const auto toggles = emu_.Get<KeyboardMap>().ToggleLayers();
+    const auto toggles = emu_.Get<cerfcore::KeyboardMap>().ToggleLayers();
     for (int i = 0; i < (int)toggles.size(); ++i) {
         RECT r = ToggleRect(i);
         if (PtInRect(&r, pt)) {
@@ -260,7 +270,7 @@ void KeyboardMappingDialog::OnClick(int x, int y) {
     for (const KeyCap& cap : kPcKeyboard) {
         RECT rc = CapRect(cap);
         if (!PtInRect(&rc, pt)) continue;
-        const KeyBinding* base = FindBinding(cap.vk, 0);
+        const cerfcore::KeyBinding* base = FindBinding(cap.vk, 0);
         if (base && base->holds_layer != 0) {
             active_layer_ = (active_layer_ == base->holds_layer)
                                 ? 0 : base->holds_layer;

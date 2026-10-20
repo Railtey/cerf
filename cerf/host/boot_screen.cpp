@@ -3,16 +3,15 @@
 #include "boot_screen.h"
 #include "ui_language.h"
 
-#include "../boards/board_context.h"
-#include "../core/cerf_emulator.h"
-#include "../core/string_utils.h"
-#include "boot_bar.h"
-#include "emulation_pause.h"
+#include <cerfcore/boards/board_context.h>
+#include <cerfcore/core/cerf_emulator.h>
+#include <cerfcore/platform/wide_text_win32.h>
+#include <cerffrontend/boot_bar.h>
+#include <cerfcore/host/emulation_pause.h>
+#include <cerfcore/host/guest_power_notifier.h>
 #include "host_fonts.h"
 #include "host_gdiplus.h"
-#include "hw_screen.h"
-
-#include "../core/string_utils.h"
+#include <cerfcore/host/hw_screen.h>
 
 #include <algorithm>
 #include <cmath>
@@ -64,12 +63,13 @@ void BootScreen::OnShutdown() {
 }
 
 void BootScreen::OnReady() {
-    short_name_ = Utf8ToWide(emu_.Get<BoardContext>().ShortBoardName());
+    short_name_ = cerfcore::Utf8ToWide(emu_.Get<cerfcore::BoardContext>().ShortBoardName());
+    emu_.Get<cerfcore::GuestPowerNotifier>().RegisterRebootListener([this] { Restart(); });
 }
 
 void BootScreen::RenderInto(HDC, uint32_t* dib_bgra32,
                             uint32_t width, uint32_t height) {
-    Advance(emu_.Get<EmulationPause>().AnimationTickMs());
+    Advance(emu_.Get<cerfcore::EmulationPause>().AnimationTickMs());
 
     if ((int)width != bg_w_ || (int)height != bg_h_) RebuildBgDib((int)width, (int)height);
 
@@ -89,7 +89,7 @@ void BootScreen::RenderInto(HDC, uint32_t* dib_bgra32,
 
     if (bg_bits_) std::memcpy(dib_bgra32, bg_bits_, (size_t)width * height * 4u);
     else          std::memset(dib_bgra32, 0, (size_t)width * height * 4u);
-    emu_.Get<BootBar>().RenderInto(dib_bgra32, width, height);
+    emu_.Get<cerffrontend::BootBar>().RenderInto(dib_bgra32, width, height);
 }
 
 void BootScreen::RebuildBgDib(int w, int h) {
@@ -126,7 +126,7 @@ uint64_t BootScreen::BgSignature(uint32_t width, uint32_t height) {
     mix(fb_latched_ ? 1u : 0u);
     mix(width);
     mix(height);
-    const std::string last = emu_.Get<HwScreen>().LastLine();
+    const std::string last = emu_.Get<cerfcore::HwScreen>().LastLine();
     for (unsigned char c : last) mix(c);
     mix(last.size());
     return s;
@@ -158,7 +158,7 @@ std::wstring BootScreen::CurrentLabelText() const {
         const wchar_t* over = restart_label_.load(std::memory_order_acquire);
         return over ? over : emu_.Get<UiLanguage>().Text("boot.rebooting");
     }
-    return emu_.Get<UiLanguage>().Format("boot.device", {{"device", WideToUtf8(short_name_)}});
+    return emu_.Get<UiLanguage>().Format("boot.device", {{"device", cerfcore::WideToUtf8(short_name_)}});
 }
 
 RECT BootScreen::LogoRect(uint32_t width, uint32_t height,
@@ -343,7 +343,7 @@ void BootScreen::DrawHeldFinal(HDC dc, uint32_t width, uint32_t height) {
 
 void BootScreen::DrawHwStatusLine(HDC dc, uint32_t width, uint32_t height) {
     hw_line_rect_ = RECT{};
-    const std::string last = emu_.Get<HwScreen>().LastLine();
+    const std::string last = emu_.Get<cerfcore::HwScreen>().LastLine();
     if (last.empty()) return;
 
     EnsureFonts();
@@ -355,7 +355,7 @@ void BootScreen::DrawHwStatusLine(HDC dc, uint32_t width, uint32_t height) {
     const int bottom = (int)height - kBootBarPx - 4;
     RECT r{ kMargin, bottom - kHwLineHeightPx, (int)width - kMargin, bottom };
 
-    const std::wstring wide = Utf8ToWide(last.c_str());
+    const std::wstring wide = cerfcore::Utf8ToWide(last.c_str());
     HFONT old = (HFONT)SelectObject(dc, hw_line_font_);
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, RGB(dv, dv, dv));

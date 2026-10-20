@@ -1,18 +1,22 @@
 #pragma once
 
-#include "../core/service.h"
-#include "../i18n/translation_catalog.h"
+#include <cerfcore/core/ui_text_service.h>
+#include <cerffrontend/i18n/translation_catalog.h>
 
 #include <map>
 #include <string>
 
-class UiLanguage : public Service {
+class UiLanguage : public cerfcore::UiTextService {
 public:
-    using Service::Service;
+    using cerfcore::UiTextService::UiTextService;
     void OnReady() override;
     const wchar_t* Text(std::string_view key) const;
     std::wstring Format(std::string_view key,
                         std::initializer_list<cerf::i18n::MessageArgument> arguments) const;
+    std::string Translate(std::string_view key,
+                          std::string_view fallback) const override;
+    std::string FormatText(std::string_view key, std::string_view fallback,
+                           cerfcore::UiTextArguments arguments) const override;
     const std::string& Language() const { return catalog_.Language(); }
 
 private:

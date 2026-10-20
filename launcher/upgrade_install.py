@@ -6,7 +6,8 @@ from typing import Callable, List
 
 from cerf_json_merge import migrate_cerf_json
 from retry_gate import RetryFn, attempt
-from upgrade_process import GLOBAL_CONFIG_NAME, UpgradeError
+from upgrade_process import (DEFAULT_LAUNCHER_NAME, GLOBAL_CONFIG_NAME,
+                             LAUNCHER_DIR_NAME, UpgradeError)
 
 LogFn = Callable[[str], None]
 
@@ -31,12 +32,24 @@ def _copy_with_retry(source: Path, destination: Path, what: str,
 def install_upgrade(upgrade_dir: Path, install_dir: Path, log: LogFn,
                     ask_retry: RetryFn) -> None:
     payload = _payload_files(upgrade_dir)
+    staged_onefile = (
+        (upgrade_dir / DEFAULT_LAUNCHER_NAME).is_file()
+        and not (upgrade_dir / LAUNCHER_DIR_NAME / DEFAULT_LAUNCHER_NAME).is_file()
+    )
     log(f"Installing {len(payload)} file(s) into {install_dir}")
     for source in payload:
         relative = source.relative_to(upgrade_dir)
         log(f"  {relative.as_posix()}")
         _copy_with_retry(source, install_dir / relative, relative.as_posix(),
                          ask_retry)
+
+    legacy_launcher_dir = install_dir / LAUNCHER_DIR_NAME
+    if staged_onefile and legacy_launcher_dir.is_dir():
+        log(f"Removing the old launcher folder {legacy_launcher_dir}")
+        error = attempt("Remove old launcher", "Removing the old launcher folder",
+                        lambda: shutil.rmtree(legacy_launcher_dir), ask_retry)
+        if error is not None:
+            raise UpgradeError("removing the old launcher folder was cancelled") from error
 
     staged_config = upgrade_dir / GLOBAL_CONFIG_NAME
     if not staged_config.is_file():
